@@ -92,6 +92,8 @@ for function in $functions; do
             fail "C-11: the $kind imports the process launcher $function." ;;
     esac
 done
+printf '%s\n' "$functions" | grep -qx SetDefaultDllDirectories ||
+    fail "C-12: the $kind never calls SetDefaultDllDirectories, so DLLs can load from its own folder."
 
 headers=$("$llvm_bin/llvm-readobj" --file-headers "$exe")
 for mitigation in "ASLR:DYNAMIC_BASE" "DEP:NX_COMPAT" "Control Flow Guard:GUARD_CF"; do

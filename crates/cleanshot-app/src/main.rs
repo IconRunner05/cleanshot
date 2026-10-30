@@ -6,6 +6,7 @@ use std::rc::Rc;
 use cleanshot_win::tray::{Request, Tray};
 
 fn main() {
+    cleanshot_win::load_dlls_from_system32_only().expect("the DLL search path is restricted");
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
     cleanshot_editor::run(move |cx| {

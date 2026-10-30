@@ -44,7 +44,7 @@ These are invariants. Code that violates one is a bug, whatever the task said. E
 | --- | --- | --- |
 | C-10 | **No network code.** No HTTP/socket/update clients; no network crates in the tree; binary must not import `ws2_32`, `winhttp`, `wininet`. **[CI]** | Attack surface; privacy |
 | C-11 | **No process launching.** No `std::process::Command`, `ShellExecute*`, `CreateProcess*`, `WinExec`. "Show in folder" uses `SHOpenFolderAndSelectItems`. **[CI]** | [CVE-2026-22035](https://vuln.today/cve/CVE-2026-22035), [CVE-2026-25792](https://www.cvelogic.com/cve/CVE-2026-25792) |
-| C-12 | **DLLs load from System32 only.** First line of `main`: `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`. | DLL planting in Downloads |
+| C-12 | **DLLs load from System32 only.** First line of `main`: `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`. **[CI]** | DLL planting in Downloads |
 | C-13 | **No untrusted deserialisation.** Only input formats are our TOML settings (typed struct, 64 KB cap) and, later, images the user pastes or drops (decoded with size limits). No project file format. | [CVE-2025-59050](https://www.sentinelone.com/vulnerability-database/cve-2025-59050/) |
 | C-14 | **No IPC payloads.** Single instance via named mutex; a second launch sends a fixed, payload-free signal ("capture region") only within the same user session. | CVE-2025-59050 (WM_COPYDATA) |
 | C-15 | **Safe file names.** Templates use only `{date}`, `{time}`, `{n}`. Reject `..`, reserved names (`CON`, `NUL`, `COM1`…), `:` streams and paths outside the target folder. Never overwrite; append `-2`, `-3`… | CVE-2026-22035 |
@@ -324,7 +324,7 @@ Gates 3–5 are `charter-gates.sh`. CI runs it on the release exe it builds and 
 
 1. fmt, clippy, tests (x64), build (ARM64).
 2. `cargo deny check` (advisories, bans, licences, sources) and `cargo audit`.
-3. **Binary scan**: fail on imports from `ws2_32`, `winhttp`, `wininet`, or on `CreateProcess*` / `ShellExecute*` / `WinExec` (C-10, C-11); fail if ASLR, DEP or CFG is not set (C-17); fail if any DLL is imported that is not on the script's system DLL list (C-02); fail if the release exe holds a build-host path (`/Users/`, `/home/`, `C:\Users\`, `\.cargo\`), so nothing about the builder ships.
+3. **Binary scan**: fail on imports from `ws2_32`, `winhttp`, `wininet`, or on `CreateProcess*` / `ShellExecute*` / `WinExec` (C-10, C-11); fail unless it imports `SetDefaultDllDirectories` (C-12); fail if ASLR, DEP or CFG is not set (C-17); fail if any DLL is imported that is not on the script's system DLL list (C-02); fail if the release exe holds a build-host path (`/Users/`, `/home/`, `C:\Users\`, `\.cargo\`), so nothing about the builder ships.
 4. `unsafe` scan: fail if a crate root other than `cleanshot-win`'s lacks `#![forbid(unsafe_code)]`, or `unsafe` appears outside `crates/cleanshot-win` (C-16).
 5. Size check of the release exe: fail at 15 MB or above (section 8).
 
