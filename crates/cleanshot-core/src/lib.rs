@@ -8,6 +8,7 @@ mod history;
 mod keys;
 mod selection;
 mod settings;
+mod text;
 mod tool;
 
 pub use delivery::{Delivered, DeliveryError, Output};
@@ -27,4 +28,5 @@ pub use settings::{
     AfterCapture, Hotkey, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers, SaveFormat, Settings,
     SettingsProblem,
 };
+pub use text::{GlyphMask, GlyphMaskError, TextMasks};
 pub use tool::Tool;
