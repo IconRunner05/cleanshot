@@ -1,0 +1,13 @@
+[package]
+name = "cleanshot-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cleanshot-core.workspace = true
+cleanshot-render.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "cleanshot-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cleanshot"
+path = "src/main.rs"
+
+[dependencies]
+cleanshot-core.workspace = true
+cleanshot-render.workspace = true
+cleanshot-win.workspace = true
+cleanshot-editor.workspace = true
+
+[lints]
+workspace = true
