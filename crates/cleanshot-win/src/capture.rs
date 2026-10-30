@@ -45,7 +45,34 @@ pub struct MonitorImage {
 pub fn capture_all(method: Method) -> Result<Vec<MonitorImage>, Error> {
     match method {
         Method::GdiBitBlt => monitor_bounds().into_iter().map(bitblt).collect(),
-        Method::DesktopDuplication => duplicate_all(),
+        Method::DesktopDuplication => duplicate_all().into_iter().collect(),
+    }
+}
+
+/// What the hotkey path copied (D-28).
+#[derive(Debug)]
+pub enum Desktop {
+    Duplicated(Vec<MonitorImage>),
+    /// Duplication was refused for `because`, so GDI copied every monitor.
+    CopiedWithGdi {
+        monitors: Vec<MonitorImage>,
+        because: Error,
+    },
+}
+
+/// Copies every monitor with Desktop Duplication, or with GDI `BitBlt` when any output
+/// refuses duplication (D-28), before any window of ours is shown (F-02).
+///
+/// # Errors
+///
+/// The GDI copy's error when duplication was refused and GDI failed too.
+pub fn capture_desktop() -> Result<Desktop, Error> {
+    match choose(duplicate_all()) {
+        Ok(monitors) => Ok(Desktop::Duplicated(monitors)),
+        Err(because) => Ok(Desktop::CopiedWithGdi {
+            monitors: capture_all(Method::GdiBitBlt)?,
+            because,
+        }),
     }
 }
 
@@ -192,28 +219,35 @@ fn bitblt(bounds: RECT) -> Result<MonitorImage, Error> {
     }
 }
 
-fn duplicate_all() -> Result<Vec<MonitorImage>, Error> {
+/// One result per output, or one error for an adapter or factory that fails before its
+/// outputs can be listed.
+fn duplicate_all() -> Vec<Result<MonitorImage, Error>> {
     // SAFETY: CreateDXGIFactory1 has no preconditions.
-    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(Error::Capture)?;
-    let mut images = Vec::new();
+    let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
+        Ok(factory) => factory,
+        Err(error) => return vec![Err(Error::Capture(error))],
+    };
+    let mut results = Vec::new();
     for adapter_index in 0.. {
         // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
-        let adapter = match unsafe { factory.EnumAdapters1(adapter_index) } {
-            Ok(adapter) => adapter,
+        match unsafe { factory.EnumAdapters1(adapter_index) } {
+            Ok(adapter) => duplicate_adapter(&adapter, &mut results),
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
-            Err(error) => return Err(Error::Capture(error)),
-        };
-        duplicate_adapter(&adapter, &mut images)?;
+            Err(error) => {
+                results.push(Err(Error::Capture(error)));
+                break;
+            }
+        }
     }
-    Ok(images)
+    results
 }
 
-fn duplicate_adapter(adapter: &IDXGIAdapter1, images: &mut Vec<MonitorImage>) -> Result<(), Error> {
+fn duplicate_adapter(adapter: &IDXGIAdapter1, results: &mut Vec<Result<MonitorImage, Error>>) {
     let mut device = None;
     let mut context = None;
     // SAFETY: the device is created on `adapter`, as DuplicateOutput requires; outputs are
     // written only on success.
-    unsafe {
+    let created = unsafe {
         D3D11CreateDevice(
             adapter,
             D3D_DRIVER_TYPE_UNKNOWN,
@@ -225,22 +259,38 @@ fn duplicate_adapter(adapter: &IDXGIAdapter1, images: &mut Vec<MonitorImage>) ->
             None,
             Some(&raw mut context),
         )
+    };
+    if let Err(error) = created {
+        return results.push(Err(Error::Capture(error)));
     }
-    .map_err(Error::Capture)?;
     let device: ID3D11Device = device.expect("D3D11CreateDevice returned a device on success");
     let context: ID3D11DeviceContext =
         context.expect("D3D11CreateDevice returned a context on success");
     for output_index in 0.. {
         // SAFETY: an index past the last output returns DXGI_ERROR_NOT_FOUND.
-        let output = match unsafe { adapter.EnumOutputs(output_index) } {
-            Ok(output) => output,
+        match unsafe { adapter.EnumOutputs(output_index) } {
+            Ok(output) => results.push(
+                output
+                    .cast::<IDXGIOutput1>()
+                    .map_err(Error::Capture)
+                    .and_then(|output| duplicate_output(&device, &context, &output)),
+            ),
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
-            Err(error) => return Err(Error::Capture(error)),
-        };
-        let output: IDXGIOutput1 = output.cast().map_err(Error::Capture)?;
-        images.push(duplicate_output(&device, &context, &output)?);
+            Err(error) => {
+                results.push(Err(Error::Capture(error)));
+                break;
+            }
+        }
     }
-    Ok(())
+}
+
+/// D-28: the duplicated frames when every output gave one, otherwise why GDI copies every
+/// monitor instead. Frames from two methods are never mixed in one capture.
+fn choose(duplicated: Vec<Result<MonitorImage, Error>>) -> Result<Vec<MonitorImage>, Error> {
+    if duplicated.is_empty() {
+        return Err(Error::NothingDuplicated);
+    }
+    duplicated.into_iter().collect()
 }
 
 fn duplicate_output(
@@ -326,6 +376,8 @@ fn bgra_to_rgba(pixels: &mut [u8]) {
 
 #[cfg(test)]
 mod tests {
+    use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_UNSUPPORTED};
+
     use super::*;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
@@ -379,5 +431,35 @@ mod tests {
         let captures = [filled(rect(0, 0, 2, 2), 30)];
         let image = region(&captures, rect(1, 1, 3, 2)).expect("the region has an area");
         assert_eq!(image.pixels(), [[30; 4], [0; 4]].concat());
+    }
+
+    fn refused(code: windows::core::HRESULT) -> Result<MonitorImage, Error> {
+        Err(Error::Capture(windows::core::Error::from(code)))
+    }
+
+    #[test]
+    fn d28_every_output_duplicated_keeps_the_duplicated_frames() {
+        let frames = vec![
+            Ok(filled(rect(-4, 0, 0, 2), 1)),
+            Ok(filled(rect(0, 0, 4, 2), 2)),
+        ];
+        let kept = choose(frames).expect("every output duplicated");
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn d28_one_refusing_output_sends_every_monitor_to_gdi() {
+        for code in [DXGI_ERROR_UNSUPPORTED, DXGI_ERROR_ACCESS_LOST] {
+            let frames = vec![Ok(filled(rect(0, 0, 4, 2), 1)), refused(code)];
+            match choose(frames) {
+                Err(Error::Capture(error)) => assert_eq!(error.code(), code),
+                other => panic!("{code:?} kept duplication: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn d28_no_outputs_sends_every_monitor_to_gdi() {
+        assert!(matches!(choose(Vec::new()), Err(Error::NothingDuplicated)));
     }
 }

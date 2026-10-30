@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use cleanshot_core::RgbaImage;
 use cleanshot_render::{Format, encode};
-use cleanshot_win::capture::{Method, capture_all, region};
+use cleanshot_win::capture::{Desktop, capture_desktop, region};
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::instance::Launch;
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
@@ -63,8 +63,12 @@ fn open_overlay(
     if overlay.borrow().is_some() {
         return;
     }
-    let captures = match capture_all(Method::GdiBitBlt) {
-        Ok(captures) => captures,
+    let captures = match capture_desktop() {
+        Ok(Desktop::Duplicated(monitors)) => monitors,
+        Ok(Desktop::CopiedWithGdi { monitors, because }) => {
+            eprintln!("Desktop Duplication was refused, so GDI copied the screen: {because}");
+            monitors
+        }
         Err(error) => return eprintln!("the screen could not be captured: {error}"),
     };
     let captures = Rc::new(captures);

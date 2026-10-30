@@ -38,6 +38,8 @@ pub enum Error {
     SingleInstance(#[source] windows::core::Error),
     #[error("the running Cleanshot has no tray window yet")]
     NoRunningTray(#[source] windows::core::Error),
+    #[error("no display output could be duplicated")]
+    NothingDuplicated,
     #[error("the clipboard could not take the image")]
     Clipboard(#[source] windows::core::Error),
     #[error("the screenshot could not be saved")]
