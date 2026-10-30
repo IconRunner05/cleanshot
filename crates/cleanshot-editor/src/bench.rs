@@ -16,9 +16,8 @@ const COLUMNS: u32 = 20;
 /// Editor timings from one [`bench`] run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BenchReport {
-    /// P-07: from opening the window to its first frame drawn, including the image upload. It
-    /// ends at the first frame callback, one frame after the draw `open` makes, so it can read
-    /// up to one display refresh (about 16.7 ms at 60 Hz) long.
+    /// P-07: from opening the window, image upload included, to the frame after its first draw,
+    /// so up to one display refresh (about 16.7 ms at 60 Hz) over the draw itself.
     pub first_frame: Duration,
     /// P-08: median frame-to-frame interval over the forced redraws.
     pub p50: Duration,
