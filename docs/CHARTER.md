@@ -316,7 +316,7 @@ The app manifest (`crates/cleanshot-app/cleanshot.exe.manifest`, embedded by the
 | `core` | Unit and property tests (undo/redo round-trips, command invertibility). |
 | `render` | Golden PNGs in `tests/golden/`: each shape, redaction, crop, effects. Fails on any pixel diff; update with an explicit `--bless` flag. |
 | `win` | Integration tests on the Windows CI runner: capture of a known window at 100/150/200% DPI, clipboard round-trip, file-name rules. |
-| Manual | Release checklist: paste targets (F-20), multi-monitor mixed DPI, PrtSc conflict (F-52), high contrast. |
+| Manual | Release checklist: paste targets (F-20), multi-monitor mixed DPI, a monitor rotated to portrait (D-28 sizes a duplicated output from its desktop bounds, which a rotated output swaps), PrtSc conflict (F-52), high contrast. |
 
 ### CI gates (every push to `main` or `ci/**`, `windows-latest`)
 
