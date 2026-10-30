@@ -340,6 +340,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui_windows",
+ "image",
  "smallvec",
  "thiserror",
 ]
