@@ -27,9 +27,14 @@ pub enum KeyAction {
 pub enum TextKey {
     DeleteBackward,
     DeleteForward,
-    /// An arrow key; `extend` (Shift) keeps the selection's other end.
+    /// Left, Right, Home or End; `extend` (Shift) keeps the selection's other end.
     MoveCaret {
         direction: CaretMove,
+        extend: bool,
+    },
+    /// Up or Down: the editor's layout finds the offset on the next line at the caret's x.
+    MoveLine {
+        step: LineStep,
         extend: bool,
     },
     LineBreak,
@@ -39,6 +44,13 @@ pub enum TextKey {
     Paste,
     /// Esc: the text becomes a shape and the box closes.
     Commit,
+}
+
+/// Which neighbouring line Up or Down moves the caret to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineStep {
+    Up,
+    Down,
 }
 
 /// What the editor is in the middle of, which decides what a key means.
@@ -78,17 +90,17 @@ fn text_key(key: &str, modifiers: Modifiers) -> Option<TextKey> {
         };
     }
     let extend = modifiers.shift;
+    let caret = |direction| Some(TextKey::MoveCaret { direction, extend });
+    let line = |step| Some(TextKey::MoveLine { step, extend });
     match key {
         "backspace" => Some(TextKey::DeleteBackward),
         "delete" => Some(TextKey::DeleteForward),
-        "left" => Some(TextKey::MoveCaret {
-            direction: CaretMove::Left,
-            extend,
-        }),
-        "right" => Some(TextKey::MoveCaret {
-            direction: CaretMove::Right,
-            extend,
-        }),
+        "left" => caret(CaretMove::Left),
+        "right" => caret(CaretMove::Right),
+        "home" => caret(CaretMove::LineStart),
+        "end" => caret(CaretMove::LineEnd),
+        "up" => line(LineStep::Up),
+        "down" => line(LineStep::Down),
         "enter" => Some(TextKey::LineBreak),
         "escape" => Some(TextKey::Commit),
         _ => None,
@@ -260,6 +272,21 @@ mod tests {
         ] {
             assert_eq!(text(key, modifiers), None, "{key}");
         }
+    }
+
+    #[test]
+    fn f34_while_typing_home_end_up_and_down_move_the_caret_and_shift_extends() {
+        let shift = Modifiers {
+            shift: true,
+            ..NONE
+        };
+        let caret =
+            |direction, extend| Some(KeyAction::Text(TextKey::MoveCaret { direction, extend }));
+        let line = |step, extend| Some(KeyAction::Text(TextKey::MoveLine { step, extend }));
+        assert_eq!(text("home", NONE), caret(CaretMove::LineStart, false));
+        assert_eq!(text("end", shift), caret(CaretMove::LineEnd, true));
+        assert_eq!(text("up", NONE), line(LineStep::Up, false));
+        assert_eq!(text("down", shift), line(LineStep::Down, true));
     }
 
     #[test]

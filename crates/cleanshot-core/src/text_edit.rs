@@ -12,11 +12,15 @@ pub struct TextEdit {
     marked: Option<Range<usize>>,
 }
 
-/// Which way an arrow key moves the caret.
+/// Where an arrow, Home or End key moves the caret.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaretMove {
     Left,
     Right,
+    /// Home: the start of the caret's line.
+    LineStart,
+    /// End: the end of the caret's line, before its line break.
+    LineEnd,
 }
 
 impl TextEdit {
@@ -117,19 +121,47 @@ impl TextEdit {
         self.replace(Some(self.selection()), "");
     }
 
-    /// An arrow key: moves the caret one character, or to the selection's edge when a selection
-    /// is dropped; `extend` (Shift) keeps the selection's other end where it is.
+    /// An arrow, Home or End key: moves the caret one character, or to the selection's edge when
+    /// an arrow drops a selection, or to the start or end of the caret's line; `extend` (Shift)
+    /// keeps the selection's other end where it is.
     pub fn move_caret(&mut self, direction: CaretMove, extend: bool) {
         let selection = self.selection();
-        self.head = match (direction, extend || selection.is_empty()) {
-            (CaretMove::Left, false) => selection.start,
-            (CaretMove::Right, false) => selection.end,
-            (CaretMove::Left, true) => self.previous(self.head),
-            (CaretMove::Right, true) => self.next(self.head),
+        let drop_selection = !extend && !selection.is_empty();
+        let to = match direction {
+            CaretMove::Left if drop_selection => selection.start,
+            CaretMove::Right if drop_selection => selection.end,
+            CaretMove::Left => self.previous(self.head),
+            CaretMove::Right => self.next(self.head),
+            CaretMove::LineStart => self.line_start(self.head),
+            CaretMove::LineEnd => self.line_end(self.head),
         };
+        self.move_to(to, extend);
+    }
+
+    /// Puts the caret at `offset`, moved onto a whole character inside the text, as Up and Down
+    /// do once the editor's layout has found the offset below or above the caret; `extend`
+    /// (Shift) keeps the selection's other end where it is.
+    pub fn move_to(&mut self, offset: usize, extend: bool) {
+        self.head = self.snap(offset);
         if !extend {
             self.anchor = self.head;
         }
+    }
+
+    fn line_start(&self, offset: usize) -> usize {
+        let byte = self.byte_at(offset);
+        self.text[..byte]
+            .rfind('\n')
+            .map_or(0, |line_break| utf16_len(&self.text[..=line_break]))
+    }
+
+    fn line_end(&self, offset: usize) -> usize {
+        let byte = self.byte_at(offset);
+        self.text[byte..]
+            .find('\n')
+            .map_or(utf16_len(&self.text), |line_break| {
+                utf16_len(&self.text[..byte + line_break])
+            })
     }
 
     /// Replaces `range` (or the composition or selection) with `new`, returning where `new` ends.
@@ -300,6 +332,35 @@ mod tests {
         edit.replace_and_mark(None, "b", None);
         edit.unmark();
         assert_eq!((edit.text(), edit.marked()), ("x\u{4F60}\u{597D}b", None));
+    }
+
+    #[test]
+    fn f34_home_and_end_go_to_the_carets_own_line_and_shift_extends() {
+        let mut edit = TextEdit::new("one\ntwo\nthree".into());
+        edit.move_to(5, false);
+        edit.move_caret(CaretMove::LineStart, false);
+        assert_eq!(edit.selection(), 4..4);
+        edit.move_caret(CaretMove::LineEnd, true);
+        assert_eq!((edit.selection(), edit.reversed()), (4..7, false));
+        edit.move_caret(CaretMove::LineEnd, false);
+        assert_eq!(edit.selection(), 7..7);
+        edit.move_to(2, true);
+        edit.move_caret(CaretMove::LineStart, true);
+        assert_eq!((edit.selection(), edit.reversed()), (0..7, true));
+        edit.move_to(13, false);
+        edit.move_caret(CaretMove::LineStart, false);
+        assert_eq!(edit.selection(), 8..8);
+        edit.move_caret(CaretMove::LineEnd, false);
+        assert_eq!(edit.selection(), 13..13);
+    }
+
+    #[test]
+    fn f34_moving_the_caret_to_an_offset_lands_on_a_whole_character_inside_the_text() {
+        let mut edit = TextEdit::new("a\u{1F600}b".into());
+        edit.move_to(2, false);
+        assert_eq!(edit.selection(), 1..1);
+        edit.move_to(99, true);
+        assert_eq!((edit.selection(), edit.reversed()), (1..4, false));
     }
 
     #[test]
