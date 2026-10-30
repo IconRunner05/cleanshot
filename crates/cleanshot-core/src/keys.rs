@@ -1,4 +1,4 @@
-use crate::{Modifiers, Tool};
+use crate::{Modifiers, Output, Tool};
 
 /// What a key press asks the editor to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +15,8 @@ pub enum KeyAction {
     /// Tab and Shift+Tab: the next or previous toolbar button (F-58).
     FocusNext,
     FocusPrevious,
+    /// Ctrl+C copies and Ctrl+S saves the edited screenshot (F-40, D-48).
+    Deliver(Output),
 }
 
 /// The editor's key map. `key` is the key's name as the editor's toolkit gives it: one
@@ -31,6 +33,8 @@ pub fn action_for_key(key: &str, modifiers: Modifiers, dragging: bool) -> Option
             "z" => Some(KeyAction::Undo),
             "y" => Some(KeyAction::Redo),
             "0" => Some(KeyAction::FitView),
+            "c" => Some(KeyAction::Deliver(Output::Copy)),
+            "s" => Some(KeyAction::Deliver(Output::Save)),
             _ => None,
         };
     }
@@ -129,6 +133,20 @@ mod tests {
         assert_eq!(
             action_for_key("tab", shift, false),
             Some(KeyAction::FocusPrevious)
+        );
+    }
+
+    #[test]
+    fn f40_ctrl_c_copies_and_ctrl_s_saves_while_c_alone_picks_crop() {
+        let copy = Some(KeyAction::Deliver(Output::Copy));
+        assert_eq!(action_for_key("c", CTRL, false), copy);
+        assert_eq!(
+            action_for_key("s", CTRL, false),
+            Some(KeyAction::Deliver(Output::Save))
+        );
+        assert_eq!(
+            action_for_key("c", NONE, false),
+            Some(KeyAction::PickTool(Tool::Crop))
         );
     }
 

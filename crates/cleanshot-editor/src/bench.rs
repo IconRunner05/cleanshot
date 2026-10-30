@@ -46,7 +46,7 @@ pub fn bench(
     };
     let mut on_done: Option<OnDone> = Some(Box::new(on_done));
     let start = Instant::now();
-    let opened = open_with(cx, document, |window, cx| {
+    let opened = open_with(cx, document, None, |window, cx| {
         let Some(on_done) = on_done.take() else {
             return;
         };

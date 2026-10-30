@@ -2,8 +2,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Command, CommandError, Document, Drag, History, KeyAction, Modifiers, Press, RgbaImage,
-    ShapeId, Tool, action_for_key,
+    Command, CommandError, Delivered, DeliveryError, Document, Drag, History, KeyAction, Modifiers,
+    Output, Press, RgbaImage, ShapeId, Tool, action_for_key,
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
@@ -16,6 +16,8 @@ use crate::Error;
 use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
 use crate::placement::Placement;
 use crate::theme::Theme;
+
+type Deliver = Rc<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
 use crate::toolbar::toolbar;
 
 /// A Space-drag in progress: where it started and where the image was then.
@@ -40,12 +42,19 @@ struct EditorView {
     pan: Option<Pan>,
     /// Why the last edit was refused, until the next press.
     notice: Option<SharedString>,
+    /// Copy and Save (F-40, D-48); absent in the bench window, which has nowhere to send them.
+    deliver: Option<Deliver>,
     focus: FocusHandle,
     _appearance: Subscription,
 }
 
 impl EditorView {
-    fn new(document: Document, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        document: Document,
+        deliver: Option<Deliver>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         // F-58: redraw in the new theme when the system switches between light and dark.
@@ -62,6 +71,7 @@ impl EditorView {
             space_held: false,
             pan: None,
             notice: None,
+            deliver,
             focus,
             _appearance: appearance,
         }
@@ -140,6 +150,7 @@ impl EditorView {
             KeyAction::HoldToPan => self.space_held = true,
             KeyAction::FocusNext => window.focus_next(cx),
             KeyAction::FocusPrevious => window.focus_prev(cx),
+            KeyAction::Deliver(output) => self.deliver(output),
         }
         cx.notify();
     }
@@ -148,6 +159,12 @@ impl EditorView {
         match self.history.apply(command) {
             Ok(()) => self.refresh(),
             Err(error) => self.notice = Some(refusal(&error).into()),
+        }
+    }
+
+    fn deliver(&mut self, output: Output) {
+        if let Some(deliver) = &self.deliver {
+            self.notice = Some(delivery_notice(deliver(output, self.history.document())));
         }
     }
 
@@ -183,6 +200,31 @@ fn notice_panel(text: SharedString, theme: Theme) -> impl IntoElement {
         .text_color(theme.text)
         .text_size(px(13.0))
         .child(text)
+}
+
+fn delivery_notice(outcome: Result<Delivered, DeliveryError>) -> SharedString {
+    match outcome {
+        Ok(Delivered::Copied) => "Copied to the clipboard".into(),
+        Ok(Delivered::Saved(path)) => format!("Saved to {}", path.display()).into(),
+        Err(DeliveryError::TooLarge { width, height }) => {
+            format!("This {width}x{height} image is too large to export").into()
+        }
+        Err(DeliveryError::ClipboardBusy) => {
+            "Another program is using the clipboard. Try again.".into()
+        }
+        Err(DeliveryError::NoSaveFolder) => {
+            "Windows could not find or create the Screenshots folder".into()
+        }
+        Err(DeliveryError::SaveFolderNotFull { configured }) => {
+            format!("The save folder \"{configured}\" in the settings is not a full path").into()
+        }
+        Err(DeliveryError::NoFreeName { name }) => {
+            format!("Every numbered name for \"{name}\" is taken").into()
+        }
+        Err(DeliveryError::NotWritten { folder }) => {
+            format!("Could not write to {}", folder.display()).into()
+        }
+    }
 }
 
 fn refusal(error: &CommandError) -> &'static str {
@@ -257,13 +299,19 @@ impl Render for EditorView {
 /// An open editor window. Dropping it leaves the window open; [`EditorWindow::close`] closes it.
 pub struct EditorWindow(WindowHandle<EditorView>);
 
-/// Opens an editor window on `capture`, with no shapes yet (F-23).
+/// Opens an editor window on `capture`, with no shapes yet (F-23). Ctrl+C and Ctrl+S hand the
+/// document to `deliver` and show what it reports (F-40, D-48).
 ///
 /// # Errors
 ///
 /// [`Error::WindowOpen`] if the platform cannot create the window.
-pub fn open(cx: &mut App, capture: RgbaImage) -> Result<EditorWindow, Error> {
-    open_with(cx, Document::new(Arc::new(capture)), |_, _| {})
+pub fn open(
+    cx: &mut App,
+    capture: RgbaImage,
+    deliver: impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static,
+) -> Result<EditorWindow, Error> {
+    let document = Document::new(Arc::new(capture));
+    open_with(cx, document, Some(Rc::new(deliver)), |_, _| {})
 }
 
 /// [`open`], running `on_open` on the new window before its first frame. `on_open` runs only
@@ -271,12 +319,13 @@ pub fn open(cx: &mut App, capture: RgbaImage) -> Result<EditorWindow, Error> {
 pub(crate) fn open_with(
     cx: &mut App,
     document: Document,
+    deliver: Option<Deliver>,
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
     let options = window_options(cx);
     cx.open_window(options, |window, cx| {
         on_open(window, cx);
-        cx.new(|cx| EditorView::new(document, window, cx))
+        cx.new(|cx| EditorView::new(document, deliver, window, cx))
     })
     .map(EditorWindow)
     .map_err(|error| Error::WindowOpen(error.into()))
@@ -310,5 +359,37 @@ fn window_options(cx: &App) -> WindowOptions {
         }),
         window_min_size: Some(size(px(480.0), px(320.0))),
         ..WindowOptions::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn f40_a_delivery_notice_names_the_file_folder_or_name_it_is_about() {
+        let notice = |outcome| delivery_notice(outcome).to_string();
+        let saved = PathBuf::from(r"C:\Shots\Screenshot 2026-10-30 101500.png");
+        assert!(notice(Ok(Delivered::Saved(saved.clone()))).contains(&*saved.to_string_lossy()));
+        let folder = PathBuf::from(r"D:\Full");
+        let not_written = notice(Err(DeliveryError::NotWritten {
+            folder: folder.clone(),
+        }));
+        assert!(not_written.contains(&*folder.to_string_lossy()));
+        let configured = "Pictures".to_owned();
+        let relative = DeliveryError::SaveFolderNotFull {
+            configured: configured.clone(),
+        };
+        assert!(notice(Err(relative)).contains(&configured));
+        let name = "Screenshot 2026-10-30 101500".to_owned();
+        let taken = DeliveryError::NoFreeName { name: name.clone() };
+        assert!(notice(Err(taken)).contains(&name));
+        let large = DeliveryError::TooLarge {
+            width: 70000,
+            height: 9,
+        };
+        assert!(notice(Err(large)).contains("70000x9"));
     }
 }
