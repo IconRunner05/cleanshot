@@ -47,7 +47,7 @@ pub struct MonitorImage {
 /// monitor reports an empty size.
 pub fn capture_all(method: Method) -> Result<Vec<MonitorImage>, Error> {
     match method {
-        Method::GdiBitBlt => monitor_bounds().into_iter().map(bitblt).collect(),
+        Method::GdiBitBlt => monitor_bounds()?.into_iter().map(bitblt).collect(),
         Method::DesktopDuplication => duplicate_all().into_iter().collect(),
     }
 }
@@ -141,7 +141,7 @@ fn offset(row: i32, column: i32, row_bytes: usize) -> usize {
     row * row_bytes + column * 4
 }
 
-pub(crate) fn monitor_handles() -> Vec<HMONITOR> {
+pub(crate) fn monitor_handles() -> Result<Vec<HMONITOR>, Error> {
     unsafe extern "system" fn add(monitor: HMONITOR, _: HDC, _: *mut RECT, list: LPARAM) -> BOOL {
         // SAFETY: `list` is the &mut Vec that monitor_handles passed, alive for the whole call.
         let list = unsafe { &mut *(list.0 as *mut Vec<HMONITOR>) };
@@ -152,22 +152,25 @@ pub(crate) fn monitor_handles() -> Vec<HMONITOR> {
     // SAFETY: `add` only pushes onto `handles`, which outlives the call.
     let listed =
         unsafe { EnumDisplayMonitors(None, None, Some(add), LPARAM(&raw mut handles as isize)) };
-    debug_assert!(listed.as_bool(), "the desktop's monitors can be listed");
-    handles
+    if !listed.as_bool() {
+        return Err(Error::Capture(windows::core::Error::from_thread()));
+    }
+    Ok(handles)
 }
 
-fn monitor_bounds() -> Vec<RECT> {
-    monitor_handles()
+fn monitor_bounds() -> Result<Vec<RECT>, Error> {
+    monitor_handles()?
         .into_iter()
-        .filter_map(|handle| {
+        .map(|handle| {
             let mut info = MONITORINFO {
                 cbSize: u32::try_from(size_of::<MONITORINFO>()).expect("fits in u32"),
                 ..Default::default()
             };
             // SAFETY: `info` has its size set, as GetMonitorInfoW requires.
-            unsafe { GetMonitorInfoW(handle, &raw mut info) }
-                .as_bool()
-                .then_some(info.rcMonitor)
+            if !unsafe { GetMonitorInfoW(handle, &raw mut info) }.as_bool() {
+                return Err(Error::Capture(windows::core::Error::from_thread()));
+            }
+            Ok(info.rcMonitor)
         })
         .collect()
 }

@@ -99,7 +99,13 @@ fn report_windows(report: &mut String) {
 
 fn report_display(report: &mut String) {
     report.push_str("\n## Display\n\n");
-    let monitors = monitors();
+    let monitors = match monitors() {
+        Ok(monitors) => monitors,
+        Err(error) => {
+            line(report, "Monitors", format!("error: {error}"));
+            return;
+        }
+    };
     line(report, "Monitors", monitors.len());
     for monitor in &monitors {
         let bounds = monitor.bounds;

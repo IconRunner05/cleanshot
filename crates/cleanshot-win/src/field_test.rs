@@ -141,12 +141,15 @@ fn registry_number(value: PCWSTR) -> Result<u32, windows::core::Error> {
 }
 
 /// Every monitor attached to the desktop, in the order Windows lists them.
-#[must_use]
-pub fn monitors() -> Vec<Monitor> {
-    monitor_handles()
+///
+/// # Errors
+///
+/// [`Error::Capture`] if Windows cannot list the monitors.
+pub fn monitors() -> Result<Vec<Monitor>, Error> {
+    Ok(monitor_handles()?
         .into_iter()
         .map(describe_monitor)
-        .collect()
+        .collect())
 }
 
 fn describe_monitor(handle: HMONITOR) -> Monitor {
