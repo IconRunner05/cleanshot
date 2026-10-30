@@ -1,3 +1,4 @@
+use std::f32::consts::{FRAC_PI_6, PI};
 use std::sync::Arc;
 
 /// A capture with annotations on top. All coordinates are in base-image physical pixels.
@@ -119,6 +120,22 @@ pub struct PointF {
     pub y: f32,
 }
 
+/// The head of an arrow from `from` to `to`, as one barb, the tip and the other barb. Each barb
+/// is 30 degrees off the shaft and four stroke widths long, at least 10 pixels.
+#[must_use]
+pub fn arrow_head(from: PointF, to: PointF, stroke_width: f32) -> [PointF; 3] {
+    let length = (stroke_width * 4.0).max(10.0);
+    let angle = (to.y - from.y).atan2(to.x - from.x);
+    let barb = |side: f32| {
+        let barb_angle = angle + PI + side * FRAC_PI_6;
+        PointF {
+            x: to.x + length * barb_angle.cos(),
+            y: to.y + length * barb_angle.sin(),
+        }
+    };
+    [barb(1.0), to, barb(-1.0)]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RectF {
     pub x: f32,
@@ -224,5 +241,23 @@ mod tests {
     #[test]
     fn rgba_image_rejects_a_size_whose_byte_count_overflows() {
         assert!(RgbaImage::new(1 << 31, 1 << 31, Vec::new()).is_err());
+    }
+    #[test]
+    fn f31_arrow_head_barbs_sit_30_degrees_off_the_shaft_four_widths_long() {
+        let [left, tip, right] =
+            arrow_head(PointF { x: 0.0, y: 0.0 }, PointF { x: 100.0, y: 0.0 }, 4.0);
+        let near = |point: PointF, x: f32, y: f32| {
+            (point.x - x).abs() < 1e-4 && (point.y - y).abs() < 1e-4
+        };
+        assert!(near(tip, 100.0, 0.0));
+        let back = 16.0 * FRAC_PI_6.cos();
+        assert!(near(left, 100.0 - back, -8.0), "{left:?}");
+        assert!(near(right, 100.0 - back, 8.0), "{right:?}");
+    }
+
+    #[test]
+    fn f31_arrow_head_barbs_are_at_least_ten_pixels_for_thin_strokes() {
+        let [left, tip, _] = arrow_head(PointF { x: 0.0, y: 0.0 }, PointF { x: 0.0, y: 50.0 }, 1.0);
+        assert!(((left.x - tip.x).hypot(left.y - tip.y) - 10.0).abs() < 1e-4);
     }
 }

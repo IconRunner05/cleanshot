@@ -1,8 +1,10 @@
-use std::f32::consts::{FRAC_PI_6, PI, TAU};
+use std::f32::consts::TAU;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use cleanshot_core::{Color, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeEntry};
+use cleanshot_core::{
+    Color, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeEntry, arrow_head,
+};
 use gpui::{
     BorderStyle, Bounds, Canvas, PathBuilder, Pixels, Point, RenderImage, Rgba, Window, canvas,
     fill, point, px, quad, size, transparent_black,
@@ -101,15 +103,15 @@ fn paint_shape(entry: &ShapeEntry, fit: &Fit, window: &mut Window) {
             color,
         ),
         Shape::Arrow { from, to } => {
-            let (tail, tip) = (fit.point(*from), fit.point(*to));
             paint_polygon(
                 window,
                 PathBuilder::stroke(width),
-                &[tail, tip],
+                &[fit.point(*from), fit.point(*to)],
                 false,
                 color,
             );
-            paint_polygon(window, stroke, &arrow_head(tail, tip, width), false, color);
+            let head = arrow_head(*from, *to, entry.style.stroke_width).map(|p| fit.point(p));
+            paint_polygon(window, stroke, &head, false, color);
         }
         Shape::Rect {
             rect,
@@ -162,16 +164,6 @@ fn paint_polygon(
     if let Ok(path) = builder.build() {
         window.paint_path(path, color);
     }
-}
-
-fn arrow_head(tail: Point<Pixels>, tip: Point<Pixels>, width: Pixels) -> [Point<Pixels>; 3] {
-    let length = f32::from(width * 4.0).max(10.0);
-    let angle = f32::from(tip.y - tail.y).atan2(f32::from(tip.x - tail.x));
-    let barb = |side: f32| {
-        let barb_angle = angle + PI + side * FRAC_PI_6;
-        tip + point(px(length * barb_angle.cos()), px(length * barb_angle.sin()))
-    };
-    [barb(1.0), tip, barb(-1.0)]
 }
 
 fn ellipse(bounds: Bounds<Pixels>) -> Vec<Point<Pixels>> {

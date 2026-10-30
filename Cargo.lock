@@ -350,6 +350,9 @@ name = "cleanshot-render"
 version = "0.1.0"
 dependencies = [
  "cleanshot-core",
+ "image",
+ "thiserror",
+ "tiny-skia",
 ]
 
 [[package]]

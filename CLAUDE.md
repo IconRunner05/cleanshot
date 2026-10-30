@@ -37,7 +37,7 @@ cargo test --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check && cargo audit
-cargo test -p cleanshot-render -- --bless     # only when a golden image change is intended
+cargo test -p cleanshot-render --test golden -- --bless   # only when a golden image change is intended
 ```
 
 Build on Windows with the MSVC toolchain (`x86_64-pc-windows-msvc`, the default target in `.cargo/config.toml`). On macOS/Linux:
