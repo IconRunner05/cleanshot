@@ -48,9 +48,9 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
         | Shape::Pen(_)
         | Shape::Highlight(_)
         | Shape::Redact { .. } => bounds(shape).map_or_else(Vec::new, |rect| {
-            BOX_HANDLES
-                .iter()
-                .map(|&handle| (Handle::Box(handle), box_handle_point(rect, handle)))
+            box_handles(rect)
+                .into_iter()
+                .map(|(handle, at)| (Handle::Box(handle), at))
                 .collect()
         }),
         // Text has no extent in core until the text tool measures it, so it has no handles.
@@ -61,12 +61,44 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
 /// The handle of `shape` nearest `point`, if one is within `tolerance` pixels.
 #[must_use]
 pub fn handle_at(shape: &Shape, point: PointF, tolerance: f32) -> Option<Handle> {
-    handles(shape)
-        .into_iter()
-        .map(|(handle, at)| (handle, distance(at, point)))
-        .filter(|&(_, gap)| gap <= tolerance)
-        .min_by(|(_, a), (_, b)| a.total_cmp(b))
-        .map(|(handle, _)| handle)
+    nearest(handles(shape), point, tolerance)
+}
+
+/// The eight handles of `rect` and where each sits.
+#[must_use]
+pub fn box_handles(rect: RectF) -> [(BoxHandle, PointF); 8] {
+    BOX_HANDLES.map(|handle| (handle, box_handle_point(rect, handle)))
+}
+
+/// The handle of `rect` nearest `point`, if one is within `tolerance` pixels.
+#[must_use]
+pub fn box_handle_at(rect: RectF, point: PointF, tolerance: f32) -> Option<BoxHandle> {
+    nearest(box_handles(rect), point, tolerance)
+}
+
+/// `rect` with `handle` dragged to `to`. Dragged past its opposite side, the box flips rather than
+/// getting a negative size.
+#[must_use]
+pub fn resized_box(rect: RectF, handle: BoxHandle, to: PointF) -> RectF {
+    let (mut left, mut top) = (rect.x, rect.y);
+    let (mut right, mut bottom) = (rect.x + rect.width, rect.y + rect.height);
+    match handle {
+        BoxHandle::TopLeft => (left, top) = (to.x, to.y),
+        BoxHandle::Top => top = to.y,
+        BoxHandle::TopRight => (right, top) = (to.x, to.y),
+        BoxHandle::Right => right = to.x,
+        BoxHandle::BottomRight => (right, bottom) = (to.x, to.y),
+        BoxHandle::Bottom => bottom = to.y,
+        BoxHandle::BottomLeft => (left, bottom) = (to.x, to.y),
+        BoxHandle::Left => left = to.x,
+    }
+    box_between(
+        PointF { x: left, y: top },
+        PointF {
+            x: right,
+            y: bottom,
+        },
+    )
 }
 
 /// `shape` moved by `offset`.
@@ -116,7 +148,7 @@ pub fn moved(shape: &Shape, offset: PointF) -> Shape {
 /// than turning inside out. A handle the shape does not have leaves it unchanged.
 #[must_use]
 pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
-    let new_bounds = |handle| bounds(shape).map(|rect| drag_box(rect, handle, to));
+    let new_bounds = |handle| bounds(shape).map(|rect| resized_box(rect, handle, to));
     match (shape, handle) {
         (Shape::Arrow { to: end, .. }, Handle::Start) => Shape::Arrow { from: to, to: *end },
         (Shape::Arrow { from, .. }, Handle::End) => Shape::Arrow { from: *from, to },
@@ -250,26 +282,17 @@ fn box_handle_point(rect: RectF, handle: BoxHandle) -> PointF {
     PointF { x, y }
 }
 
-fn drag_box(rect: RectF, handle: BoxHandle, to: PointF) -> RectF {
-    let (mut left, mut top) = (rect.x, rect.y);
-    let (mut right, mut bottom) = (rect.x + rect.width, rect.y + rect.height);
-    match handle {
-        BoxHandle::TopLeft => (left, top) = (to.x, to.y),
-        BoxHandle::Top => top = to.y,
-        BoxHandle::TopRight => (right, top) = (to.x, to.y),
-        BoxHandle::Right => right = to.x,
-        BoxHandle::BottomRight => (right, bottom) = (to.x, to.y),
-        BoxHandle::Bottom => bottom = to.y,
-        BoxHandle::BottomLeft => (left, bottom) = (to.x, to.y),
-        BoxHandle::Left => left = to.x,
-    }
-    box_between(
-        PointF { x: left, y: top },
-        PointF {
-            x: right,
-            y: bottom,
-        },
-    )
+fn nearest<H>(
+    handles: impl IntoIterator<Item = (H, PointF)>,
+    point: PointF,
+    tolerance: f32,
+) -> Option<H> {
+    handles
+        .into_iter()
+        .map(|(handle, at)| (handle, distance(at, point)))
+        .filter(|&(_, gap)| gap <= tolerance)
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(handle, _)| handle)
 }
 
 fn box_between(a: PointF, b: PointF) -> RectF {
@@ -503,5 +526,47 @@ mod tests {
             moved(&shape, point(3.0, -2.0)),
             Shape::Pen(vec![point(3.0, -2.0), point(13.0, 3.0)])
         );
+    }
+
+    #[test]
+    fn f30_box_handles_sit_on_the_corners_and_the_middle_of_each_side() {
+        let handles = box_handles(rect(10.0, 20.0, 100.0, 50.0));
+        assert_eq!(
+            handles.map(|(_, at)| (at.x, at.y)),
+            [
+                (10.0, 20.0),
+                (60.0, 20.0),
+                (110.0, 20.0),
+                (110.0, 45.0),
+                (110.0, 70.0),
+                (60.0, 70.0),
+                (10.0, 70.0),
+                (10.0, 45.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn f30_the_nearest_box_handle_within_the_tolerance_is_gripped() {
+        let small = rect(0.0, 0.0, 4.0, 4.0);
+        assert_eq!(
+            box_handle_at(small, point(3.5, -1.0), 5.0),
+            Some(BoxHandle::TopRight)
+        );
+        assert_eq!(
+            box_handle_at(small, point(2.2, -1.0), 5.0),
+            Some(BoxHandle::Top)
+        );
+        assert_eq!(box_handle_at(small, point(4.0, -6.0), 5.0), None);
+    }
+
+    #[test]
+    fn f30_a_box_dragged_past_its_opposite_corner_flips() {
+        let dragged = resized_box(
+            rect(0.0, 0.0, 100.0, 50.0),
+            BoxHandle::BottomRight,
+            point(-20.0, -10.0),
+        );
+        assert_eq!(dragged, rect(-20.0, -10.0, 20.0, 10.0));
     }
 }

@@ -9,4 +9,7 @@ pub use document::{
     ShapeId, Style, arrow_head,
 };
 pub use history::{Command, CommandError, History};
-pub use selection::{BoxHandle, Handle, handle_at, handles, moved, resized, shape_at};
+pub use selection::{
+    BoxHandle, Handle, box_handle_at, box_handles, handle_at, handles, moved, resized, resized_box,
+    shape_at,
+};
