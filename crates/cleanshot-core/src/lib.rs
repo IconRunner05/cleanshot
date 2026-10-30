@@ -5,6 +5,7 @@ mod drawing;
 mod history;
 mod selection;
 mod settings;
+mod tool;
 
 pub use document::{
     Color, Document, Fill, ImageError, PointF, RectF, RedactMode, RgbaImage, Shape, ShapeEntry,
@@ -20,3 +21,4 @@ pub use settings::{
     AfterCapture, Hotkey, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers, SaveFormat, Settings,
     SettingsProblem,
 };
+pub use tool::Tool;

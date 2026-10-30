@@ -295,7 +295,7 @@ fn nearest<H>(
         .map(|(handle, _)| handle)
 }
 
-fn box_between(a: PointF, b: PointF) -> RectF {
+pub(crate) fn box_between(a: PointF, b: PointF) -> RectF {
     RectF {
         x: a.x.min(b.x),
         y: a.y.min(b.y),
