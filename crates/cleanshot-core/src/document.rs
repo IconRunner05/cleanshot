@@ -242,6 +242,7 @@ mod tests {
     fn rgba_image_rejects_a_size_whose_byte_count_overflows() {
         assert!(RgbaImage::new(1 << 31, 1 << 31, Vec::new()).is_err());
     }
+
     #[test]
     fn f31_arrow_head_barbs_sit_30_degrees_off_the_shaft_four_widths_long() {
         let [left, tip, right] =
