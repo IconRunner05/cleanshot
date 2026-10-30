@@ -1,8 +1,11 @@
 use std::cell::{Cell, RefCell};
 
-use cleanshot_core::{Hotkey, Key};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use cleanshot_core::{Hotkey, Key, Modifiers};
+use windows::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
     UnregisterHotKey, VK_F1, VK_SNAPSHOT,
@@ -233,6 +236,52 @@ fn virtual_key(hotkey: Hotkey) -> (HOT_KEY_MODIFIERS, u32) {
     (modifiers, key)
 }
 
+/// Whether Windows' "Use the Print screen key to open screen capture" switch is on, so a
+/// bare `PrtSc` opens Snipping Tool and never reaches a registered hotkey (F-52). A switch
+/// never set reads as on, Windows 11's default (D-33).
+///
+/// # Errors
+///
+/// [`Error::PrintScreenSetting`] if the value exists but cannot be read.
+pub fn snipping_tool_holds_print_screen() -> Result<bool, Error> {
+    let mut enabled = 0u32;
+    let mut bytes = struct_size::<u32>();
+    // SAFETY: `enabled` is writable for `bytes` bytes and RRF_RT_REG_DWORD writes exactly 4.
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Control Panel\\Keyboard"),
+            w!("PrintScreenKeyForSnippingEnabled"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut enabled).cast()),
+            Some(&raw mut bytes),
+        )
+    };
+    match read {
+        ERROR_SUCCESS => Ok(enabled != 0),
+        ERROR_FILE_NOT_FOUND => Ok(true),
+        refused => Err(Error::PrintScreenSetting(refused.to_hresult().into())),
+    }
+}
+
+/// F-52: `Ctrl+Shift+4` in place of a bare `PrtSc` that Snipping Tool holds; None when
+/// `configured` can fire as it is.
+///
+/// # Panics
+///
+/// Never: the fallback's text is fixed and valid.
+#[must_use]
+pub fn print_screen_fallback(
+    configured: Hotkey,
+    snipping_tool_holds_print_screen: bool,
+) -> Option<Hotkey> {
+    let bare_print_screen =
+        configured.key() == Key::PrintScreen && configured.modifiers() == Modifiers::default();
+    (snipping_tool_holds_print_screen && bare_print_screen)
+        .then(|| Hotkey::parse("Ctrl+Shift+4").expect("Ctrl+Shift+4 is a valid hotkey"))
+}
+
 fn capture_signal() -> u32 {
     // SAFETY: the argument is a 'static, NUL-terminated string.
     unsafe { RegisterWindowMessageW(CAPTURE_SIGNAL) }
@@ -407,6 +456,15 @@ mod tests {
             virtual_key(hotkey("PrtSc")),
             (MOD_NOREPEAT, u32::from(VK_SNAPSHOT.0))
         );
+    }
+
+    #[test]
+    fn f52_only_a_bare_print_screen_that_snipping_tool_holds_falls_back() {
+        let fallback = Some(hotkey("Ctrl+Shift+4"));
+        assert_eq!(print_screen_fallback(hotkey("PrtSc"), true), fallback);
+        assert_eq!(print_screen_fallback(hotkey("PrtSc"), false), None);
+        assert_eq!(print_screen_fallback(hotkey("Shift+PrtSc"), true), None);
+        assert_eq!(print_screen_fallback(hotkey("Ctrl+Alt+Q"), true), None);
     }
 
     #[test]

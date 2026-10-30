@@ -3,7 +3,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cleanshot_core::{MAX_SETTINGS_BYTES, RgbaImage, SaveFormat, Settings, SettingsProblem};
+use cleanshot_core::{
+    Hotkey, MAX_SETTINGS_BYTES, RgbaImage, SaveFormat, Settings, SettingsProblem,
+};
 use cleanshot_render::{Format, encode};
 use cleanshot_win::capture::{Desktop, capture_desktop, region};
 use cleanshot_win::clipboard::copy_image;
@@ -11,7 +13,10 @@ use cleanshot_win::instance::Launch;
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 use cleanshot_win::save::{self, Stamp};
 use cleanshot_win::settings_file::{read_settings, settings_path};
-use cleanshot_win::tray::{Request, Tray, ask_running_instance_to_capture};
+use cleanshot_win::tray::{
+    Request, Tray, ask_running_instance_to_capture, print_screen_fallback,
+    snipping_tool_holds_print_screen,
+};
 
 fn main() {
     cleanshot_win::load_dlls_from_system32_only().expect("the DLL search path is restricted");
@@ -27,7 +32,7 @@ fn main() {
         }
     };
     let (settings, warning) = load_settings();
-    let region = settings.hotkeys.region;
+    let (region, fallback) = region_hotkey(settings.hotkeys.region);
     let settings = Rc::new(settings);
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
@@ -59,7 +64,7 @@ fn main() {
                 "{hotkey} is taken by another program, so it does not capture. Choose another region hotkey in cleanshot.toml."
             )),
         };
-        let warnings: Vec<String> = warning.into_iter().chain(taken).collect();
+        let warnings: Vec<String> = warning.into_iter().chain(fallback).chain(taken).collect();
         if !warnings.is_empty() {
             let text = warnings.join(" ");
             if let Err(error) = created.warn("Cleanshot", &text) {
@@ -116,6 +121,27 @@ fn open_overlay(
     match shown {
         Ok(shown) => *overlay.borrow_mut() = Some(shown),
         Err(error) => eprintln!("the overlay could not open: {error}"),
+    }
+}
+
+// F-52: Cleanshot never opens Settings for the user (C-11), so it says where the switch is.
+fn region_hotkey(configured: Hotkey) -> (Hotkey, Option<String>) {
+    let holds = match snipping_tool_holds_print_screen() {
+        Ok(holds) => holds,
+        Err(error) => {
+            let warning =
+                format!("Cleanshot could not tell whether Snipping Tool uses PrtSc: {error}.");
+            return (configured, Some(warning));
+        }
+    };
+    match print_screen_fallback(configured, holds) {
+        None => (configured, None),
+        Some(fallback) => (
+            fallback,
+            Some(format!(
+                "Snipping Tool uses PrtSc, so {fallback} captures a region instead. To use PrtSc, turn off \"Use the Print screen key to open screen capture\" in Settings > Accessibility > Keyboard, then restart Cleanshot."
+            )),
+        ),
     }
 }
 

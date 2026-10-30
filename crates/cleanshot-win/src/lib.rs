@@ -55,6 +55,8 @@ pub enum Error {
     SingleInstance(#[source] windows::core::Error),
     #[error("the running Cleanshot has no tray window yet")]
     NoRunningTray(#[source] windows::core::Error),
+    #[error("Windows' Print screen key setting could not be read")]
+    PrintScreenSetting(#[source] windows::core::Error),
     #[error("the tray has no icon to show a warning from")]
     WarningNotShown,
     #[error("no display output could be duplicated")]
