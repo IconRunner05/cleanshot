@@ -315,13 +315,15 @@ The app manifest (`crates/cleanshot-app/cleanshot.exe.manifest`, embedded by the
 | `win` | Integration tests on the Windows CI runner: capture of a known window at 100/150/200% DPI, clipboard round-trip, file-name rules. |
 | Manual | Release checklist: paste targets (F-20), multi-monitor mixed DPI, PrtSc conflict (F-52), high contrast. |
 
-### CI gates (every PR, `windows-latest`)
+### CI gates (every push to `main` or `ci/**`, `windows-latest`)
+
+Gates 3–5 are `charter-gates.sh`. CI runs it on the release exe it builds and uploads. The fold bar on a Mac or Linux machine also runs it, on a scan-only exe that cargo-xwin builds with the `scan-only` profile. That exe is never shipped and cannot run: off Windows, GPUI's shaders cannot be compiled into it, so it reads them from the build machine's cargo checkout.
 
 1. fmt, clippy, tests (x64), build (ARM64).
 2. `cargo deny check` (advisories, bans, licences, sources) and `cargo audit`.
-3. **Binary scan** of the release exe: fail on imports from `ws2_32`, `winhttp`, `wininet`, or on `CreateProcess*` / `ShellExecute*` / `WinExec` (C-10, C-11); fail if CFG is not set (C-17); fail if any DLL other than system DLLs is imported (C-02).
-4. `unsafe` scan: fail if `unsafe` appears outside `crates/cleanshot-win` (C-16).
-5. Size check: fail above 15 MB (section 8).
+3. **Binary scan**: fail on imports from `ws2_32`, `winhttp`, `wininet`, or on `CreateProcess*` / `ShellExecute*` / `WinExec` (C-10, C-11); fail if ASLR, DEP or CFG is not set (C-17); fail if any DLL is imported that is not on the script's system DLL list (C-02).
+4. `unsafe` scan: fail if a crate root other than `cleanshot-win`'s lacks `#![forbid(unsafe_code)]`, or `unsafe` appears outside `crates/cleanshot-win` (C-16).
+5. Size check of the release exe: fail at 15 MB or above (section 8).
 
 ### Definition of Done (every task)
 
@@ -353,7 +355,7 @@ Releases ship as a bare, signed `cleanshot.exe` on GitHub Releases. A winget **p
 
 ### Release workflow (tag `vX.Y.Z` → GitHub Actions)
 
-1. Build x64 (and ARM64, once enabled) on `windows-latest` from the tag; never on a developer machine.
+1. Build x64 (and ARM64, once enabled) on `windows-latest` from the tag; never on a developer machine. A scan-only exe from the fold bar is never released.
 2. Run every CI gate (section 7) against the release binary.
 3. Code-sign the exe (signing service is an open question; until then, releases are marked pre-release).
 4. Publish to GitHub Releases: `cleanshot-X.Y.Z-x64.exe`, `SHA256SUMS`, CycloneDX SBOM, and a GitHub build-provenance attestation.
@@ -445,6 +447,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
 | D-26 | 2026-10-30 | Commands carry no "before" value: applying an edit computes the edit that reverts it, which undo and redo replay. Only `History` issues `ShapeId`s and never reuses one | assumed | A stored "before" can disagree with the document; a computed one cannot (STANDARDS.md: never store what can be derived). Ids from one place stay unique across undo and redo |
+| D-21 | 2026-10-30 | Release exes are built by GitHub Actions on `windows-latest`; builds on the Macs or Linux are scan-only. The repo is public | decided | Owner's call. `gpui_windows` compiles its shaders into the exe only when built on Windows; a cross-built exe would read them from the build machine's disk and cannot render. Public repos get hosted runners for free |
 | D-22 | 2026-10-30 | The tray icon, its menu and the global hotkeys are direct Win32 calls (`Shell_NotifyIconW`, `TrackPopupMenu`, `RegisterHotKey`) on a hidden window in `cleanshot-win`, not `tray-icon`, `muda` or `global-hotkey` | assumed | Section 6's fallback. The crates are licence-clean and launch nothing, but add about 13 crates and two `windows-sys` versions beside the `windows` crate GPUI uses, and deliver events through global `Send + Sync` handlers that would need a bridge back to the UI thread. GPUI's loop is a plain `GetMessageW`/`DispatchMessageW`, so a window of our own on that thread gets its messages with no bridge. A shell that refuses the icon (at login the taskbar may not be up) does not stop start-up: the hotkeys work and `TaskbarCreated` adds the icon |
 | D-19 | 2026-10-30 | The app's build script writes the manifest into a `.res` file and passes it to the linker, instead of using `winresource` | assumed | `winresource` runs a resource compiler from every `cargo clippy`, which would need `llvm-rc` set up by hand on each Mac and Linux host; `lld-link` here cannot embed a manifest without `mt.exe`. A `.res` file with one manifest entry is about 20 lines and needs no tool |
 | D-18 | 2026-10-30 | `image` is a direct dependency of `cleanshot-editor`, pinned to the version GPUI uses, with no format features, to build the bitmap GPUI draws | decided | Owner's call. GPUI's only drawable-bitmap constructor takes `image::Frame` and GPUI does not re-export `image`; no new crate enters the tree |

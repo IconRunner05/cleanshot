@@ -24,3 +24,9 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = 3
+
+[profile.scan-only]
+inherits = "release"
+
+[profile.scan-only.package.gpui_windows]
+debug-assertions = true

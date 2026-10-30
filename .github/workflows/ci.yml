@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main, "ci/**"]
   pull_request:
 
 permissions:
@@ -37,86 +38,23 @@ jobs:
       - name: No dependency has a published advisory
         run: cargo audit
 
-      - name: Only cleanshot-win may contain unsafe code (C-16)
-        shell: pwsh
-        run: |
-          $roots = Get-ChildItem crates\*\src\lib.rs, crates\*\src\main.rs
-          if (-not $roots) { throw 'No crate roots were found under crates\, so the scan did not run.' }
-          $failed = $false
-          foreach ($root in $roots) {
-            if ($root.FullName -like '*\cleanshot-win\*') { continue }
-            if (-not (Select-String -LiteralPath $root.FullName -SimpleMatch '#![forbid(unsafe_code)]' -Quiet)) {
-              "::error::C-16: $(Resolve-Path -Relative $root.FullName) lacks #![forbid(unsafe_code)]."; $failed = $true
-            }
-          }
-          $hits = Get-ChildItem crates -Recurse -Filter *.rs |
-            Where-Object FullName -notlike '*\crates\cleanshot-win\*' |
-            Select-String '\bunsafe\b' -CaseSensitive
-          foreach ($hit in $hits) {
-            "::error::C-16: unsafe outside crates/cleanshot-win at $($hit.RelativePath($PWD.Path)):$($hit.LineNumber)."; $failed = $true
-          }
-          if ($failed) { exit 1 }
-
   release-exe:
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: pwsh
-    env:
-      EXE: target\x86_64-pc-windows-msvc\release\cleanshot.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Release exe builds
         run: cargo build --release --locked -p cleanshot-app
 
-      - name: Put dumpbin on the path
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $dumpbin = & $vswhere -latest -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
-          if (-not $dumpbin) { throw 'dumpbin.exe was not found in the Visual Studio install.' }
-          Add-Content $env:GITHUB_PATH (Split-Path $dumpbin)
+      - name: Release exe passes the binary scan, the unsafe scan and the size budget (C-02 C-10 C-11 C-16 C-17 P-06)
+        shell: bash
+        env:
+          LLVM_BIN: C:/Program Files/LLVM/bin
+        run: ./charter-gates.sh --release-exe target/x86_64-pc-windows-msvc/release/cleanshot.exe
 
-      - name: Release exe imports only system DLLs and no network DLLs (C-02, C-10)
-        run: |
-          $dlls = (dumpbin /nologo /dependents $env:EXE | Select-String '^\s+(\S+\.dll)\s*$').Matches |
-            ForEach-Object { $_.Groups[1].Value.ToLower() }
-          if (-not $dlls) { throw "dumpbin listed no DLLs for $env:EXE, so the scan did not run." }
-          $failed = $false
-          foreach ($dll in $dlls) {
-            if ($dll -in 'ws2_32.dll', 'winhttp.dll', 'wininet.dll') {
-              "::error::C-10: the release exe imports the network DLL $dll."; $failed = $true
-            } elseif ($dll -match '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt-)') {
-              "::error::C-02: the release exe imports the C runtime DLL $dll; the CRT must be linked statically."; $failed = $true
-            } elseif ($dll -notmatch '^(api|ext)-ms-win-' -and -not (Test-Path "$env:SystemRoot\System32\$dll")) {
-              "::error::C-02: the release exe imports $dll, which is not a Windows system DLL."; $failed = $true
-            }
-          }
-          if ($failed) { exit 1 }
-
-      - name: Release exe imports no process-launching functions (C-11)
-        run: |
-          $imports = dumpbin /nologo /imports $env:EXE
-          if (-not ($imports -match 'kernel32\.dll')) { throw "dumpbin listed no kernel32 imports for $env:EXE, so the scan did not run." }
-          $launchers = ($imports | Select-String '\b(CreateProcess\w*|ShellExecute\w*|WinExec)\b').Matches.Value | Sort-Object -Unique
-          foreach ($name in $launchers) { "::error::C-11: the release exe imports the process launcher $name." }
-          if ($launchers) { exit 1 }
-
-      - name: Release exe has ASLR, DEP and Control Flow Guard (C-17)
-        run: |
-          $headers = dumpbin /nologo /headers $env:EXE
-          $mitigations = [ordered]@{ 'ASLR' = 'Dynamic base'; 'DEP' = 'NX compatible'; 'Control Flow Guard' = 'Guard' }
-          $failed = $false
-          foreach ($name in $mitigations.Keys) {
-            $flag = $mitigations[$name]
-            if (-not ($headers -match "^\s+$flag\s*$")) {
-              "::error::C-17: the release exe is built without $name (no '$flag' DLL characteristic)."; $failed = $true
-            }
-          }
-          if ($failed) { exit 1 }
-
-      - name: Release exe is under 15 MB (P-06)
-        run: |
-          $megabytes = (Get-Item $env:EXE).Length / 1e6
-          'The release exe is {0:N2} MB.' -f $megabytes
-          if ($megabytes -ge 15) { '::error::P-06: the release exe is {0:N2} MB; the budget is under 15 MB.' -f $megabytes; exit 1 }
+      - name: Upload cleanshot.exe
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cleanshot-exe
+          path: target/x86_64-pc-windows-msvc/release/cleanshot.exe
+          if-no-files-found: error

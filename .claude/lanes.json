@@ -1,5 +1,5 @@
 {
-  "_doc": "Lanes for Cleanshot. Read by `lanes` (main, fold.bar) and by the /lanes:* commands and seats. Design: ~/dotfiles/docs/lanes.md. No fleet machine runs Windows: the bar cross-checks the Windows targets and runs host tests for the pure crates; linking and runtime proof are GitHub Actions on windows-latest.",
+  "_doc": "Lanes for Cleanshot. Read by `lanes` (main, fold.bar) and by the /lanes:* commands and seats. Design: ~/dotfiles/docs/lanes.md. No fleet machine runs Windows: the bar cross-checks the Windows targets, runs host tests for the pure crates, and charter-gates.sh links a scan-only cleanshot.exe with cargo-xwin and scans it (CHARTER 7 gates 3-5); that exe cannot run. The shipped exe and runtime proof come from CI on windows-latest.",
   "main": "main",
   "worktree_copy": [],
   "seats": [
@@ -14,7 +14,8 @@
     "crates/cleanshot-render/**": "cargo test --target host-tuple -p cleanshot-render",
     "crates/**": "cargo clippy --workspace --all-targets -- -D warnings",
     "Cargo.toml": "cargo clippy --workspace --all-targets -- -D warnings && cargo deny check",
-    "deny.toml": "cargo deny check"
+    "deny.toml": "cargo deny check",
+    "charter-gates.sh": "./charter-gates.sh"
   },
   "checklist": ".claude/steward-checklist.md",
   "fold": {
@@ -23,7 +24,9 @@
       "cargo clippy --workspace --all-targets -- -D warnings",
       "cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings",
       "cargo test --target host-tuple -p cleanshot-core -p cleanshot-render",
-      "cargo deny check"
+      "cargo deny check",
+      "cargo audit",
+      "./charter-gates.sh"
     ]
   }
 }
