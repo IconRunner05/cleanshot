@@ -28,3 +28,11 @@ clean, well organised, and written by a human for a human.
   orchestrator folds with `--allow-moved`, pushes main at once, and main's own CI run is the
   tree-exact Windows run; if it goes red, the fold is reverted. A rebase with a conflict, or
   any edit, needs a fresh green run.
+
+  One green per stack tip: a commit is covered by the green run of any descendant whose only
+  extra content is commits on the same stack. One red per Windows-only test, each with a
+  single break; a red's parent is its commit or any descendant on the same stack. A red
+  counts only if its failing step is the test step and the named test is the one that
+  fails; a red stopped earlier (formatting, clippy, build) proves nothing.
+- **Decisions log order.** Rows stay in descending D-id order, and a new row goes in its id
+  position, never at the top or the end of the table.
