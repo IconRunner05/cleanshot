@@ -347,6 +347,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cleanshot-fieldtest"
+version = "0.1.0"
+dependencies = [
+ "cleanshot-win",
+]
+
+[[package]]
 name = "cleanshot-render"
 version = "0.1.0"
 dependencies = [

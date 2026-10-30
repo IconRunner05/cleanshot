@@ -1,0 +1,12 @@
+[package]
+name = "cleanshot-fieldtest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cleanshot-win = { workspace = true, features = ["field-test"] }
+
+[lints]
+workspace = true

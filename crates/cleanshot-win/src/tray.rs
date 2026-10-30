@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -62,6 +62,7 @@ impl Hotkey {
 struct State {
     on_request: RefCell<Box<dyn FnMut(Request)>>,
     taskbar_created: u32,
+    icon_shown: Cell<bool>,
 }
 
 impl State {
@@ -131,6 +132,7 @@ impl Tray {
             on_request: RefCell::new(Box::new(on_request)),
             // SAFETY: the argument is a 'static, NUL-terminated string.
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
+            icon_shown: Cell::new(false),
         });
         // SAFETY: `window` exists, so it will get WM_NCDESTROY, where the window procedure
         // frees this Box once.
@@ -146,7 +148,7 @@ impl Tray {
             })
             .collect();
         let tray = Self { window, hotkeys };
-        add_icon(window);
+        tray.state().icon_shown.set(add_icon(window));
         Ok(tray)
     }
 
@@ -154,6 +156,19 @@ impl Tray {
     #[must_use]
     pub fn hotkeys(&self) -> &[(Hotkey, Result<(), Error>)] {
         &self.hotkeys
+    }
+
+    /// Whether the shell took the icon at the last try: at creation or when the taskbar last
+    /// started.
+    #[must_use]
+    pub fn icon_shown(&self) -> bool {
+        self.state().icon_shown.get()
+    }
+
+    fn state(&self) -> &State {
+        // SAFETY: Tray::create stored the State before returning, and WM_NCDESTROY frees it
+        // only when Drop destroys the window, so it lives as long as `self`.
+        unsafe { &*(GetWindowLongPtrW(self.window, GWLP_USERDATA) as *const State) }
     }
 }
 
@@ -196,24 +211,26 @@ fn icon_data(window: HWND) -> NOTIFYICONDATAW {
     icon
 }
 
-fn add_icon(window: HWND) {
+// F-50: the shell refuses the icon while the taskbar is not up, and then sends TaskbarCreated,
+// which calls this again. A system icon that fails to load counts as a refusal.
+fn add_icon(window: HWND) -> bool {
     let mut icon = icon_data(window);
     // SAFETY: IDI_APPLICATION is a system icon, so no module handle is needed.
     let Ok(system_icon) = (unsafe { LoadIconW(None, IDI_APPLICATION) }) else {
-        return;
+        return false;
     };
     icon.hIcon = system_icon;
-    // F-50: the shell refuses the icon while the taskbar is not up, and then sends
-    // TaskbarCreated, so a refusal here is dropped and retried there.
     // SAFETY: `icon` is fully initialised and outlives both calls.
     unsafe {
-        if Shell_NotifyIconW(NIM_ADD, &raw const icon).as_bool() {
+        let added = Shell_NotifyIconW(NIM_ADD, &raw const icon).as_bool();
+        if added {
             let versioned = Shell_NotifyIconW(NIM_SETVERSION, &raw const icon);
             debug_assert!(
                 versioned.as_bool(),
                 "the shell takes version 4 for an icon it added"
             );
         }
+        added
     }
 }
 
@@ -289,7 +306,7 @@ unsafe extern "system" fn window_procedure(
             _ => None,
         },
         message if message == state.taskbar_created => {
-            add_icon(window);
+            state.icon_shown.set(add_icon(window));
             None
         }
         _ => {

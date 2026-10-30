@@ -50,6 +50,9 @@ while IFS= read -r hit; do
     fail "C-16: unsafe outside crates/cleanshot-win at $hit."
 done < <(git grep -n -w unsafe -- 'crates/*.rs' ':!crates/cleanshot-win/' | cut -d: -f1,2)
 
+cargo tree --locked -p cleanshot-app --target x86_64-pc-windows-msvc -e features -i cleanshot-win | grep -qF 'cleanshot-win feature "field-test"' &&
+    fail "CHARTER 5: cleanshot-app turns on cleanshot-win's field-test feature, so field-test code could ship in cleanshot.exe."
+
 if [[ $kind == "scan-only exe" ]]; then
     if [[ -n ${LANES_FOLD_RANGE:-} ]] && git diff --quiet "$LANES_FOLD_RANGE" -- "${release_inputs[@]}"; then
         echo "Exe gates skipped: $LANES_FOLD_RANGE changes no build input."

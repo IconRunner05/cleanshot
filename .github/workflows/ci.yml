@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, "ci/**"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -60,4 +61,26 @@ jobs:
         with:
           name: cleanshot-exe
           path: target/x86_64-pc-windows-msvc/release/cleanshot.exe
+          if-no-files-found: error
+
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Field-test probe builds
+        run: cargo build --release --locked -p cleanshot-fieldtest
+
+      - name: Probe reports what this runner can do (D-25)
+        shell: bash
+        run: |
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --report probe.md
+          cat probe.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the probe report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: probe-report
+          path: probe.md
           if-no-files-found: error

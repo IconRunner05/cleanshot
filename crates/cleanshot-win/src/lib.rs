@@ -1,3 +1,5 @@
+#[cfg(feature = "field-test")]
+pub mod field_test;
 pub mod tray;
 
 /// What went wrong in a call to Windows.
