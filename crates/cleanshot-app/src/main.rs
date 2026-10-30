@@ -70,18 +70,15 @@ fn open_overlay(
     let frozen = Rc::clone(&captures);
     let closing = Rc::clone(overlay);
     let shown = Overlay::show(&captures, move |event| {
-        match event {
-            OverlayEvent::Cancelled => {}
-            // F-20: until F-03 adds Enter, releasing the drag commits with the default action.
-            OverlayEvent::Selected(selected) => {
-                let copied = region(&frozen, selected)
-                    .map_err(Box::from)
-                    .and_then(|image| copy(&image));
-                if let Err(error) = copied {
-                    eprintln!("the selection could not be copied: {error}");
-                }
-            }
-            OverlayEvent::DrawFailed(error) => eprintln!("the overlay could not draw: {error}"),
+        let finished = match event {
+            OverlayEvent::Cancelled => Ok(()),
+            OverlayEvent::Copy(selected) => region(&frozen, selected)
+                .map_err(Box::from)
+                .and_then(|image| copy(&image)),
+            OverlayEvent::DrawFailed(error) => Err(error.into()),
+        };
+        if let Err(error) = finished {
+            eprintln!("the capture did not finish: {error}");
         }
         // The event arrives inside an overlay window's procedure, so the windows close
         // after it returns.

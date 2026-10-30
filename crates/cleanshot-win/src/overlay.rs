@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use cleanshot_core::box_handles;
 use windows::Win32::Foundation::{
     ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
@@ -17,8 +18,9 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, MOD_NOREPEAT, RegisterHotKey, ReleaseCapture, SetCapture, UnregisterHotKey,
-    VK_ESCAPE,
+    GetCapture, HOT_KEY_MODIFIERS, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, ReleaseCapture,
+    SetCapture, UnregisterHotKey, VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT,
+    VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
@@ -30,12 +32,20 @@ use windows::core::{PCWSTR, w};
 
 use crate::Error;
 use crate::capture::MonitorImage;
+use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
-const ESCAPE_HOTKEY_ID: i32 = 1;
 const DIM_OPACITY: f32 = 0.4;
 const DESKTOP_DPI: f32 = 96.0;
 const BORDER_WIDTH: f32 = 1.5;
+const HANDLE_SIZE: f32 = 8.0;
+const SHIFT_NUDGE: i32 = 10;
+const WHITE: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 1.0,
+    g: 1.0,
+    b: 1.0,
+    a: 1.0,
+};
 const ACCENT: D2D1_COLOR_F = D2D1_COLOR_F {
     r: 0.039,
     g: 0.518,
@@ -48,33 +58,87 @@ const ACCENT: D2D1_COLOR_F = D2D1_COLOR_F {
 pub enum OverlayEvent {
     /// Esc was pressed (F-01: nothing is written).
     Cancelled,
-    /// The user dragged out this rectangle, in physical virtual-desktop pixels, never empty.
-    Selected(RECT),
+    /// Enter was pressed on this selection, in physical virtual-desktop pixels (F-03, F-05).
+    Copy(RECT),
     /// Direct2D could not draw a monitor's frozen image.
     DrawFailed(windows::core::Error),
 }
 
-type Listener = Rc<RefCell<Box<dyn FnMut(OverlayEvent)>>>;
-
-struct Surface {
-    target: ID2D1HwndRenderTarget,
-    frozen: ID2D1Bitmap,
-    dim: ID2D1SolidColorBrush,
-    accent: ID2D1SolidColorBrush,
-    origin: POINT,
-    drag: Cell<Option<(POINT, POINT)>>,
-    listener: Listener,
+/// A key the overlay holds as a hotkey while it is up (D-23).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Key {
+    Cancel,
+    Copy,
+    Nudge(i32, i32),
 }
 
-impl Surface {
+const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 10] = [
+    (MOD_NOREPEAT, VK_ESCAPE, Key::Cancel),
+    (MOD_NOREPEAT, VK_RETURN, Key::Copy),
+    (HOT_KEY_MODIFIERS(0), VK_LEFT, Key::Nudge(-1, 0)),
+    (HOT_KEY_MODIFIERS(0), VK_RIGHT, Key::Nudge(1, 0)),
+    (HOT_KEY_MODIFIERS(0), VK_UP, Key::Nudge(0, -1)),
+    (HOT_KEY_MODIFIERS(0), VK_DOWN, Key::Nudge(0, 1)),
+    (MOD_SHIFT, VK_LEFT, Key::Nudge(-SHIFT_NUDGE, 0)),
+    (MOD_SHIFT, VK_RIGHT, Key::Nudge(SHIFT_NUDGE, 0)),
+    (MOD_SHIFT, VK_UP, Key::Nudge(0, -SHIFT_NUDGE)),
+    (MOD_SHIFT, VK_DOWN, Key::Nudge(0, SHIFT_NUDGE)),
+];
+
+#[derive(Clone, Copy, Debug)]
+struct Gesture {
+    grip: Grip,
+    original: Option<RECT>,
+    start: POINT,
+}
+
+/// What every monitor's window shares: one selection on the virtual desktop.
+struct Shared {
+    listener: RefCell<Box<dyn FnMut(OverlayEvent)>>,
+    selected: Cell<Option<RECT>>,
+    gesture: Cell<Option<Gesture>>,
+    windows: RefCell<Vec<HWND>>,
+}
+
+impl Shared {
     fn send(&self, event: OverlayEvent) {
         if let Ok(mut listener) = self.listener.try_borrow_mut() {
             listener(event);
         }
     }
 
+    fn select(&self, selected: Option<RECT>) {
+        self.selected.set(selected);
+        for &window in self.windows.borrow().iter() {
+            // SAFETY: invalidating this thread's own window; a failure only skips one repaint.
+            let _ = unsafe { InvalidateRect(Some(window), None, false) };
+        }
+    }
+
+    fn press(&self, key: Key) {
+        let selected = self.selected.get();
+        match (key, selected) {
+            (Key::Cancel, _) => self.send(OverlayEvent::Cancelled),
+            (Key::Copy, Some(selected)) => self.send(OverlayEvent::Copy(selected)),
+            (Key::Nudge(dx, dy), Some(selected)) => self.select(Some(nudged(selected, dx, dy))),
+            (Key::Copy | Key::Nudge(..), None) => {}
+        }
+    }
+}
+
+struct Surface {
+    target: ID2D1HwndRenderTarget,
+    frozen: ID2D1Bitmap,
+    dim: ID2D1SolidColorBrush,
+    accent: ID2D1SolidColorBrush,
+    white: ID2D1SolidColorBrush,
+    origin: POINT,
+    shared: Rc<Shared>,
+}
+
+impl Surface {
     fn draw(&self) -> windows::core::Result<()> {
-        // SAFETY: the target, bitmap and brush come from one factory and live with `self`.
+        // SAFETY: the target, bitmap and brushes come from one factory and live with `self`.
         unsafe {
             let size = self.target.GetSize();
             let whole = D2D_RECT_F {
@@ -91,14 +155,11 @@ impl Surface {
                 D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 None,
             );
-            let Some(selected) = self
-                .drag
-                .get()
-                .and_then(|(anchor, current)| span(anchor, current))
-            else {
+            let Some(selected) = self.shared.selected.get() else {
                 self.target.FillRectangle(&raw const whole, &self.dim);
                 return self.target.EndDraw(None, None);
             };
+            let selected = nudged(selected, -self.origin.x, -self.origin.y);
             #[expect(clippy::cast_precision_loss, reason = "screen coordinates fit in f32")]
             let (left, top, right, bottom) = (
                 selected.left as f32,
@@ -128,16 +189,29 @@ impl Surface {
             };
             self.target
                 .DrawRectangle(&raw const border, &self.accent, BORDER_WIDTH, None);
+            for (_, at) in box_handles(as_box(selected)) {
+                let (x, y) = (at.x, at.y);
+                let square = D2D_RECT_F {
+                    left: x - HANDLE_SIZE / 2.0,
+                    top: y - HANDLE_SIZE / 2.0,
+                    right: x + HANDLE_SIZE / 2.0,
+                    bottom: y + HANDLE_SIZE / 2.0,
+                };
+                self.target.FillRectangle(&raw const square, &self.white);
+                self.target
+                    .DrawRectangle(&raw const square, &self.accent, 1.0, None);
+            }
             self.target.EndDraw(None, None)
         }
     }
 }
 
 /// One topmost, never-activated window per monitor, each showing that monitor's frozen
-/// capture dimmed by 40% (F-02). Esc is a hotkey only while the overlay is up, because a
-/// window that never activates gets no key input (D-23, a prototype call).
+/// capture dimmed by 40% (F-02), with one selection drawn, moved and resized across them
+/// (F-03). Its keys are hotkeys only while it is up, because a window that never activates
+/// gets no key input (D-23).
 ///
-/// Dropping it closes every window and gives Esc back.
+/// Dropping it closes every window and gives its keys back.
 pub struct Overlay {
     windows: Vec<HWND>,
 }
@@ -148,7 +222,7 @@ impl Overlay {
     /// # Errors
     ///
     /// [`Error::Window`] if a window or its Direct2D surface cannot be made;
-    /// [`Error::HotkeyTaken`] if another program holds Esc as a hotkey.
+    /// [`Error::HotkeyTaken`] if another program holds one of its keys as a hotkey.
     pub fn show(
         captures: &[MonitorImage],
         on_event: impl FnMut(OverlayEvent) + 'static,
@@ -158,29 +232,29 @@ impl Overlay {
         let factory: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
                 .map_err(Error::Window)?;
-        let listener: Listener = Rc::new(RefCell::new(Box::new(on_event)));
+        let shared = Rc::new(Shared {
+            listener: RefCell::new(Box::new(on_event)),
+            selected: Cell::new(None),
+            gesture: Cell::new(None),
+            windows: RefCell::new(Vec::with_capacity(captures.len())),
+        });
         let mut overlay = Self {
             windows: Vec::with_capacity(captures.len()),
         };
         for capture in captures {
-            overlay
-                .windows
-                .push(open_window(&factory, capture, &listener)?);
+            let window = open_window(&factory, capture, &shared)?;
+            overlay.windows.push(window);
+            shared.windows.borrow_mut().push(window);
         }
         let first = *overlay
             .windows
             .first()
             .ok_or(Error::Window(windows::core::Error::empty()))?;
-        // SAFETY: `first` was created above on this thread.
-        unsafe {
-            RegisterHotKey(
-                Some(first),
-                ESCAPE_HOTKEY_ID,
-                MOD_NOREPEAT,
-                u32::from(VK_ESCAPE.0),
-            )
+        for (id, (modifiers, key, _)) in (0..).zip(KEYS) {
+            // SAFETY: `first` was created above on this thread.
+            unsafe { RegisterHotKey(Some(first), id, modifiers, u32::from(key.0)) }
+                .map_err(Error::HotkeyTaken)?;
         }
-        .map_err(Error::HotkeyTaken)?;
         for &window in &overlay.windows {
             // SAFETY: `window` was created above; showing it without activation is F-02's rule.
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
@@ -192,8 +266,10 @@ impl Overlay {
 impl Drop for Overlay {
     fn drop(&mut self) {
         if let Some(&first) = self.windows.first() {
-            // SAFETY: unregistering an id this window may not hold only returns an error.
-            let _ = unsafe { UnregisterHotKey(Some(first), ESCAPE_HOTKEY_ID) };
+            for (id, _) in (0..).zip(KEYS) {
+                // SAFETY: unregistering an id this window may not hold only returns an error.
+                let _ = unsafe { UnregisterHotKey(Some(first), id) };
+            }
         }
         for &window in &self.windows {
             // SAFETY: each window belongs to this thread and is destroyed once, here.
@@ -227,7 +303,7 @@ fn register_class() -> Result<(), Error> {
 fn open_window(
     factory: &ID2D1Factory,
     capture: &MonitorImage,
-    listener: &Listener,
+    shared: &Rc<Shared>,
 ) -> Result<HWND, Error> {
     let bounds = capture.bounds;
     let (width, height) = (capture.image.width(), capture.image.height());
@@ -250,7 +326,7 @@ fn open_window(
         )
     }
     .map_err(Error::Window)?;
-    match surface(factory, window, capture, width, height, listener) {
+    match surface(factory, window, capture, width, height, shared) {
         Ok(surface) => {
             // SAFETY: `window` exists, so WM_NCDESTROY will free this Box once.
             unsafe {
@@ -277,7 +353,7 @@ fn surface(
     capture: &MonitorImage,
     width: u32,
     height: u32,
-    listener: &Listener,
+    shared: &Rc<Shared>,
 ) -> windows::core::Result<Surface> {
     let format = D2D1_PIXEL_FORMAT {
         format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -325,30 +401,21 @@ fn surface(
         let dim = target.CreateSolidColorBrush(&raw const black, None)?;
         let accent_colour = ACCENT;
         let accent = target.CreateSolidColorBrush(&raw const accent_colour, None)?;
+        let white_colour = WHITE;
+        let white = target.CreateSolidColorBrush(&raw const white_colour, None)?;
         Ok(Surface {
             target,
             frozen,
             dim,
             accent,
+            white,
             origin: POINT {
                 x: capture.bounds.left,
                 y: capture.bounds.top,
             },
-            drag: Cell::new(None),
-            listener: Rc::clone(listener),
+            shared: Rc::clone(shared),
         })
     }
-}
-
-/// The rectangle between two corners, or None when it has no area.
-fn span(anchor: POINT, current: POINT) -> Option<RECT> {
-    let selected = RECT {
-        left: anchor.x.min(current.x),
-        top: anchor.y.min(current.y),
-        right: anchor.x.max(current.x),
-        bottom: anchor.y.max(current.y),
-    };
-    (selected.right > selected.left && selected.bottom > selected.top).then_some(selected)
 }
 
 fn cursor(lparam: LPARAM) -> POINT {
@@ -364,9 +431,14 @@ fn cursor(lparam: LPARAM) -> POINT {
     }
 }
 
-fn redraw(window: HWND) {
-    // SAFETY: invalidating this thread's own window; a failure only skips one repaint.
-    let _ = unsafe { InvalidateRect(Some(window), None, false) };
+impl Surface {
+    fn virtual_point(&self, lparam: LPARAM) -> POINT {
+        let local = cursor(lparam);
+        POINT {
+            x: local.x + self.origin.x,
+            y: local.y + self.origin.y,
+        }
+    }
 }
 
 unsafe extern "system" fn window_procedure(
@@ -402,7 +474,7 @@ unsafe extern "system" fn window_procedure(
             // SAFETY: matches the BeginPaint above.
             let _ = unsafe { EndPaint(window, &raw const paint) };
             if let Err(error) = drawn {
-                surface.send(OverlayEvent::DrawFailed(error));
+                surface.shared.send(OverlayEvent::DrawFailed(error));
             }
             LRESULT(0)
         }
@@ -412,9 +484,13 @@ unsafe extern "system" fn window_procedure(
             // SAFETY: the window belongs to this thread; capture keeps the drag going past
             // its edge.
             unsafe { SetCapture(window) };
-            let at = cursor(lparam);
-            surface.drag.set(Some((at, at)));
-            redraw(window);
+            let at = surface.virtual_point(lparam);
+            let original = surface.shared.selected.get();
+            surface.shared.gesture.set(Some(Gesture {
+                grip: grip_at(original, at),
+                original,
+                start: at,
+            }));
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
@@ -422,9 +498,14 @@ unsafe extern "system" fn window_procedure(
             let surface = unsafe { &*surface };
             // SAFETY: GetCapture only reads this thread's state.
             let dragging = unsafe { GetCapture() } == window;
-            if let (Some((anchor, _)), true) = (surface.drag.get(), dragging) {
-                surface.drag.set(Some((anchor, cursor(lparam))));
-                redraw(window);
+            if let (Some(gesture), true) = (surface.shared.gesture.get(), dragging) {
+                let now = surface.virtual_point(lparam);
+                let selected = dragged(gesture.grip, gesture.original, gesture.start, now);
+                // F-01: a draw with no area clears the selection; a resize keeps its last shape.
+                match (selected, gesture.grip) {
+                    (Some(_), _) | (None, Grip::Draw) => surface.shared.select(selected),
+                    (None, Grip::Move | Grip::Resize(_)) => {}
+                }
             }
             LRESULT(0)
         }
@@ -433,25 +514,15 @@ unsafe extern "system" fn window_procedure(
             let surface = unsafe { &*surface };
             // SAFETY: releasing a capture this thread may not hold only returns an error.
             let _ = unsafe { ReleaseCapture() };
-            let selected = surface
-                .drag
-                .take()
-                .and_then(|(anchor, _)| span(anchor, cursor(lparam)));
-            redraw(window);
-            // F-01: a click with no drag selects nothing and leaves the overlay up.
-            if let Some(selected) = selected {
-                surface.send(OverlayEvent::Selected(RECT {
-                    left: selected.left + surface.origin.x,
-                    top: selected.top + surface.origin.y,
-                    right: selected.right + surface.origin.x,
-                    bottom: selected.bottom + surface.origin.y,
-                }));
-            }
+            surface.shared.gesture.set(None);
             LRESULT(0)
         }
         WM_HOTKEY => {
             // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-            unsafe { &*surface }.send(OverlayEvent::Cancelled);
+            let surface = unsafe { &*surface };
+            if let Some(&(_, _, key)) = KEYS.get(wparam.0) {
+                surface.shared.press(key);
+            }
             LRESULT(0)
         }
         // SAFETY: forwarding an unhandled message to the default procedure.
@@ -468,21 +539,6 @@ mod tests {
     use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW};
 
     use super::*;
-
-    #[test]
-    fn f01_a_drag_spans_its_corners_in_either_direction_and_a_click_spans_nothing() {
-        let point = |x, y| POINT { x, y };
-        let expected = RECT {
-            left: 10,
-            top: 20,
-            right: 30,
-            bottom: 50,
-        };
-        assert_eq!(span(point(10, 20), point(30, 50)), Some(expected));
-        assert_eq!(span(point(30, 50), point(10, 20)), Some(expected));
-        assert_eq!(span(point(10, 20), point(10, 50)), None);
-        assert_eq!(span(point(10, 20), point(10, 20)), None);
-    }
 
     /// Red rises down the rows and green across the columns, so a pixel drawn from the wrong
     /// row or column shows a different colour.

@@ -4,6 +4,7 @@ pub mod clipboard;
 pub mod field_test;
 pub mod instance;
 pub mod overlay;
+mod selection;
 pub mod tray;
 
 use windows::Win32::System::LibraryLoader::{
