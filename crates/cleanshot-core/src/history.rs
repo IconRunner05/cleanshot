@@ -389,4 +389,15 @@ mod tests {
 
         assert_ne!(add(&mut second, rect(2.0)), existing);
     }
+
+    #[test]
+    fn f38_an_undone_add_leaves_no_shape_with_its_id_and_redo_brings_it_back() {
+        let mut history = history();
+        let id = add(&mut history, rect(1.0));
+        assert!(history.document().contains(id));
+        assert_eq!(history.undo(), Ok(true));
+        assert!(!history.document().contains(id));
+        assert_eq!(history.redo(), Ok(true));
+        assert!(history.document().contains(id));
+    }
 }

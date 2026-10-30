@@ -33,6 +33,12 @@ impl Document {
         &self.shapes
     }
 
+    /// Whether a shape with `id` is in the document.
+    #[must_use]
+    pub fn contains(&self, id: ShapeId) -> bool {
+        self.shapes.iter().any(|entry| entry.id == id)
+    }
+
     /// The part of the base image an export keeps, inside the image with a positive size;
     /// `None` keeps all of it.
     #[must_use]

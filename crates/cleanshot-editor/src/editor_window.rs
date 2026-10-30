@@ -2,7 +2,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Command, CommandError, Document, Drag, History, Press, RgbaImage, ShapeId, Tool,
+    Command, CommandError, Document, Drag, History, KeyAction, Modifiers, Press, RgbaImage,
+    ShapeId, Tool, action_for_key,
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
@@ -72,30 +73,50 @@ impl EditorView {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let modifiers = event.keystroke.modifiers;
-        if modifiers.control || modifiers.alt || modifiers.platform || self.drag.is_some() {
+        let gpui = event.keystroke.modifiers;
+        let modifiers = Modifiers {
+            ctrl: gpui.control,
+            alt: gpui.alt,
+            shift: gpui.shift,
+            win: gpui.platform,
+        };
+        let dragging = self.drag.is_some();
+        let Some(action) = action_for_key(&event.keystroke.key, modifiers, dragging) else {
             return;
-        }
-        let key = event.keystroke.key.as_str();
-        if key == "delete" {
-            if let Some(id) = self.selected.take() {
-                self.apply(Command::Remove(id));
+        };
+        match action {
+            KeyAction::Undo => self.undo_or_redo(History::undo),
+            KeyAction::Redo => self.undo_or_redo(History::redo),
+            KeyAction::RemoveSelected => {
+                if let Some(id) = self.selected.take() {
+                    self.apply(Command::Remove(id));
+                }
             }
-        } else if key == "escape" {
-            self.selected = None;
-        } else if let Some(tool) = single_char(key).and_then(Tool::for_key) {
-            self.tool = tool;
-        } else {
-            return;
+            KeyAction::ClearSelection => self.selected = None,
+            KeyAction::PickTool(tool) => self.tool = tool,
         }
         cx.notify();
     }
 
     fn apply(&mut self, command: Command) {
         match self.history.apply(command) {
-            Ok(()) => self.document = Rc::new(self.history.document().clone()),
+            Ok(()) => self.refresh(),
             Err(error) => self.notice = Some(refusal(&error).into()),
         }
+    }
+
+    fn undo_or_redo(&mut self, change: fn(&mut History) -> Result<bool, CommandError>) {
+        match change(&mut self.history) {
+            Ok(true) => self.refresh(),
+            Ok(false) => {}
+            Err(error) => self.notice = Some(refusal(&error).into()),
+        }
+    }
+
+    fn refresh(&mut self) {
+        self.document = Rc::new(self.history.document().clone());
+        let document = &self.document;
+        self.selected = self.selected.filter(|id| document.contains(*id));
     }
 }
 
@@ -111,12 +132,6 @@ fn notice_panel(text: SharedString) -> impl IntoElement {
         .text_color(gpui::white())
         .text_size(px(13.0))
         .child(text)
-}
-
-fn single_char(key: &str) -> Option<char> {
-    let mut chars = key.chars();
-    let first = chars.next()?;
-    chars.next().is_none().then_some(first)
 }
 
 fn refusal(error: &CommandError) -> &'static str {
