@@ -9,6 +9,7 @@ mod keys;
 mod selection;
 mod settings;
 mod text;
+mod text_edit;
 mod tool;
 
 pub use delivery::{Delivered, DeliveryError, Output};
@@ -32,4 +33,5 @@ pub use text::{
     GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT, INTER_UNITS_PER_EM, LINE_HEIGHT,
     TextBlock, TextBlockError, TextMasks,
 };
+pub use text_edit::{CaretMove, TextEdit};
 pub use tool::Tool;
