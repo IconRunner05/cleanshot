@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     AfterCapture, Delivered, DeliveryError, Document, Hotkey, MAX_SETTINGS_BYTES, Output,
-    SaveFormat, Settings, SettingsProblem, TextMasks, delivery_notice,
+    SaveFormat, Settings, SettingsProblem, delivery_notice,
 };
 use cleanshot_render::{Format, encode, flatten};
 use cleanshot_win::capture::{
@@ -21,6 +21,7 @@ use cleanshot_win::instance::Launch;
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
 use cleanshot_win::settings_file::{read_settings, settings_path};
+use cleanshot_win::text;
 use cleanshot_win::tray::{
     Request, Tray, ask_running_instance_to_capture, print_screen_fallback,
     snipping_tool_holds_print_screen,
@@ -253,8 +254,11 @@ fn deliver(
     document: &Document,
     settings: &Settings,
 ) -> Result<Delivered, DeliveryError> {
-    // Only the overlay finishes here so far, and its documents hold no text.
-    let image = flatten(document, &TextMasks::default()).map_err(|error| from_render(&error))?;
+    let masks = text::masks(document).map_err(|cause| {
+        eprintln!("DirectWrite could not draw the text: {cause}");
+        DeliveryError::TextNotDrawn
+    })?;
+    let image = flatten(document, &masks).map_err(|error| from_render(&error))?;
     match output {
         Output::Copy => {
             let bitmap =
@@ -360,7 +364,9 @@ fn describe(problem: &SettingsProblem) -> String {
 
 #[cfg(test)]
 mod tests {
-    use cleanshot_core::{Color, Command, History, RectF, RedactMode, RgbaImage, Shape, Style};
+    use cleanshot_core::{
+        Color, Command, History, PointF, RectF, RedactMode, RgbaImage, Shape, Style, TextBlock,
+    };
 
     use super::*;
 
@@ -414,11 +420,56 @@ mod tests {
         };
         let written = std::fs::read(&path).expect("the saved file is readable");
         std::fs::remove_dir_all(&folder).expect("the test folder is removable");
-        let flattened = flatten(&document, &TextMasks::default()).expect("the document flattens");
+        let masks = text::masks(&document).expect("the document has no text to draw");
+        let flattened = flatten(&document, &masks).expect("the document flattens");
         assert_eq!(written, encode(&flattened, Format::Bmp).expect("encodes"));
         assert_ne!(
             written,
             encode(document.base(), Format::Bmp).expect("encodes")
+        );
+    }
+
+    #[test]
+    fn f34_a_saved_document_holds_its_text_drawn_by_directwrite() {
+        let folder = std::env::temp_dir().join(format!("cleanshot-text-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("the test folder is created");
+        let image = RgbaImage::new(64, 40, vec![255; 64 * 40 * 4]).expect("64x40 RGBA");
+        let mut history = History::new(Document::new(Arc::new(image)));
+        let block = TextBlock::new(PointF { x: 4.0, y: 4.0 }, "Hg".to_owned(), 24.0, 1.0)
+            .expect("a positive size and a measured width");
+        history
+            .apply(Command::Add {
+                shape: Shape::Text(block),
+                style: Style {
+                    color: Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                    stroke_width: 1.0,
+                },
+            })
+            .expect("the text is added");
+        let document = history.document().clone();
+        let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
+        let saved = deliver(Output::Save, &document, &settings);
+        let written = match &saved {
+            Ok(Delivered::Saved(path)) => std::fs::read(path).ok(),
+            _ => None,
+        };
+        std::fs::remove_dir_all(&folder).expect("the test folder is removable");
+        let masks = text::masks(&document).expect("DirectWrite draws Hg");
+        let flattened = flatten(&document, &masks).expect("the document flattens");
+        assert_eq!(
+            written,
+            Some(encode(&flattened, Format::Bmp).expect("encodes")),
+            "{saved:?}"
+        );
+        assert_ne!(
+            flattened,
+            *document.base().as_ref(),
+            "the text left the image white"
         );
     }
 
