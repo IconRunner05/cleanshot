@@ -1,17 +1,22 @@
 #![forbid(unsafe_code)]
 
+use std::cell::RefCell;
 use std::fmt::{Display, Write as _};
+use std::num::NonZeroU32;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use cleanshot_editor::{BenchReport, bench};
 use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::{
-    Driver, adapters, clipboard_round_trip, d3d11_feature_level, drive_tray, make_dpi_aware,
-    monitors, windows_version,
+    Driver, adapters, clipboard_round_trip, d3d11_feature_level, drive_tray, monitors,
+    windows_version,
 };
 
 const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIPBOARD_MARKER: &str = "cleanshot field test";
 const CAPTURE_ATTEMPTS: u32 = 3;
+const BENCH_REDRAWS: NonZeroU32 = NonZeroU32::new(600).expect("600 is not zero");
 
 fn main() {
     let report_path = match std::env::args().collect::<Vec<_>>().as_slice() {
@@ -21,18 +26,51 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let report = probe();
+    let mut report = probe();
+    report.push_str("\n## GPUI editor bench\n\n");
+    // The bench can take the process down with it, so what the probe found is on disk first.
     print!("{report}");
+    std::fs::write(&report_path, &report).expect("the report path is writable");
+    let finished = Rc::new(RefCell::new(None));
+    let result = Rc::clone(&finished);
+    let started = cleanshot_editor::run(move |cx| {
+        bench(cx, BENCH_REDRAWS, move |cx, report| {
+            *result.borrow_mut() = Some(report);
+            cx.quit();
+        });
+    });
+    match (started, finished.take()) {
+        (Err(error), _) => line(&mut report, "Editor", format!("error: {error}")),
+        (Ok(()), None) => line(&mut report, "Editor", "quit before the bench finished"),
+        (Ok(()), Some(Err(error))) => line(&mut report, "Bench", format!("error: {error}")),
+        (Ok(()), Some(Ok(timings))) => report_bench(&mut report, timings),
+    }
+    print!(
+        "{}",
+        &report[report.rfind("## GPUI editor bench").unwrap_or(0)..]
+    );
     std::fs::write(&report_path, report).expect("the report path is writable");
+}
+
+fn report_bench(report: &mut String, timings: BenchReport) {
+    line(report, "Redraws", BENCH_REDRAWS);
+    line(
+        report,
+        "First frame (P-07)",
+        format!("{:?}", timings.first_frame),
+    );
+    line(report, "p50 interval (P-08)", format!("{:?}", timings.p50));
+    line(report, "p95 interval (P-08)", format!("{:?}", timings.p95));
+    line(report, "Worst interval", format!("{:?}", timings.worst));
+    line(
+        report,
+        "fps at p50",
+        format!("{:.1}", 1.0 / timings.p50.as_secs_f64()),
+    );
 }
 
 fn probe() -> String {
     let mut report = String::from("# Cleanshot probe\n\n");
-    line(
-        &mut report,
-        "DPI awareness (per-monitor V2)",
-        outcome(&make_dpi_aware().map(|()| "set")),
-    );
     report_windows(&mut report);
     report_display(&mut report);
     report_tray(&mut report);
@@ -69,11 +107,15 @@ fn report_display(report: &mut String) {
             Ok(dpi) => format!("{dpi} dpi ({}%)", dpi * 100 / 96),
             Err(error) => format!("dpi error: {error}"),
         };
+        let refresh = monitor.refresh_hertz.map_or_else(
+            || "refresh unknown".to_owned(),
+            |hertz| format!("{hertz} Hz"),
+        );
         line(
             report,
             &monitor.device,
             format!(
-                "{}x{} at ({}, {}), {dpi}",
+                "{}x{} at ({}, {}), {dpi}, {refresh}",
                 bounds.right - bounds.left,
                 bounds.bottom - bounds.top,
                 bounds.left,

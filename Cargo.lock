@@ -350,6 +350,7 @@ dependencies = [
 name = "cleanshot-fieldtest"
 version = "0.1.0"
 dependencies = [
+ "cleanshot-editor",
  "cleanshot-win",
 ]
 

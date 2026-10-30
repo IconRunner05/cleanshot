@@ -12,7 +12,10 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_NOT_FOUND, IDXGIFactory1,
 };
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO, MONITORINFOEXW};
+use windows::Win32::Graphics::Gdi::{
+    DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR, MONITORINFO,
+    MONITORINFOEXW,
+};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
@@ -21,10 +24,7 @@ use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Registry::{
     HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
 };
-use windows::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
-    SetProcessDpiAwarenessContext,
-};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY, VK_CONTROL, VK_SHIFT,
@@ -56,6 +56,8 @@ pub struct Monitor {
     pub device: String,
     pub bounds: RECT,
     pub dpi: Result<u32, windows::core::Error>,
+    /// Refresh rate in hertz, or None if Windows does not report the current mode.
+    pub refresh_hertz: Option<u32>,
 }
 
 /// One DXGI adapter.
@@ -76,16 +78,6 @@ pub struct TrayRun {
     pub foreground_window: bool,
     pub inputs_sent: u32,
     pub hotkey_delivered_after: Option<Duration>,
-}
-
-/// Makes this process per-monitor DPI aware (V2), so [`monitors`] reports real DPI.
-///
-/// # Errors
-///
-/// The Windows error if the awareness was already set or is refused.
-pub fn make_dpi_aware() -> Result<(), windows::core::Error> {
-    // SAFETY: a constant awareness context, set before any window exists.
-    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
 }
 
 /// Reads the Windows release from `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`.
@@ -172,6 +164,21 @@ fn describe_monitor(handle: HMONITOR) -> Monitor {
     let dpi =
         unsafe { GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &raw mut dpi_x, &raw mut dpi_y) }
             .map(|()| dpi_x);
+    let mut mode = DEVMODEW {
+        dmSize: u16::try_from(size_of::<DEVMODEW>()).expect("fits in u16"),
+        ..Default::default()
+    };
+    // SAFETY: szDevice is the NUL-terminated device name GetMonitorInfoW wrote, and `mode`
+    // has its size set.
+    let listed = described.as_bool()
+        && unsafe {
+            EnumDisplaySettingsW(
+                PCWSTR(info.szDevice.as_ptr()),
+                ENUM_CURRENT_SETTINGS,
+                &raw mut mode,
+            )
+        }
+        .as_bool();
     Monitor {
         device: if described.as_bool() {
             String::from_utf16_lossy(&info.szDevice[..length])
@@ -180,6 +187,7 @@ fn describe_monitor(handle: HMONITOR) -> Monitor {
         },
         bounds: info.monitorInfo.rcMonitor,
         dpi,
+        refresh_hertz: listed.then_some(mode.dmDisplayFrequency),
     }
 }
 

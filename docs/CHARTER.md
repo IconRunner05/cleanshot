@@ -236,7 +236,7 @@ cleanshot/
 └─ docs/decisions/            # one file per decision (ADR-lite)
 ```
 
-Dependency direction: `app → {editor, win, render, core}`, `fieldtest → win`, `editor → {render, core}`, `render → core`, `win → core`. `core` depends on nothing in the workspace. Nothing depends on `fieldtest`, and `app` never turns on `win`'s `field-test` feature (`charter-gates.sh` checks).
+Dependency direction: `app → {editor, win, render, core}`, `fieldtest → {editor, win}`, `editor → {render, core}`, `render → core`, `win → core`. `core` depends on nothing in the workspace. Nothing depends on `fieldtest`, and `app` never turns on `win`'s `field-test` feature (`charter-gates.sh` checks).
 
 ### Core types
 

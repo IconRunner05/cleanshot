@@ -32,23 +32,20 @@ fn resource_entry(resource_type: u16, name: u16, language: u16, data: &[u8]) -> 
 
 // C-03 C-04: the .res file is written here so no resource compiler is needed on any host.
 fn main() {
-    let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/cleanshot.exe.manifest");
-    println!("cargo:rerun-if-changed={manifest_path}");
-    let manifest = std::fs::read(manifest_path).expect("the manifest is readable");
+    // The field-test probe builds with this script too, so the manifest is found next to the
+    // script rather than in the package being built.
+    let manifest = include_bytes!("cleanshot.exe.manifest");
 
     let mut resources = resource_entry(0, 0, 0, &[]);
     resources.extend(resource_entry(
         RT_MANIFEST,
         PROCESS_MANIFEST_ID,
         LANGUAGE_EN_US,
-        &manifest,
+        manifest,
     ));
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     let resource_file = out_dir.join("cleanshot.res");
     std::fs::write(&resource_file, resources).expect("OUT_DIR is writable");
-    println!(
-        "cargo:rustc-link-arg-bin=cleanshot={}",
-        resource_file.display()
-    );
+    println!("cargo:rustc-link-arg-bins={}", resource_file.display());
 }
