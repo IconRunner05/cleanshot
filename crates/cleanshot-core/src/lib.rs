@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod delivery;
 mod document;
 mod drag;
 mod drawing;
@@ -9,6 +10,7 @@ mod selection;
 mod settings;
 mod tool;
 
+pub use delivery::{Delivered, DeliveryError, Output};
 pub use document::{
     Color, Document, Fill, ImageError, PointF, RectF, RedactMode, RgbaImage, Shape, ShapeEntry,
     ShapeId, Style, arrow_head,
