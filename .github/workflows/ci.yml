@@ -36,3 +36,61 @@ jobs:
 
       - name: No dependency has a published advisory
         run: cargo audit
+
+  release-exe:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      EXE: target\x86_64-pc-windows-msvc\release\cleanshot.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Release exe builds
+        run: cargo build --release --locked -p cleanshot-app
+
+      - name: Put dumpbin on the path
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin.exe was not found in the Visual Studio install.' }
+          Add-Content $env:GITHUB_PATH (Split-Path $dumpbin)
+
+      - name: Release exe imports only system DLLs and no network DLLs (C-02, C-10)
+        run: |
+          $dlls = (dumpbin /nologo /dependents $env:EXE | Select-String '^\s+(\S+\.dll)\s*$').Matches |
+            ForEach-Object { $_.Groups[1].Value.ToLower() }
+          if (-not $dlls) { throw "dumpbin listed no DLLs for $env:EXE, so the scan did not run." }
+          $failed = $false
+          foreach ($dll in $dlls) {
+            if ($dll -in 'ws2_32.dll', 'winhttp.dll', 'wininet.dll') {
+              "::error::C-10: the release exe imports the network DLL $dll."; $failed = $true
+            } elseif ($dll -match '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt-)') {
+              "::error::C-02: the release exe imports the C runtime DLL $dll; the CRT must be linked statically."; $failed = $true
+            } elseif ($dll -notmatch '^(api|ext)-ms-win-' -and -not (Test-Path "$env:SystemRoot\System32\$dll")) {
+              "::error::C-02: the release exe imports $dll, which is not a Windows system DLL."; $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Release exe imports no process-launching functions (C-11)
+        run: |
+          $imports = dumpbin /nologo /imports $env:EXE
+          if (-not ($imports -match 'kernel32\.dll')) { throw "dumpbin listed no kernel32 imports for $env:EXE, so the scan did not run." }
+          $launchers = ($imports | Select-String '\b(CreateProcess\w*|ShellExecute\w*|WinExec)\b').Matches.Value | Sort-Object -Unique
+          foreach ($name in $launchers) { "::error::C-11: the release exe imports the process launcher $name." }
+          if ($launchers) { exit 1 }
+
+      - name: Release exe has ASLR, DEP and Control Flow Guard (C-17)
+        run: |
+          $headers = dumpbin /nologo /headers $env:EXE
+          $mitigations = [ordered]@{ 'ASLR' = 'Dynamic base'; 'DEP' = 'NX compatible'; 'Control Flow Guard' = 'Guard' }
+          $failed = $false
+          foreach ($name in $mitigations.Keys) {
+            $flag = $mitigations[$name]
+            if (-not ($headers -match "^\s+$flag\s*$")) {
+              "::error::C-17: the release exe is built without $name (no '$flag' DLL characteristic)."; $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
