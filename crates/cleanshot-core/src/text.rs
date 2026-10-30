@@ -5,6 +5,14 @@ use crate::{Color, PointF, RectF, ShapeId};
 /// A line's height as a multiple of the font size.
 pub const LINE_HEIGHT: f32 = 1.25;
 
+/// Inter 4.1 in its semibold weight, the one font text shapes are drawn in, on screen and in the export.
+pub static INTER: &[u8] = include_bytes!("../fonts/Inter-SemiBold.ttf");
+
+/// Inter's design units per em, ascent and descent; its hhea, typo and win metrics agree.
+pub const INTER_UNITS_PER_EM: u16 = 2048;
+pub const INTER_ASCENT: u16 = 1984;
+pub const INTER_DESCENT: u16 = 494;
+
 /// A text shape: lines broken only where the user pressed Enter, with the width DirectWrite or
 /// GPUI measured for exactly this text (F-34).
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +80,21 @@ impl TextBlock {
             width: self.em_width * self.size,
             height: lines * LINE_HEIGHT * self.size,
         }
+    }
+
+    /// Each line's text and where its baseline starts, in image pixels: the line box's top,
+    /// plus half the leading Inter leaves in it, plus Inter's ascent.
+    pub fn lines(&self) -> impl Iterator<Item = (&str, PointF)> {
+        let em = f32::from(INTER_UNITS_PER_EM);
+        let (ascent, descent) = (f32::from(INTER_ASCENT) / em, f32::from(INTER_DESCENT) / em);
+        let first = self.at.y + ((LINE_HEIGHT - ascent - descent) / 2.0 + ascent) * self.size;
+        let step = LINE_HEIGHT * self.size;
+        let x = self.at.x;
+        self.text.split('\n').scan(first, move |y, line| {
+            let baseline = PointF { x, y: *y };
+            *y += step;
+            Some((line, baseline))
+        })
     }
 
     pub(crate) fn moved_to(&self, at: PointF) -> Self {
@@ -228,6 +251,63 @@ mod tests {
         assert_eq!(block("one").extent(), extent(40.0, 20.0));
         assert_eq!(block("one\ntwo\n").extent(), extent(40.0, 60.0));
         assert_eq!(block("").extent(), extent(40.0, 20.0));
+    }
+
+    #[test]
+    fn f34_each_line_has_its_baseline_half_the_leading_plus_the_ascent_below_its_top() {
+        let block =
+            TextBlock::new(PointF { x: 5.0, y: 0.0 }, "a\n\nb".into(), 2048.0, 1.0).unwrap();
+        let leading = 2560.0 - 1984.0 - 494.0;
+        let first = leading / 2.0 + 1984.0;
+        assert_eq!(
+            block.lines().collect::<Vec<_>>(),
+            [
+                ("a", PointF { x: 5.0, y: first }),
+                (
+                    "",
+                    PointF {
+                        x: 5.0,
+                        y: first + 2560.0
+                    }
+                ),
+                (
+                    "b",
+                    PointF {
+                        x: 5.0,
+                        y: first + 5120.0
+                    }
+                ),
+            ]
+        );
+    }
+
+    fn table(font: &[u8], tag: [u8; 4]) -> usize {
+        let be32 = |at: usize| u32::from_be_bytes(font[at..at + 4].try_into().unwrap());
+        let count = usize::from(u16::from_be_bytes([font[4], font[5]]));
+        (0..count)
+            .map(|index| 12 + 16 * index)
+            .find(|&record| &font[record..record + 4] == tag.as_slice())
+            .map(|record| usize::try_from(be32(record + 8)).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn f34_the_metric_constants_are_the_embedded_fonts_own() {
+        let be16 = |at: usize| u16::from_be_bytes([INTER[at], INTER[at + 1]]);
+        let (head, hhea, os2) = (
+            table(INTER, *b"head"),
+            table(INTER, *b"hhea"),
+            table(INTER, *b"OS/2"),
+        );
+        assert_eq!(be16(head + 18), INTER_UNITS_PER_EM);
+        assert_eq!(be16(hhea + 4), INTER_ASCENT);
+        assert_eq!(be16(hhea + 6).wrapping_neg(), INTER_DESCENT);
+        assert_eq!(be16(os2 + 68), INTER_ASCENT);
+        assert_eq!(be16(os2 + 70).wrapping_neg(), INTER_DESCENT);
+        assert_eq!(
+            (be16(os2 + 74), be16(os2 + 76)),
+            (INTER_ASCENT, INTER_DESCENT)
+        );
     }
 
     #[test]
