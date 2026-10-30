@@ -366,16 +366,19 @@ fn read_clipboard() -> Result<String, windows::core::Error> {
     // locked, and only up to its NUL.
     unsafe {
         OpenClipboard(None)?;
-        let read = GetClipboardData(u32::from(CF_UNICODETEXT.0)).map(|handle| {
+        let read = GetClipboardData(u32::from(CF_UNICODETEXT.0)).and_then(|handle| {
             let block = HGLOBAL(handle.0);
             let start = GlobalLock(block).cast::<u16>();
+            if start.is_null() {
+                return Err(windows::core::Error::from_thread());
+            }
             let mut length = 0;
             while *start.add(length) != 0 {
                 length += 1;
             }
             let text = String::from_utf16_lossy(std::slice::from_raw_parts(start, length));
             let _ = GlobalUnlock(block);
-            text
+            Ok(text)
         });
         CloseClipboard()?;
         read
