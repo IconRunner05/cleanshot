@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod document;
+mod drag;
 mod drawing;
 mod history;
 mod selection;
@@ -11,6 +12,7 @@ pub use document::{
     Color, Document, Fill, ImageError, PointF, RectF, RedactMode, RgbaImage, Shape, ShapeEntry,
     ShapeId, Style, arrow_head,
 };
+pub use drag::{Drag, Press};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Command, CommandError, History};
 pub use selection::{
