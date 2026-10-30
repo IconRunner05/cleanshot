@@ -56,6 +56,20 @@ jobs:
           LLVM_BIN: C:/Program Files/LLVM/bin
         run: ./charter-gates.sh --release-exe target/x86_64-pc-windows-msvc/release/cleanshot.exe
 
+      - name: Release exe starts and stays up until stopped (C-02)
+        shell: bash
+        run: |
+          target/x86_64-pc-windows-msvc/release/cleanshot.exe &
+          started=$!
+          sleep 5
+          if ! kill -0 "$started" 2>/dev/null; then
+            status=0
+            wait "$started" || status=$?
+            echo "FAIL C-02: cleanshot.exe exited within 5 s with status $status"
+            exit 1
+          fi
+          taskkill //F //IM cleanshot.exe
+
       - name: Upload cleanshot.exe
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
