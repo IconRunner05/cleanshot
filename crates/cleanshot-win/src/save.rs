@@ -1,0 +1,299 @@
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
+
+use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::System::SystemInformation::GetLocalTime;
+use windows::Win32::UI::Shell::{FOLDERID_Screenshots, KF_FLAG_CREATE, SHGetKnownFolderPath};
+
+use crate::Error;
+
+const RESERVED_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+const MOST_COLLISIONS: u32 = 10_000;
+
+/// A local wall-clock moment, the only input a file-name template reads besides `{n}`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamp {
+    pub year: u16,
+    pub month: u16,
+    pub day: u16,
+    pub hour: u16,
+    pub minute: u16,
+    pub second: u16,
+}
+
+impl Stamp {
+    #[must_use]
+    pub fn now() -> Self {
+        // SAFETY: GetLocalTime only fills the returned struct.
+        let time = unsafe { GetLocalTime() };
+        Self {
+            year: time.wYear,
+            month: time.wMonth,
+            day: time.wDay,
+            hour: time.wHour,
+            minute: time.wMinute,
+            second: time.wSecond,
+        }
+    }
+}
+
+/// Why a file was not saved.
+#[derive(Debug, thiserror::Error)]
+pub enum SaveError {
+    /// C-15: the template holds something other than text and `{date}`, `{time}`, `{n}`.
+    #[error("the file-name template uses {0}, which is not one of {{date}}, {{time}}, {{n}}")]
+    UnknownField(String),
+    /// C-15: the expanded name is empty, reserved, or could leave the folder.
+    #[error("{0:?} is not a safe file name")]
+    UnsafeName(String),
+    /// C-15: every numbered name up to the limit is taken.
+    #[error("every name from {0:?} to its -{MOST_COLLISIONS} form is taken")]
+    NoFreeName(String),
+    #[error("Windows could not name or create the screenshots folder")]
+    NoFolder(#[source] windows::core::Error),
+    #[error("the screenshots folder's path is not valid Unicode")]
+    FolderName(#[source] std::string::FromUtf16Error),
+    #[error("the file could not be written")]
+    Write(#[source] std::io::Error),
+}
+
+/// The user's Pictures\Screenshots folder, created if it does not exist yet (F-21's default).
+///
+/// # Errors
+///
+/// [`Error::Save`] carrying the Windows error if the shell cannot name or create it.
+pub fn default_folder() -> Result<PathBuf, Error> {
+    let folder_id = FOLDERID_Screenshots;
+    // SAFETY: the shell returns a NUL-terminated path in memory it allocated, read once and
+    // freed here.
+    unsafe {
+        let path = SHGetKnownFolderPath(&raw const folder_id, KF_FLAG_CREATE, None)
+            .map_err(|error| Error::Save(SaveError::NoFolder(error)))?;
+        let folder = path.to_string();
+        CoTaskMemFree(Some(path.0.cast_const().cast()));
+        folder
+            .map(PathBuf::from)
+            .map_err(|error| Error::Save(SaveError::FolderName(error)))
+    }
+}
+
+/// Writes `bytes` to `folder` under a name built from `template` and `extension`, never
+/// replacing an existing file (C-15), and returns the path written. The file appears whole
+/// or not at all (F-21).
+///
+/// # Errors
+///
+/// [`Error::Save`] carrying the [`SaveError`] that stopped it.
+pub fn save(
+    folder: &Path,
+    template: &str,
+    stamp: Stamp,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, Error> {
+    write_new(folder, template, stamp, extension, bytes).map_err(Error::Save)
+}
+
+fn write_new(
+    folder: &Path,
+    template: &str,
+    stamp: Stamp,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, SaveError> {
+    let partial = write_partial(folder, template, stamp, extension, bytes)?;
+    let published = publish(folder, template, stamp, extension, &partial);
+    if let Err(error) = fs::remove_file(&partial) {
+        eprintln!(
+            "the partial file {} could not be removed: {error}",
+            partial.display()
+        );
+    }
+    published
+}
+
+fn write_partial(
+    folder: &Path,
+    template: &str,
+    stamp: Stamp,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, SaveError> {
+    let stem = file_name(template, stamp, 1)?;
+    for attempt in 1..=MOST_COLLISIONS {
+        let partial = folder.join(format!("{stem}.{extension}.partial{attempt}"));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)
+        {
+            Ok(mut file) => {
+                return match file.write_all(bytes).and_then(|()| file.sync_all()) {
+                    Ok(()) => Ok(partial),
+                    Err(error) => {
+                        drop(file);
+                        if let Err(removing) = fs::remove_file(&partial) {
+                            eprintln!("{} could not be removed: {removing}", partial.display());
+                        }
+                        Err(SaveError::Write(error))
+                    }
+                };
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(SaveError::Write(error)),
+        }
+    }
+    Err(SaveError::NoFreeName(stem))
+}
+
+/// Links the finished partial file under the first free name. A hard link fails if the name
+/// exists, so this never replaces a file, even one created after the name was checked.
+fn publish(
+    folder: &Path,
+    template: &str,
+    stamp: Stamp,
+    extension: &str,
+    partial: &Path,
+) -> Result<PathBuf, SaveError> {
+    let numbered = template.contains("{n}");
+    let first = file_name(template, stamp, 1)?;
+    for n in 1..=MOST_COLLISIONS {
+        let stem = match (numbered, n) {
+            (true, _) => file_name(template, stamp, n)?,
+            (false, 1) => first.clone(),
+            (false, _) => format!("{first}-{n}"),
+        };
+        let target = folder.join(format!("{stem}.{extension}"));
+        match fs::hard_link(partial, &target) {
+            Ok(()) => return Ok(target),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(SaveError::Write(error)),
+        }
+    }
+    Err(SaveError::NoFreeName(first))
+}
+
+/// Expands `template` for `stamp` and collision number `n`, and checks the result is a
+/// plain file name (C-15).
+fn file_name(template: &str, stamp: Stamp, n: u32) -> Result<String, SaveError> {
+    let mut name = String::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        name.push_str(&rest[..open]);
+        let close = rest[open..]
+            .find('}')
+            .map(|close| open + close)
+            .ok_or_else(|| SaveError::UnknownField(rest[open..].to_owned()))?;
+        let field = match &rest[open..=close] {
+            "{date}" => format!("{:04}-{:02}-{:02}", stamp.year, stamp.month, stamp.day),
+            "{time}" => format!("{:02}.{:02}.{:02}", stamp.hour, stamp.minute, stamp.second),
+            "{n}" => n.to_string(),
+            unknown => return Err(SaveError::UnknownField(unknown.to_owned())),
+        };
+        name.push_str(&field);
+        rest = &rest[close + 1..];
+    }
+    name.push_str(rest);
+    if is_safe(&name) {
+        Ok(name)
+    } else {
+        Err(SaveError::UnsafeName(name))
+    }
+}
+
+fn is_safe(name: &str) -> bool {
+    let device = name.split('.').next().unwrap_or(name).trim_end();
+    !name.trim().is_empty()
+        && !name.ends_with(['.', ' '])
+        && !name.contains("..")
+        && !name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+        && !name.chars().any(char::is_control)
+        && !RESERVED_NAMES
+            .iter()
+            .any(|reserved| device.eq_ignore_ascii_case(reserved))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STAMP: Stamp = Stamp {
+        year: 2026,
+        month: 10,
+        day: 30,
+        hour: 9,
+        minute: 5,
+        second: 7,
+    };
+
+    fn empty_folder(name: &str) -> PathBuf {
+        let folder = std::env::temp_dir().join(format!("cleanshot-{name}-{}", std::process::id()));
+        if folder.exists() {
+            fs::remove_dir_all(&folder).expect("a stale test folder is removable");
+        }
+        fs::create_dir(&folder).expect("the test folder is created");
+        folder
+    }
+
+    #[test]
+    fn c15_the_default_template_names_the_date_and_time_without_colons() {
+        let name = file_name("Screenshot {date} {time}", STAMP, 1).expect("a safe name");
+        assert_eq!(name, "Screenshot 2026-10-30 09.05.07");
+    }
+
+    #[test]
+    fn c15_unsafe_templates_are_refused() {
+        for template in [
+            "..\\{date}",
+            "a/b",
+            "CON",
+            "nul.txt",
+            "x:stream",
+            "{user}",
+            "{date",
+            " ",
+        ] {
+            assert!(
+                file_name(template, STAMP, 1).is_err(),
+                "{template:?} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn f21_never_overwrites_existing_file() {
+        let folder = empty_folder("collide");
+        let first = save(&folder, "Shot", STAMP, "png", b"first").expect("first save");
+        let second = save(&folder, "Shot", STAMP, "png", b"second").expect("second save");
+        let third = save(&folder, "Shot", STAMP, "png", b"third").expect("third save");
+        let names: Vec<_> = [&first, &second, &third]
+            .map(|path| {
+                path.file_name()
+                    .expect("a file")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .into();
+        assert_eq!(names, ["Shot.png", "Shot-2.png", "Shot-3.png"]);
+        assert_eq!(fs::read(&first).expect("readable"), b"first");
+        assert_eq!(
+            fs::read_dir(&folder).expect("listable").count(),
+            3,
+            "a partial file remains"
+        );
+        fs::remove_dir_all(&folder).expect("the test folder is removable");
+    }
+
+    #[test]
+    fn f21_a_numbered_template_counts_up_instead_of_appending() {
+        let folder = empty_folder("numbered");
+        save(&folder, "Shot {n}", STAMP, "png", b"a").expect("first save");
+        let second = save(&folder, "Shot {n}", STAMP, "png", b"b").expect("second save");
+        assert_eq!(second.file_name().expect("a file"), "Shot 2.png");
+        fs::remove_dir_all(&folder).expect("the test folder is removable");
+    }
+}

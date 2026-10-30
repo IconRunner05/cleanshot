@@ -18,9 +18,9 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, HOT_KEY_MODIFIERS, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, ReleaseCapture,
-    SetCapture, UnregisterHotKey, VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT,
-    VK_UP,
+    GetCapture, HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey,
+    ReleaseCapture, SetCapture, UnregisterHotKey, VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_LEFT,
+    VK_RETURN, VK_RIGHT, VK_S, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
@@ -60,6 +60,8 @@ pub enum OverlayEvent {
     Cancelled,
     /// Enter was pressed on this selection, in physical virtual-desktop pixels (F-03, F-05).
     Copy(RECT),
+    /// Ctrl+S was pressed on this selection, in physical virtual-desktop pixels (F-05).
+    Save(RECT),
     /// Direct2D could not draw a monitor's frozen image.
     DrawFailed(windows::core::Error),
 }
@@ -69,12 +71,18 @@ pub enum OverlayEvent {
 enum Key {
     Cancel,
     Copy,
+    Save,
     Nudge(i32, i32),
 }
 
-const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 10] = [
+const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 11] = [
     (MOD_NOREPEAT, VK_ESCAPE, Key::Cancel),
     (MOD_NOREPEAT, VK_RETURN, Key::Copy),
+    (
+        HOT_KEY_MODIFIERS(MOD_NOREPEAT.0 | MOD_CONTROL.0),
+        VK_S,
+        Key::Save,
+    ),
     (HOT_KEY_MODIFIERS(0), VK_LEFT, Key::Nudge(-1, 0)),
     (HOT_KEY_MODIFIERS(0), VK_RIGHT, Key::Nudge(1, 0)),
     (HOT_KEY_MODIFIERS(0), VK_UP, Key::Nudge(0, -1)),
@@ -120,8 +128,9 @@ impl Shared {
         match (key, selected) {
             (Key::Cancel, _) => self.send(OverlayEvent::Cancelled),
             (Key::Copy, Some(selected)) => self.send(OverlayEvent::Copy(selected)),
+            (Key::Save, Some(selected)) => self.send(OverlayEvent::Save(selected)),
             (Key::Nudge(dx, dy), Some(selected)) => self.select(Some(nudged(selected, dx, dy))),
-            (Key::Copy | Key::Nudge(..), None) => {}
+            (Key::Copy | Key::Save | Key::Nudge(..), None) => {}
         }
     }
 }

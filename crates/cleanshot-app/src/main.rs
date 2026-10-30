@@ -9,6 +9,7 @@ use cleanshot_win::capture::{Method, capture_all, region};
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::instance::Launch;
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
+use cleanshot_win::save::{self, Stamp};
 use cleanshot_win::tray::{Request, Tray, ask_running_instance_to_capture};
 
 fn main() {
@@ -75,6 +76,9 @@ fn open_overlay(
             OverlayEvent::Copy(selected) => region(&frozen, selected)
                 .map_err(Box::from)
                 .and_then(|image| copy(&image)),
+            OverlayEvent::Save(selected) => region(&frozen, selected)
+                .map_err(Box::from)
+                .and_then(|image| save_png(&image)),
             OverlayEvent::DrawFailed(error) => Err(error.into()),
         };
         if let Err(error) = finished {
@@ -97,5 +101,20 @@ fn copy(image: &RgbaImage) -> Result<(), Box<dyn std::error::Error>> {
     let bitmap = encode(image, Format::ClipboardBitmap)?;
     let png = encode(image, Format::Png)?;
     copy_image(&bitmap, &png)?;
+    Ok(())
+}
+
+// F-21: the configured folder and format arrive with F-54's settings file.
+fn save_png(image: &RgbaImage) -> Result<(), Box<dyn std::error::Error>> {
+    // C-22: as in copy.
+    let png = encode(image, Format::Png)?;
+    let folder = save::default_folder()?;
+    save::save(
+        &folder,
+        "Screenshot {date} {time}",
+        Stamp::now(),
+        "png",
+        &png,
+    )?;
     Ok(())
 }

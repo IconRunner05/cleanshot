@@ -4,6 +4,7 @@ pub mod clipboard;
 pub mod field_test;
 pub mod instance;
 pub mod overlay;
+pub mod save;
 mod selection;
 pub mod tray;
 
@@ -39,4 +40,6 @@ pub enum Error {
     NoRunningTray(#[source] windows::core::Error),
     #[error("the clipboard could not take the image")]
     Clipboard(#[source] windows::core::Error),
+    #[error("the screenshot could not be saved")]
+    Save(#[source] save::SaveError),
 }
