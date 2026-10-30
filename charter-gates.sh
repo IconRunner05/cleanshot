@@ -100,6 +100,13 @@ for mitigation in "ASLR:DYNAMIC_BASE" "DEP:NX_COMPAT" "Control Flow Guard:GUARD_
         fail "C-17: the $kind is built without $name (no $flag characteristic)."
 done
 
+if [[ $kind == "release exe" ]]; then
+    strings=$("$llvm_bin/llvm-strings" "$exe")
+    host_paths=$(printf '%s\n' "$strings" | grep -i -F -e /Users/ -e /home/ -e 'C:\Users\' -e '\.cargo\' || [[ $? -eq 1 ]])
+    [[ -z $host_paths ]] ||
+        fail "C-20: the release exe holds $(printf '%s\n' "$host_paths" | wc -l | tr -d ' ') build-host paths, such as $(printf '%s\n' "$host_paths" | head -1)."
+fi
+
 size=$(wc -c <"$exe" | tr -d ' ')
 echo "The $kind: $size bytes, $(printf '%s\n' "$dlls" | wc -l | tr -d ' ') DLLs, $(printf '%s\n' "$functions" | wc -l | tr -d ' ') imported functions."
 if [[ $kind == "release exe" && $size -ge $size_budget_bytes ]]; then

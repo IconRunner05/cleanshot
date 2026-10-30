@@ -43,8 +43,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Release exe builds
-        run: cargo build --release --locked -p cleanshot-app
+      - name: Release exe builds, with the runner's home and cargo paths remapped (C-20)
+        shell: bash
+        run: >
+          cargo build --release --locked -p cleanshot-app
+          --config "target.x86_64-pc-windows-msvc.rustflags = ['--remap-path-prefix=$USERPROFILE=~', '--remap-path-prefix=${CARGO_HOME:-$USERPROFILE\.cargo}=cargo']"
 
       - name: Release exe passes the binary scan, the unsafe scan and the size budget (C-02 C-10 C-11 C-16 C-17 P-06)
         shell: bash
