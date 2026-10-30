@@ -40,7 +40,13 @@ cargo deny check && cargo audit
 cargo test -p cleanshot-render -- --bless     # only when a golden image change is intended
 ```
 
-Build on Windows with the MSVC toolchain (`x86_64-pc-windows-msvc`).
+Build on Windows with the MSVC toolchain (`x86_64-pc-windows-msvc`, the default target in `.cargo/config.toml`). On macOS/Linux:
+
+```sh
+cargo clippy --workspace --all-targets -- -D warnings                                       # x64 Windows
+cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings      # C-06
+cargo test --target host-tuple -p cleanshot-core -p cleanshot-render                        # pure crates
+```
 
 ## How to work
 
@@ -51,3 +57,22 @@ Build on Windows with the MSVC toolchain (`x86_64-pc-windows-msvc`).
 5. Spec ambiguous and hard to reverse (new dependency, file format, setting names, anything touching a C-rule) → stop and ask.
 6. If behaviour changes, update `docs/CHARTER.md` in the same change.
 7. Check performance budgets (CHARTER §8) whenever you touch capture, overlay or export.
+
+## Code standards
+
+@STANDARDS.md
+
+The charter outranks STANDARDS.md where they meet; STANDARDS.md outranks any skill or style guide.
+
+## This repo: how STANDARDS.md applies
+
+- **Units.** The five crates in CHARTER §5 are the units; that table is the map STANDARDS.md's "Records" asks for (no separate README map). A new crate needs a charter change.
+- **Dependency direction** is CHARTER §5's (`core` depends on nothing in the workspace). Enforce it with a test once the workspace exists.
+- **Comments.** Default to none, as STANDARDS.md says. One exception: a short `// C-15: ...` or `// F-21: ...` comment on the line that enforces a charter rule is a pointer to the why, and is allowed.
+- **Crashing.** `panic = "abort"` in release. `unwrap()`/`expect()` only in tests and in `main` start-up (CHARTER §7); everywhere else an error reaches the user as a toast. Nothing supervises this process, so an invariant break fails loudly, it is never caught and carried on.
+- **Errors.** `anyhow` only in `cleanshot-app`; every other crate has its own `thiserror` enum.
+- **`unsafe`** only in `cleanshot-win`, every block with `// SAFETY:` (C-16).
+- **Decisions** go in CHARTER §11's Decisions log (one row, `Status: assumed` until the owner confirms); longer ones in `docs/decisions/`.
+- **Tasks/async.** No async runtime (network crates are banned). Concurrency is GPUI's executor and plain threads + channels (CHARTER §5 "Runtime model").
+- **Symbols** through the rust-analyzer MCP. `.cargo/config.toml` sets `build.target = "x86_64-pc-windows-msvc"`, so rust-analyzer and `cargo check` see the Windows side on every machine with no editor or MCP config. A rust-analyzer started before that file changed keeps the old target: reconnect it (`/mcp`).
+- **Building off Windows.** No fleet machine runs Windows. macOS/Linux can `cargo check`/`clippy` the Windows targets but cannot link or run `cleanshot.exe`; host-runnable tests (`core`, `render`) use `--target host-tuple`. Linking, the binary scan, DPI and latency proof are GitHub Actions on `windows-latest`.

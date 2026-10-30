@@ -1,0 +1,28 @@
+{
+  "_doc": "Lanes for Cleanshot. Read by `lanes` (main, fold.bar) and by the /lanes:* commands and seats. Design: ~/dotfiles/docs/lanes.md. No fleet machine runs Windows: the bar cross-checks the Windows targets and runs host tests for the pure crates; linking and runtime proof are GitHub Actions on windows-latest.",
+  "main": "main",
+  "worktree_copy": [],
+  "seats": [
+    { "name": "steward", "role": "steward", "model": "opus" },
+    { "name": "capture", "role": "builder", "model": "opus",
+      "domain": "capture and app shell: crates/cleanshot-win (Win32 capture, Direct2D overlay, clipboard, DPI, DLL hardening, single instance, policy, file save; the only unsafe crate) and crates/cleanshot-app (main, lifecycle, tray, hotkeys, wiring); plus workspace build config, deny.toml, CI workflows and licences" },
+    { "name": "editor", "role": "builder", "model": "opus",
+      "domain": "document, export and editor: crates/cleanshot-core (Document, Shape, Command, undo, settings types), crates/cleanshot-render (flatten, redaction, encode, golden tests) and crates/cleanshot-editor (GPUI editor and settings window)" }
+  ],
+  "suites": {
+    "crates/cleanshot-core/**": "cargo test --target host-tuple -p cleanshot-core",
+    "crates/cleanshot-render/**": "cargo test --target host-tuple -p cleanshot-render",
+    "crates/**": "cargo clippy --workspace --all-targets -- -D warnings",
+    "Cargo.toml": "cargo clippy --workspace --all-targets -- -D warnings && cargo deny check",
+    "deny.toml": "cargo deny check"
+  },
+  "fold": {
+    "bar": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets -- -D warnings",
+      "cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings",
+      "cargo test --target host-tuple -p cleanshot-core -p cleanshot-render",
+      "cargo deny check"
+    ]
+  }
+}
