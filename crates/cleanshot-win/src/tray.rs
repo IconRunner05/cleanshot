@@ -7,16 +7,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_SNAPSHOT,
 };
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION, NOTIFYICON_VERSION_4,
-    NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     FindWindowW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, IDI_APPLICATION, LoadIconW,
-    MF_STRING, PostMessageW, RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow,
-    SetWindowLongPtrW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE,
-    WM_CONTEXTMENU, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    MF_STRING, PostMessageW, RegisterWindowMessageW, SetForegroundWindow, SetWindowLongPtrW,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_HOTKEY,
+    WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -107,10 +106,7 @@ impl Tray {
             lpszClassName: WINDOW_CLASS,
             ..Default::default()
         };
-        // SAFETY: `class` is fully initialised and its strings are 'static.
-        if unsafe { RegisterClassExW(&raw const class) } == 0 {
-            return Err(Error::Window(windows::core::Error::from_thread()));
-        }
+        crate::register_window_class(&class)?;
 
         // F-50: a top-level window, not HWND_MESSAGE, because message-only windows miss the
         // TaskbarCreated broadcast that re-adds the icon after Explorer restarts.
@@ -170,6 +166,27 @@ impl Tray {
         self.state().icon_shown.get()
     }
 
+    /// Shows `text` under `title` in a warning balloon from the tray icon, cut to the
+    /// shell's 63 and 255 characters.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WarningNotShown`] when the shell has no icon to show it from.
+    pub fn warn(&self, title: &str, text: &str) -> Result<(), Error> {
+        let mut icon = icon_data(self.window);
+        icon.uFlags = NIF_INFO;
+        icon.dwInfoFlags = NIIF_WARNING;
+        fill(&mut icon.szInfoTitle, title);
+        fill(&mut icon.szInfo, text);
+        // SAFETY: `icon` names this window's icon and outlives the call.
+        let shown = unsafe { Shell_NotifyIconW(NIM_MODIFY, &raw const icon) };
+        if shown.as_bool() {
+            Ok(())
+        } else {
+            Err(Error::WarningNotShown)
+        }
+    }
+
     fn state(&self) -> &State {
         // SAFETY: Tray::create stored the State before returning, and WM_NCDESTROY frees it
         // only when Drop destroys the window, so it lives as long as `self`.
@@ -206,6 +223,10 @@ pub fn ask_running_instance_to_capture() -> Result<(), Error> {
     // SAFETY: the class name is a 'static, NUL-terminated string.
     let window =
         unsafe { FindWindowW(WINDOW_CLASS, PCWSTR::null()) }.map_err(Error::NoRunningTray)?;
+    signal_capture(window)
+}
+
+fn signal_capture(window: HWND) -> Result<(), Error> {
     // SAFETY: posting copies no memory; the window may close first, which fails the post.
     unsafe { PostMessageW(Some(window), capture_signal(), WPARAM(0), LPARAM(0)) }
         .map_err(Error::NoRunningTray)
@@ -230,10 +251,16 @@ fn icon_data(window: HWND) -> NOTIFYICONDATAW {
         ..Default::default()
     };
     icon.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-    for (slot, unit) in icon.szTip.iter_mut().zip("Cleanshot".encode_utf16()) {
+    fill(&mut icon.szTip, "Cleanshot");
+    icon
+}
+
+/// Copies as much of `text` as fits, leaving the last slot as the terminating NUL.
+fn fill(slots: &mut [u16], text: &str) {
+    let room = slots.len().saturating_sub(1);
+    for (slot, unit) in slots[..room].iter_mut().zip(text.encode_utf16()) {
         *slot = unit;
     }
-    icon
 }
 
 // F-50: the shell refuses the icon while the taskbar is not up, and then sends TaskbarCreated,
@@ -362,7 +389,8 @@ mod tests {
         let sink = Rc::clone(&received);
         let tray = Tray::create(move |request| sink.borrow_mut().push(request))
             .expect("the tray window is created");
-        ask_running_instance_to_capture().expect("the tray window is found");
+        // Other tests' trays share the window class, so the signal goes to this test's own.
+        signal_capture(tray.window).expect("the tray window takes the signal");
         let deadline = Instant::now() + Duration::from_secs(5);
         while received.borrow().is_empty() && Instant::now() < deadline {
             let mut message = MSG::default();
@@ -374,5 +402,14 @@ mod tests {
         }
         drop(tray);
         assert_eq!(*received.borrow(), [Request::CaptureRegion]);
+    }
+
+    #[test]
+    fn f54_a_settings_warning_shows_from_the_tray_icon() {
+        let tray = Tray::create(|_| {}).expect("the tray window is created");
+        assert!(tray.icon_shown(), "the runner's shell takes the icon");
+        let long = "x".repeat(400);
+        tray.warn("Cleanshot settings", &long)
+            .expect("the balloon is shown from the icon");
     }
 }

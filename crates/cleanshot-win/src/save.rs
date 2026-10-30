@@ -1,10 +1,15 @@
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
+use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::SystemInformation::GetLocalTime;
-use windows::Win32::UI::Shell::{FOLDERID_Screenshots, KF_FLAG_CREATE, SHGetKnownFolderPath};
+use windows::Win32::UI::Shell::{
+    FOLDERID_Screenshots, KF_FLAG_CREATE, KNOWN_FOLDER_FLAG, SHGetKnownFolderPath,
+};
+use windows::core::GUID;
 
 use crate::Error;
 
@@ -55,29 +60,38 @@ pub enum SaveError {
     NoFreeName(String),
     #[error("Windows could not name or create the screenshots folder")]
     NoFolder(#[source] windows::core::Error),
-    #[error("the screenshots folder's path is not valid Unicode")]
-    FolderName(#[source] std::string::FromUtf16Error),
+    /// The configured save folder is not a full path, so it would depend on the working folder.
+    #[error("the save folder {0:?} is not a full path")]
+    RelativeFolder(String),
     #[error("the file could not be written")]
     Write(#[source] std::io::Error),
 }
 
-/// The user's Pictures\Screenshots folder, created if it does not exist yet (F-21's default).
+/// The folder to save in: `configured` (the `save_folder` setting) when it is a full path,
+/// otherwise Pictures\Screenshots, created if it does not exist yet (F-21's default).
 ///
 /// # Errors
 ///
-/// [`Error::Save`] carrying the Windows error if the shell cannot name or create it.
-pub fn default_folder() -> Result<PathBuf, Error> {
-    let folder_id = FOLDERID_Screenshots;
+/// [`Error::Save`] with [`SaveError::RelativeFolder`] for a configured path that is not
+/// full, or with the Windows error if the shell cannot name or create the default.
+pub fn save_folder(configured: Option<&str>) -> Result<PathBuf, Error> {
+    match configured {
+        Some(folder) if Path::new(folder).is_absolute() => Ok(PathBuf::from(folder)),
+        Some(folder) => Err(Error::Save(SaveError::RelativeFolder(folder.to_owned()))),
+        None => known_folder(FOLDERID_Screenshots, KF_FLAG_CREATE)
+            .map_err(|error| Error::Save(SaveError::NoFolder(error))),
+    }
+}
+
+/// The path of a shell known folder.
+pub(crate) fn known_folder(id: GUID, flags: KNOWN_FOLDER_FLAG) -> windows::core::Result<PathBuf> {
     // SAFETY: the shell returns a NUL-terminated path in memory it allocated, read once and
     // freed here.
     unsafe {
-        let path = SHGetKnownFolderPath(&raw const folder_id, KF_FLAG_CREATE, None)
-            .map_err(|error| Error::Save(SaveError::NoFolder(error)))?;
-        let folder = path.to_string();
+        let path = SHGetKnownFolderPath(&raw const id, flags, None)?;
+        let folder = OsString::from_wide(path.as_wide());
         CoTaskMemFree(Some(path.0.cast_const().cast()));
-        folder
-            .map(PathBuf::from)
-            .map_err(|error| Error::Save(SaveError::FolderName(error)))
+        Ok(PathBuf::from(folder))
     }
 }
 
@@ -295,5 +309,21 @@ mod tests {
         let second = save(&folder, "Shot {n}", STAMP, "png", b"b").expect("second save");
         assert_eq!(second.file_name().expect("a file"), "Shot 2.png");
         fs::remove_dir_all(&folder).expect("the test folder is removable");
+    }
+
+    #[test]
+    fn c15_a_save_folder_that_is_not_a_full_path_is_refused() {
+        assert!(matches!(
+            save_folder(Some("Screenshots")),
+            Err(Error::Save(SaveError::RelativeFolder(_)))
+        ));
+        assert!(matches!(
+            save_folder(Some("..\\elsewhere")),
+            Err(Error::Save(SaveError::RelativeFolder(_)))
+        ));
+        assert_eq!(
+            save_folder(Some("D:\\Shots")).expect("a full path is kept"),
+            PathBuf::from("D:\\Shots")
+        );
     }
 }

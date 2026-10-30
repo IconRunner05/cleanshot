@@ -2,9 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use cleanshot_core::box_handles;
-use windows::Win32::Foundation::{
-    ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
-};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
@@ -24,9 +22,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
-    RegisterClassExW, SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow, WM_HOTKEY, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -298,15 +296,7 @@ fn register_class() -> Result<(), Error> {
         lpszClassName: WINDOW_CLASS,
         ..Default::default()
     };
-    // SAFETY: `class` is fully initialised and its strings are 'static.
-    if unsafe { RegisterClassExW(&raw const class) } != 0 {
-        return Ok(());
-    }
-    let error = windows::core::Error::from_thread();
-    if error.code() == ERROR_CLASS_ALREADY_EXISTS.to_hresult() {
-        return Ok(());
-    }
-    Err(Error::Window(error))
+    crate::register_window_class(&class)
 }
 
 fn open_window(
