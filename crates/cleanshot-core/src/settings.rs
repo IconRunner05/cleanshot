@@ -261,11 +261,13 @@ impl Hotkey {
         Some(Self { modifiers, key })
     }
 
+    /// The modifier keys held with [`Hotkey::key`].
     #[must_use]
     pub fn modifiers(self) -> Modifiers {
         self.modifiers
     }
 
+    /// The one non-modifier key.
     #[must_use]
     pub fn key(self) -> Key {
         self.key
