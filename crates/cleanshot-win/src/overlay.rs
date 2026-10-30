@@ -232,6 +232,7 @@ impl Overlay {
     /// [`Error::HotkeyTaken`] if another program holds one of its keys as a hotkey.
     pub fn show(
         captures: &[MonitorImage],
+        selected: Option<RECT>,
         on_event: impl FnMut(OverlayEvent) + 'static,
     ) -> Result<Self, Error> {
         register_class()?;
@@ -241,7 +242,7 @@ impl Overlay {
                 .map_err(Error::Window)?;
         let shared = Rc::new(Shared {
             listener: RefCell::new(Box::new(on_event)),
-            selected: Cell::new(None),
+            selected: Cell::new(selected),
             gesture: Cell::new(None),
             windows: RefCell::new(Vec::with_capacity(captures.len())),
         });
@@ -531,13 +532,20 @@ unsafe extern "system" fn window_procedure(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     use cleanshot_core::RgbaImage;
     use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
-    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
+    };
 
     use super::*;
+
+    /// An overlay registers its keys as system-wide hotkeys and covers the same corner of the
+    /// screen, so one test's overlay is up at a time.
+    static SCREEN: Mutex<()> = Mutex::new(());
 
     /// Red rises down the rows and green across the columns, so a pixel drawn from the wrong
     /// row or column shows a different colour.
@@ -549,14 +557,14 @@ mod tests {
         [y * 5, x * 4, 200]
     }
 
-    #[test]
-    fn f02_the_overlay_draws_a_frozen_capture() {
+    /// A 64x48 gradient capture at the primary monitor's top-left corner, the virtual
+    /// desktop's origin.
+    fn monitor() -> MonitorImage {
         let (width, height) = (64, 48);
         let pixels = (0..height)
             .flat_map(|y| (0..width).flat_map(move |x| gradient(x, y).into_iter().chain([255])))
             .collect();
-        // The primary monitor's top-left corner is the virtual desktop's origin.
-        let capture = MonitorImage {
+        MonitorImage {
             bounds: RECT {
                 left: 0,
                 top: 0,
@@ -564,14 +572,11 @@ mod tests {
                 bottom: 48,
             },
             image: RgbaImage::new(width, height, pixels).expect("64x48 RGBA"),
-        };
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let sink = Rc::clone(&events);
-        let overlay = Overlay::show(&[capture], move |event| {
-            sink.borrow_mut().push(format!("{event:?}"));
-        })
-        .expect("the overlay opens");
-        let deadline = Instant::now() + Duration::from_millis(500);
+        }
+    }
+
+    fn pump(duration: Duration) {
+        let deadline = Instant::now() + duration;
         while Instant::now() < deadline {
             let mut message = MSG::default();
             // SAFETY: `message` is writable and the overlay windows belong to this thread.
@@ -580,27 +585,37 @@ mod tests {
                 unsafe { DispatchMessageW(&raw const message) };
             }
         }
+    }
+
+    #[test]
+    fn f02_the_overlay_draws_a_frozen_capture() {
+        let _screen = SCREEN
+            .lock()
+            .expect("no overlay test panicked holding the screen");
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&events);
+        let overlay = Overlay::show(&[monitor()], None, move |event| {
+            sink.borrow_mut().push(format!("{event:?}"));
+        })
+        .expect("the overlay opens");
+        pump(Duration::from_millis(500));
+        let points = [(5, 7), (40, 30), (63, 47)];
         // SAFETY: the screen DC is read here on this thread and released once below.
-        let shown: Vec<[u8; 3]> = unsafe {
+        let shown = unsafe {
             let screen = GetDC(None);
-            let read = [(5, 7), (40, 30), (63, 47)]
-                .map(|(x, y)| {
-                    let colour = GetPixel(screen, x, y).0.to_le_bytes();
-                    [colour[0], colour[1], colour[2]]
-                })
-                .into();
+            let read = points.map(|(x, y)| {
+                let colour = GetPixel(screen, x, y).0.to_le_bytes();
+                [colour[0], colour[1], colour[2]]
+            });
             ReleaseDC(None, screen);
             read
         };
         drop(overlay);
-        let dimmed: Vec<[u8; 3]> = [(5, 7), (40, 30), (63, 47)]
-            .map(|(x, y)| {
-                gradient(x, y).map(|channel| {
-                    u8::try_from((u16::from(channel) * 3 + 2) / 5)
-                        .expect("60% of a byte fits a byte")
-                })
+        let dimmed = points.map(|(x, y)| {
+            gradient(x.unsigned_abs(), y.unsigned_abs()).map(|channel| {
+                u8::try_from((u16::from(channel) * 3 + 2) / 5).expect("60% of a byte fits a byte")
             })
-            .into();
+        });
         for (shown, dimmed) in shown.iter().zip(&dimmed) {
             assert!(
                 shown.iter().zip(dimmed).all(|(s, d)| s.abs_diff(*d) <= 2),
@@ -612,5 +627,38 @@ mod tests {
             "overlay events: {:?}",
             events.borrow()
         );
+    }
+
+    #[test]
+    fn f07_an_overlay_opened_with_a_selection_copies_it_on_enter() {
+        let _screen = SCREEN
+            .lock()
+            .expect("no overlay test panicked holding the screen");
+        let screen = monitor().bounds;
+        let copied = Rc::new(Cell::new(None));
+        let sink = Rc::clone(&copied);
+        let overlay = Overlay::show(&[monitor()], Some(screen), move |event| {
+            if let OverlayEvent::Copy(selected) = event {
+                sink.set(Some(selected));
+            }
+        })
+        .expect("the overlay opens");
+        let enter = KEYS
+            .iter()
+            .position(|&(_, _, key)| matches!(key, Key::Copy))
+            .expect("Enter is one of the overlay's keys");
+        // SAFETY: posting copies no memory, and the window belongs to this thread.
+        unsafe {
+            PostMessageW(
+                Some(overlay.windows[0]),
+                WM_HOTKEY,
+                WPARAM(enter),
+                LPARAM(0),
+            )
+        }
+        .expect("the overlay window takes the message");
+        pump(Duration::from_millis(200));
+        drop(overlay);
+        assert_eq!(copied.get(), Some(screen));
     }
 }

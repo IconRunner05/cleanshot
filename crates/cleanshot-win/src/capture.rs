@@ -1,5 +1,6 @@
 use cleanshot_core::RgbaImage;
-use windows::Win32::Foundation::{HMODULE, LPARAM, RECT};
+pub use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{HMODULE, LPARAM, POINT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ,
@@ -16,6 +17,8 @@ use windows::Win32::Graphics::Gdi::{
     HMONITOR, MONITORINFO, ReleaseDC, SRCCOPY, SelectObject,
 };
 use windows::core::{BOOL, Interface};
+
+use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use crate::Error;
 
@@ -47,6 +50,29 @@ pub fn capture_all(method: Method) -> Result<Vec<MonitorImage>, Error> {
         Method::GdiBitBlt => monitor_bounds().into_iter().map(bitblt).collect(),
         Method::DesktopDuplication => duplicate_all().into_iter().collect(),
     }
+}
+
+/// F-07: the bounds of the monitor the pointer is on, in virtual-desktop pixels.
+///
+/// # Errors
+///
+/// [`Error::Capture`] if Windows cannot say where the pointer is; [`Error::NoMonitorAtPointer`]
+/// if no captured monitor holds it.
+pub fn monitor_under_cursor(captures: &[MonitorImage]) -> Result<RECT, Error> {
+    let mut pointer = POINT::default();
+    // SAFETY: `pointer` is writable.
+    unsafe { GetCursorPos(&raw mut pointer) }.map_err(Error::Capture)?;
+    monitor_containing(captures, pointer).ok_or(Error::NoMonitorAtPointer)
+}
+
+fn monitor_containing(captures: &[MonitorImage], point: POINT) -> Option<RECT> {
+    captures
+        .iter()
+        .map(|capture| capture.bounds)
+        .find(|bounds| {
+            (bounds.left..bounds.right).contains(&point.x)
+                && (bounds.top..bounds.bottom).contains(&point.y)
+        })
 }
 
 /// What the hotkey path copied (D-28).
@@ -461,5 +487,19 @@ mod tests {
     #[test]
     fn d28_no_outputs_sends_every_monitor_to_gdi() {
         assert!(matches!(choose(Vec::new()), Err(Error::NothingDuplicated)));
+    }
+
+    #[test]
+    fn f07_the_monitor_holding_the_pointer_is_chosen_across_a_negative_origin() {
+        let captures = [filled(rect(-4, 0, 0, 2), 1), filled(rect(0, 0, 4, 2), 2)];
+        assert_eq!(
+            monitor_containing(&captures, POINT { x: -1, y: 1 }),
+            Some(rect(-4, 0, 0, 2))
+        );
+        assert_eq!(
+            monitor_containing(&captures, POINT { x: 0, y: 0 }),
+            Some(rect(0, 0, 4, 2))
+        );
+        assert_eq!(monitor_containing(&captures, POINT { x: 4, y: 0 }), None);
     }
 }

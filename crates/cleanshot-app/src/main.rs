@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cleanshot_core::{
-    Hotkey, MAX_SETTINGS_BYTES, RgbaImage, SaveFormat, Settings, SettingsProblem,
+    AfterCapture, Hotkey, MAX_SETTINGS_BYTES, RgbaImage, SaveFormat, Settings, SettingsProblem,
 };
 use cleanshot_render::{Format, encode};
-use cleanshot_win::capture::{Desktop, capture_desktop, region};
+use cleanshot_win::capture::{Desktop, capture_desktop, monitor_under_cursor, region};
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::instance::Launch;
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
@@ -33,6 +33,10 @@ fn main() {
     };
     let (settings, warning) = load_settings();
     let (region, fallback) = region_hotkey(settings.hotkeys.region);
+    let hotkeys = [
+        (Request::CaptureRegion, region),
+        (Request::CaptureScreen, settings.hotkeys.full_screen),
+    ];
     let settings = Rc::new(settings);
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
@@ -40,7 +44,7 @@ fn main() {
     cleanshot_editor::run(move |cx| {
         let app = cx.to_async();
         let overlay = Rc::clone(&overlay);
-        let created = Tray::create(region, move |request| {
+        let created = Tray::create(&hotkeys, move |request| {
             let overlay = Rc::clone(&overlay);
             let settings = Rc::clone(&settings);
             let closer = app.clone();
@@ -48,7 +52,10 @@ fn main() {
             // waits for GPUI's executor instead of borrowing the app here.
             app.spawn(async move |cx| {
                 cx.update(|cx| match request {
-                    Request::CaptureRegion => open_overlay(&overlay, settings, move |job| {
+                    Request::CaptureRegion => capture(&overlay, settings, Capture::Region, move |job| {
+                        closer.spawn(async move |_| job()).detach();
+                    }),
+                    Request::CaptureScreen => capture(&overlay, settings, Capture::Screen, move |job| {
                         closer.spawn(async move |_| job()).detach();
                     }),
                     Request::Exit => cx.quit(),
@@ -58,12 +65,12 @@ fn main() {
         })
         .expect("the tray window and icon are created");
         // F-51: a hotkey another program holds is shown, not swallowed.
-        let taken = match created.region_hotkey() {
-            (_, Ok(())) => None,
-            (hotkey, Err(_)) => Some(format!(
-                "{hotkey} is taken by another program, so it does not capture. Choose another region hotkey in cleanshot.toml."
-            )),
-        };
+        let taken = created
+            .hotkeys()
+            .filter(|(_, _, registered)| registered.is_err())
+            .map(|(_, hotkey, _)| {
+                format!("{hotkey} is taken by another program, so it does not capture. Choose another in cleanshot.toml.")
+            });
         let warnings: Vec<String> = warning.into_iter().chain(fallback).chain(taken).collect();
         if !warnings.is_empty() {
             let text = warnings.join(" ");
@@ -78,11 +85,19 @@ fn main() {
     drop(instance);
 }
 
+#[derive(Clone, Copy)]
+enum Capture {
+    Region,
+    Screen,
+}
+
 // F-01, F-02: the screen is copied before any window of ours appears, then frozen on every
-// monitor until Esc.
-fn open_overlay(
+// monitor until Esc. F-07: a screen capture selects the pointer's monitor, then runs the
+// after-capture action.
+fn capture(
     overlay: &Rc<RefCell<Option<Overlay>>>,
     settings: Rc<Settings>,
+    kind: Capture,
     defer: impl Fn(Box<dyn FnOnce()>) + 'static,
 ) {
     if overlay.borrow().is_some() {
@@ -96,10 +111,26 @@ fn open_overlay(
         }
         Err(error) => return eprintln!("the screen could not be captured: {error}"),
     };
+    let selected = match kind {
+        Capture::Region => None,
+        Capture::Screen => match monitor_under_cursor(&captures) {
+            Ok(monitor) => Some(monitor),
+            Err(error) => return eprintln!("the screen to capture is unknown: {error}"),
+        },
+    };
+    if let (Some(monitor), AfterCapture::Copy) = (selected, settings.after_capture) {
+        let copied = region(&captures, monitor)
+            .map_err(Box::from)
+            .and_then(|image| copy(&image));
+        if let Err(error) = copied {
+            eprintln!("the capture did not finish: {error}");
+        }
+        return;
+    }
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
     let closing = Rc::clone(overlay);
-    let shown = Overlay::show(&captures, move |event| {
+    let shown = Overlay::show(&captures, selected, move |event| {
         let finished = match event {
             OverlayEvent::Cancelled => Ok(()),
             OverlayEvent::Copy(selected) => region(&frozen, selected)

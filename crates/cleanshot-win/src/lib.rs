@@ -59,6 +59,8 @@ pub enum Error {
     PrintScreenSetting(#[source] windows::core::Error),
     #[error("the tray has no icon to show a warning from")]
     WarningNotShown,
+    #[error("the pointer is on no captured monitor")]
+    NoMonitorAtPointer,
     #[error("no display output could be duplicated")]
     NothingDuplicated,
     #[error("the clipboard could not take the image")]

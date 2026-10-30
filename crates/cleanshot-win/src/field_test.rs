@@ -276,7 +276,7 @@ pub fn drive_tray(timeout: Duration) -> Result<TrayRun, Error> {
     let delivered = Rc::new(Cell::new(false));
     let seen = Rc::clone(&delivered);
     let region = Hotkey::parse("Ctrl+Shift+4").expect("Ctrl+Shift+4 is a valid hotkey");
-    let tray = Tray::create(region, move |request| {
+    let tray = Tray::create(&[(Request::CaptureRegion, region)], move |request| {
         if request == Request::CaptureRegion {
             seen.set(true);
         }
@@ -291,7 +291,10 @@ pub fn drive_tray(timeout: Duration) -> Result<TrayRun, Error> {
     Ok(TrayRun {
         icon_shown: tray.icon_shown(),
         hotkey: {
-            let (hotkey, registered) = tray.region_hotkey();
+            let (_, hotkey, registered) = tray
+                .hotkeys()
+                .next()
+                .expect("the tray holds the one hotkey it was given");
             (hotkey, registered.map_err(ToString::to_string))
         },
         foreground_window,
