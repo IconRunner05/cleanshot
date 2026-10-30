@@ -3,7 +3,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cleanshot_win::capture::{Method, capture_all};
+use cleanshot_core::RgbaImage;
+use cleanshot_render::{Format, encode};
+use cleanshot_win::capture::{Method, capture_all, region};
+use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::instance::Launch;
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 use cleanshot_win::tray::{Request, Tray, ask_running_instance_to_capture};
@@ -63,10 +66,22 @@ fn open_overlay(
         Ok(captures) => captures,
         Err(error) => return eprintln!("the screen could not be captured: {error}"),
     };
+    let captures = Rc::new(captures);
+    let frozen = Rc::clone(&captures);
     let closing = Rc::clone(overlay);
     let shown = Overlay::show(&captures, move |event| {
-        if let OverlayEvent::DrawFailed(error) = &event {
-            eprintln!("the overlay could not draw: {error}");
+        match event {
+            OverlayEvent::Cancelled => {}
+            // F-20: until F-03 adds Enter, releasing the drag commits with the default action.
+            OverlayEvent::Selected(selected) => {
+                let copied = region(&frozen, selected)
+                    .map_err(Box::from)
+                    .and_then(|image| copy(&image));
+                if let Err(error) = copied {
+                    eprintln!("the selection could not be copied: {error}");
+                }
+            }
+            OverlayEvent::DrawFailed(error) => eprintln!("the overlay could not draw: {error}"),
         }
         // The event arrives inside an overlay window's procedure, so the windows close
         // after it returns.
@@ -77,4 +92,13 @@ fn open_overlay(
         Ok(shown) => *overlay.borrow_mut() = Some(shown),
         Err(error) => eprintln!("the overlay could not open: {error}"),
     }
+}
+
+fn copy(image: &RgbaImage) -> Result<(), Box<dyn std::error::Error>> {
+    // C-22: the raw capture goes straight to encode until flatten carries destructive
+    // redaction.
+    let bitmap = encode(image, Format::ClipboardBitmap)?;
+    let png = encode(image, Format::Png)?;
+    copy_image(&bitmap, &png)?;
+    Ok(())
 }

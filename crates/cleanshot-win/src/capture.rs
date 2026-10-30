@@ -49,6 +49,45 @@ pub fn capture_all(method: Method) -> Result<Vec<MonitorImage>, Error> {
     }
 }
 
+/// The pixels of `selected`, a rectangle on the virtual desktop, cut from `captures`. A
+/// part no monitor covers stays transparent.
+///
+/// # Errors
+///
+/// [`Error::CaptureShape`] if `selected` is empty.
+pub fn region(captures: &[MonitorImage], selected: RECT) -> Result<RgbaImage, Error> {
+    let (width, height) = size_of_rect(selected)?;
+    let row_bytes = width as usize * 4;
+    let mut pixels = vec![0; row_bytes * height as usize];
+    for capture in captures {
+        let bounds = capture.bounds;
+        let overlap = RECT {
+            left: selected.left.max(bounds.left),
+            top: selected.top.max(bounds.top),
+            right: selected.right.min(bounds.right),
+            bottom: selected.bottom.min(bounds.bottom),
+        };
+        let Ok((overlap_width, _)) = size_of_rect(overlap) else {
+            continue;
+        };
+        let source_row_bytes = capture.image.width() as usize * 4;
+        let span = overlap_width as usize * 4;
+        for y in overlap.top..overlap.bottom {
+            let source = offset(y - bounds.top, overlap.left - bounds.left, source_row_bytes);
+            let target = offset(y - selected.top, overlap.left - selected.left, row_bytes);
+            pixels[target..target + span]
+                .copy_from_slice(&capture.image.pixels()[source..source + span]);
+        }
+    }
+    Ok(RgbaImage::new(width, height, pixels)?)
+}
+
+fn offset(row: i32, column: i32, row_bytes: usize) -> usize {
+    let row = usize::try_from(row).expect("the row lies inside the overlap");
+    let column = usize::try_from(column).expect("the column lies inside the overlap");
+    row * row_bytes + column * 4
+}
+
 pub(crate) fn monitor_handles() -> Vec<HMONITOR> {
     unsafe extern "system" fn add(monitor: HMONITOR, _: HDC, _: *mut RECT, list: LPARAM) -> BOOL {
         // SAFETY: `list` is the &mut Vec that monitor_handles passed, alive for the whole call.
@@ -282,5 +321,63 @@ fn bgra_to_rgba(pixels: &mut [u8]) {
     for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
         pixel[3] = u8::MAX;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// A monitor whose pixel n, counted row by row, is `first + n` in every channel, so a
+    /// pixel taken from the wrong row or column has the wrong value.
+    fn numbered(bounds: RECT, first: u8) -> MonitorImage {
+        let (width, height) = size_of_rect(bounds).expect("a test monitor has an area");
+        let pixels = (first..)
+            .take(width as usize * height as usize)
+            .flat_map(|value| [value; 4])
+            .collect();
+        MonitorImage {
+            bounds,
+            image: RgbaImage::new(width, height, pixels).expect("sized to match"),
+        }
+    }
+
+    fn filled(bounds: RECT, value: u8) -> MonitorImage {
+        let (width, height) = size_of_rect(bounds).expect("a test monitor has an area");
+        let pixels = vec![value; width as usize * height as usize * 4];
+        MonitorImage {
+            bounds,
+            image: RgbaImage::new(width, height, pixels).expect("sized to match"),
+        }
+    }
+
+    #[test]
+    fn f01_a_region_across_a_negative_origin_monitor_takes_each_side_from_its_own_monitor() {
+        let captures = [
+            numbered(rect(-4, 0, 0, 2), 10),
+            numbered(rect(0, 0, 4, 2), 30),
+        ];
+        let image = region(&captures, rect(-2, 1, 2, 2)).expect("the region has an area");
+        assert_eq!((image.width(), image.height()), (4, 1));
+        assert_eq!(
+            image.pixels(),
+            [[16; 4], [17; 4], [34; 4], [35; 4]].concat()
+        );
+    }
+
+    #[test]
+    fn f01_a_region_no_monitor_covers_stays_transparent() {
+        let captures = [filled(rect(0, 0, 2, 2), 30)];
+        let image = region(&captures, rect(1, 1, 3, 2)).expect("the region has an area");
+        assert_eq!(image.pixels(), [[30; 4], [0; 4]].concat());
     }
 }

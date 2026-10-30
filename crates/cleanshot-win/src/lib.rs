@@ -1,4 +1,5 @@
 pub mod capture;
+pub mod clipboard;
 #[cfg(feature = "field-test")]
 pub mod field_test;
 pub mod instance;
@@ -35,4 +36,6 @@ pub enum Error {
     SingleInstance(#[source] windows::core::Error),
     #[error("the running Cleanshot has no tray window yet")]
     NoRunningTray(#[source] windows::core::Error),
+    #[error("the clipboard could not take the image")]
+    Clipboard(#[source] windows::core::Error),
 }

@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HANDLE, HGLOBAL, HMODULE, RECT};
+use windows::Win32::Foundation::{HGLOBAL, HMODULE, RECT};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
 };
@@ -16,10 +16,8 @@ use windows::Win32::Graphics::Gdi::{
     DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR, MONITORINFO,
     MONITORINFOEXW,
 };
-use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
-};
-use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Registry::{
     HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
@@ -348,21 +346,12 @@ pub fn clipboard_round_trip(text: &str) -> Result<String, windows::core::Error> 
 }
 
 fn write_clipboard(text: &str) -> Result<(), windows::core::Error> {
-    let units: Vec<u16> = text.encode_utf16().chain([0]).collect();
-    // SAFETY: the clipboard is opened and closed here on one thread; the global block is
-    // sized for `units`, filled while locked, and owned by the clipboard once set.
-    unsafe {
-        OpenClipboard(None)?;
-        let written = EmptyClipboard().and_then(|()| {
-            let block: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, size_of_val(units.as_slice()))?;
-            let target = GlobalLock(block).cast::<u16>();
-            target.copy_from_nonoverlapping(units.as_ptr(), units.len());
-            let _ = GlobalUnlock(block);
-            SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(block.0))).map(|_| ())
-        });
-        CloseClipboard()?;
-        written
-    }
+    let bytes: Vec<u8> = text
+        .encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    crate::clipboard::replace_with(&[(u32::from(CF_UNICODETEXT.0), &bytes)])
 }
 
 fn read_clipboard() -> Result<String, windows::core::Error> {
