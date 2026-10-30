@@ -7,7 +7,7 @@ mod restricted_platform;
 
 use std::rc::Rc;
 
-use cleanshot_core::ImageError;
+use cleanshot_core::{CommandError, ImageError};
 use gpui::{App, Application};
 use gpui_windows::WindowsPlatform;
 
@@ -24,6 +24,8 @@ pub enum Error {
     WindowOpen(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the bench image could not be built")]
     SyntheticImage(#[source] ImageError),
+    #[error("the bench shapes could not be added")]
+    SyntheticShape(#[source] CommandError),
 }
 
 /// Runs the GPUI event loop on this thread until the app quits, calling `on_launch` once it

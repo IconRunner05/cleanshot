@@ -2,7 +2,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cleanshot_core::{Color, Document, PointF, RectF, RgbaImage, Shape, ShapeEntry, Style};
+use cleanshot_core::{
+    Color, Command, Document, Fill, History, PointF, RectF, RgbaImage, Shape, Style,
+};
 use gpui::{App, Window};
 
 use crate::Error;
@@ -115,10 +117,14 @@ fn synthetic_document() -> Result<Document, Error> {
             pixels.extend([gradient(x, WIDTH), gradient(y, HEIGHT), 128, 255]);
         }
     }
-    Ok(Document {
-        base: Arc::new(RgbaImage::new(WIDTH, HEIGHT, pixels).map_err(Error::SyntheticImage)?),
-        shapes: (0..SHAPES).map(synthetic_shape).collect(),
-    })
+    let base = RgbaImage::new(WIDTH, HEIGHT, pixels).map_err(Error::SyntheticImage)?;
+    let mut history = History::new(Document::new(Arc::new(base)));
+    for index in 0..SHAPES {
+        history
+            .apply(synthetic_shape(index))
+            .map_err(Error::SyntheticShape)?;
+    }
+    Ok(history.document().clone())
 }
 
 #[expect(
@@ -133,7 +139,7 @@ fn gradient(position: u32, extent: u32) -> u8 {
     clippy::cast_precision_loss,
     reason = "every value is below 4000, where f32 is exact"
 )]
-fn synthetic_shape(index: u32) -> ShapeEntry {
+fn synthetic_shape(index: u32) -> Command {
     let cell_width = (WIDTH / COLUMNS) as f32;
     let cell_height = (HEIGHT / (SHAPES / COLUMNS)) as f32;
     let left = (index % COLUMNS) as f32 * cell_width + 16.0;
@@ -153,8 +159,20 @@ fn synthetic_shape(index: u32) -> ShapeEntry {
     let (shape, alpha) = match index % 6 {
         0 => (Shape::Arrow { from, to }, 255),
         1 => (Shape::Line { from, to }, 255),
-        2 => (Shape::Rect(rect), 255),
-        3 => (Shape::Ellipse(rect), 255),
+        2 => (
+            Shape::Rect {
+                rect,
+                fill: Fill::Hollow,
+            },
+            255,
+        ),
+        3 => (
+            Shape::Ellipse {
+                rect,
+                fill: Fill::Hollow,
+            },
+            255,
+        ),
         4 => (
             Shape::Pen(
                 (0..32u8)
@@ -168,7 +186,7 @@ fn synthetic_shape(index: u32) -> ShapeEntry {
         ),
         _ => (Shape::Highlight(rect), 96),
     };
-    ShapeEntry {
+    Command::Add {
         shape,
         style: Style {
             color: Color {

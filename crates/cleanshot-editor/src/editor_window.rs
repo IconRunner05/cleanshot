@@ -42,7 +42,7 @@ pub(crate) fn open_with(
     document: Document,
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
-    let base = render_image(&document.base);
+    let base = render_image(document.base());
     let document = Rc::new(document);
     cx.open_window(WindowOptions::default(), |window, cx| {
         on_open(window, cx);

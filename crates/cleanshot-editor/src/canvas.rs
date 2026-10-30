@@ -2,7 +2,7 @@ use std::f32::consts::{FRAC_PI_6, PI, TAU};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use cleanshot_core::{Color, Document, PointF, RectF, RgbaImage, Shape, ShapeEntry};
+use cleanshot_core::{Color, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeEntry};
 use gpui::{
     BorderStyle, Bounds, Canvas, PathBuilder, Pixels, Point, RenderImage, Rgba, Window, canvas,
     fill, point, px, quad, size, transparent_black,
@@ -36,7 +36,7 @@ pub(crate) fn document_canvas(document: Rc<Document>, base: Arc<RenderImage>) ->
                 0,
                 false,
             );
-            for entry in &document.shapes {
+            for entry in document.shapes() {
                 paint_shape(entry, &fit, window);
             }
         },
@@ -56,8 +56,8 @@ impl Fit {
         reason = "image sides are far below 2^24, where f32 stops being exact"
     )]
     fn new(bounds: Bounds<Pixels>, document: &Document) -> Self {
-        let width = document.base.width() as f32;
-        let height = document.base.height() as f32;
+        let width = document.base().width() as f32;
+        let height = document.base().height() as f32;
         let scale =
             (f32::from(bounds.size.width) / width).min(f32::from(bounds.size.height) / height);
         let fitted = size(px(width * scale), px(height * scale));
@@ -91,20 +91,30 @@ impl Fit {
 fn paint_shape(entry: &ShapeEntry, fit: &Fit, window: &mut Window) {
     let color = rgba(entry.style.color);
     let width = px(entry.style.stroke_width * fit.scale);
+    let stroke = PathBuilder::stroke(width);
     match &entry.shape {
-        Shape::Line { from, to } => stroke(
+        Shape::Line { from, to } => paint_polygon(
             window,
+            stroke,
             &[fit.point(*from), fit.point(*to)],
             false,
-            width,
             color,
         ),
         Shape::Arrow { from, to } => {
             let (tail, tip) = (fit.point(*from), fit.point(*to));
-            stroke(window, &[tail, tip], false, width, color);
-            stroke(window, &arrow_head(tail, tip, width), false, width, color);
+            paint_polygon(
+                window,
+                PathBuilder::stroke(width),
+                &[tail, tip],
+                false,
+                color,
+            );
+            paint_polygon(window, stroke, &arrow_head(tail, tip, width), false, color);
         }
-        Shape::Rect(rect) => window.paint_quad(quad(
+        Shape::Rect {
+            rect,
+            fill: Fill::Hollow,
+        } => window.paint_quad(quad(
             fit.bounds(*rect),
             px(0.0),
             transparent_black(),
@@ -112,17 +122,41 @@ fn paint_shape(entry: &ShapeEntry, fit: &Fit, window: &mut Window) {
             color,
             BorderStyle::Solid,
         )),
-        Shape::Ellipse(rect) => stroke(window, &ellipse(fit.bounds(*rect)), true, width, color),
+        Shape::Rect {
+            rect,
+            fill: Fill::Solid,
+        }
+        | Shape::Highlight(rect) => window.paint_quad(fill(fit.bounds(*rect), color)),
+        Shape::Ellipse {
+            rect,
+            fill: Fill::Hollow,
+        } => paint_polygon(window, stroke, &ellipse(fit.bounds(*rect)), true, color),
+        Shape::Ellipse {
+            rect,
+            fill: Fill::Solid,
+        } => paint_polygon(
+            window,
+            PathBuilder::fill(),
+            &ellipse(fit.bounds(*rect)),
+            true,
+            color,
+        ),
         Shape::Pen(points) => {
             let points: Vec<_> = points.iter().map(|p| fit.point(*p)).collect();
-            stroke(window, &points, false, width, color);
+            paint_polygon(window, stroke, &points, false, color);
         }
-        Shape::Highlight(rect) => window.paint_quad(fill(fit.bounds(*rect), color)),
+        // The editor's text and redaction previews come with their tools, after the M0 gate.
+        Shape::Text { .. } | Shape::Redact { .. } => {}
     }
 }
 
-fn stroke(window: &mut Window, points: &[Point<Pixels>], closed: bool, width: Pixels, color: Rgba) {
-    let mut builder = PathBuilder::stroke(width);
+fn paint_polygon(
+    window: &mut Window,
+    mut builder: PathBuilder,
+    points: &[Point<Pixels>],
+    closed: bool,
+    color: Rgba,
+) {
     builder.add_polygon(points, closed);
     // lyon rejects a path with no length or too many vertices; the document keeps the shape.
     if let Ok(path) = builder.build() {

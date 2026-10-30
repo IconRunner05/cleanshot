@@ -236,26 +236,14 @@ cleanshot/
 
 Dependency direction: `app → {editor, win, render, core}`, `editor → {render, core}`, `render → core`, `win → core`. `core` depends on nothing in the workspace.
 
-### Core types (starting point)
+### Core types
 
-```rust
-/// All coordinates are f32 in base-image physical pixels.
-pub struct Document {
-    pub base: Arc<RgbaImage>,      // frozen capture, never mutated
-    pub shapes: Vec<ShapeEntry>,    // z-order = vec order
-    pub crop: Option<RectF>,
-}
-pub struct ShapeEntry { pub id: ShapeId, pub shape: Shape, pub style: Style }
-pub enum Shape {
-    Arrow { from: PointF, to: PointF }, Line { from: PointF, to: PointF },
-    Rect(RectF), Ellipse(RectF), Pen(Vec<PointF>),
-    Text { at: PointF, text: String, size: f32 },
-    Highlight(RectF), Redact { rect: RectF, mode: RedactMode },
-    Step { at: PointF, n: u32 }, Bubble { rect: RectF, tail: PointF, text: String },
-    Spotlight(RectF),
-}
-pub enum Command { Add(ShapeEntry), Remove(ShapeId), Replace { id: ShapeId, before: ShapeEntry, after: ShapeEntry }, SetCrop { before: Option<RectF>, after: Option<RectF> } }
-```
+The types live in `crates/cleanshot-core`; read them there. All coordinates are f32 in base-image physical pixels.
+
+- **Document**: the frozen capture, its shapes in z-order and an optional crop. Changed only through `History`.
+- **Shape**: one annotation (arrow, line, rectangle, ellipse, pen, text, highlight, redact), drawn with a `Style`. Step, bubble and spotlight arrive with M4.
+- **Command**: one edit (add, remove, replace a shape, set the crop). Every edit is a command (F-38).
+- **History**: a document with its edits, undoable and redoable without limit. It issues shape ids (D-26).
 
 ### Runtime model
 
@@ -456,6 +444,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-26 | 2026-10-30 | Commands carry no "before" value: applying an edit computes the edit that reverts it, which undo and redo replay. Only `History` issues `ShapeId`s and never reuses one | assumed | A stored "before" can disagree with the document; a computed one cannot (STANDARDS.md: never store what can be derived). Ids from one place stay unique across undo and redo |
 | D-22 | 2026-10-30 | The tray icon, its menu and the global hotkeys are direct Win32 calls (`Shell_NotifyIconW`, `TrackPopupMenu`, `RegisterHotKey`) on a hidden window in `cleanshot-win`, not `tray-icon`, `muda` or `global-hotkey` | assumed | Section 6's fallback. The crates are licence-clean and launch nothing, but add about 13 crates and two `windows-sys` versions beside the `windows` crate GPUI uses, and deliver events through global `Send + Sync` handlers that would need a bridge back to the UI thread. GPUI's loop is a plain `GetMessageW`/`DispatchMessageW`, so a window of our own on that thread gets its messages with no bridge. A shell that refuses the icon (at login the taskbar may not be up) does not stop start-up: the hotkeys work and `TaskbarCreated` adds the icon |
 | D-19 | 2026-10-30 | The app's build script writes the manifest into a `.res` file and passes it to the linker, instead of using `winresource` | assumed | `winresource` runs a resource compiler from every `cargo clippy`, which would need `llvm-rc` set up by hand on each Mac and Linux host; `lld-link` here cannot embed a manifest without `mt.exe`. A `.res` file with one manifest entry is about 20 lines and needs no tool |
 | D-18 | 2026-10-30 | `image` is a direct dependency of `cleanshot-editor`, pinned to the version GPUI uses, with no format features, to build the bitmap GPUI draws | decided | Owner's call. GPUI's only drawable-bitmap constructor takes `image::Frame` and GPUI does not re-export `image`; no new crate enters the tree |

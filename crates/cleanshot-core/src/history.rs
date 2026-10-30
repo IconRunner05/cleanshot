@@ -1,0 +1,392 @@
+use std::mem;
+
+use crate::document::{Document, RectF, Shape, ShapeEntry, ShapeId, Style};
+
+/// One edit to a document (F-38: every edit is a command).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Command {
+    /// Puts a new shape on top of the others.
+    Add {
+        shape: Shape,
+        style: Style,
+    },
+    Remove(ShapeId),
+    /// Changes a shape in place, keeping its id and stacking position.
+    Replace {
+        id: ShapeId,
+        shape: Shape,
+        style: Style,
+    },
+    /// `None` exports the whole image (F-37).
+    SetCrop(Option<RectF>),
+}
+
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum CommandError {
+    #[error("no shape has id {0:?}")]
+    UnknownShape(ShapeId),
+    #[error("the crop {0:?} is not a non-empty area inside the image")]
+    CropOutsideImage(RectF),
+}
+
+/// A document with every edit made to it, each one undoable, without limit (F-38).
+#[derive(Debug)]
+pub struct History {
+    document: Document,
+    next_id: u64,
+    undo: Vec<Edit>,
+    redo: Vec<Edit>,
+}
+
+/// A change that, applied, returns the change that reverts it.
+#[derive(Debug)]
+enum Edit {
+    Insert { index: usize, entry: ShapeEntry },
+    Remove(ShapeId),
+    Replace(ShapeEntry),
+    SetCrop(Option<RectF>),
+}
+
+impl History {
+    /// Starts the history of `document`, with nothing to undo.
+    #[must_use]
+    pub fn new(document: Document) -> Self {
+        let next_id = document
+            .shapes
+            .iter()
+            .map(|entry| entry.id.0 + 1)
+            .max()
+            .unwrap_or(0);
+        Self {
+            document,
+            next_id,
+            undo: Vec::new(),
+            redo: Vec::new(),
+        }
+    }
+
+    /// The document with every applied edit, less those undone.
+    #[must_use]
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
+    /// Applies `command` and makes it the next edit to undo. Clears the edits to redo.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::UnknownShape`] if the command names a shape the document lacks;
+    /// [`CommandError::CropOutsideImage`] for a crop that is empty or reaches outside the image.
+    /// The document is then unchanged.
+    pub fn apply(&mut self, command: Command) -> Result<(), CommandError> {
+        let edit = match command {
+            Command::Add { shape, style } => {
+                let id = ShapeId(self.next_id);
+                self.next_id += 1;
+                Edit::Insert {
+                    index: self.document.shapes.len(),
+                    entry: ShapeEntry { id, shape, style },
+                }
+            }
+            Command::Remove(id) => Edit::Remove(id),
+            Command::Replace { id, shape, style } => Edit::Replace(ShapeEntry { id, shape, style }),
+            Command::SetCrop(crop) => Edit::SetCrop(crop),
+        };
+        let inverse = edit.apply(&mut self.document)?;
+        self.undo.push(inverse);
+        self.redo.clear();
+        Ok(())
+    }
+
+    /// Reverts the latest edit not yet undone. `Ok(false)` if there is none.
+    ///
+    /// # Errors
+    ///
+    /// A [`CommandError`] only if the history no longer matches its document, which no sequence
+    /// of [`History`] calls produces.
+    pub fn undo(&mut self) -> Result<bool, CommandError> {
+        replay(&mut self.undo, &mut self.redo, &mut self.document)
+    }
+
+    /// Makes the latest undone edit again. `Ok(false)` if there is none.
+    ///
+    /// # Errors
+    ///
+    /// As for [`History::undo`].
+    pub fn redo(&mut self) -> Result<bool, CommandError> {
+        replay(&mut self.redo, &mut self.undo, &mut self.document)
+    }
+}
+
+fn replay(
+    from: &mut Vec<Edit>,
+    to: &mut Vec<Edit>,
+    document: &mut Document,
+) -> Result<bool, CommandError> {
+    let Some(edit) = from.pop() else {
+        return Ok(false);
+    };
+    to.push(edit.apply(document)?);
+    Ok(true)
+}
+
+impl Edit {
+    fn apply(self, document: &mut Document) -> Result<Edit, CommandError> {
+        match self {
+            Edit::Insert { index, entry } => {
+                let id = entry.id;
+                document.shapes.insert(index, entry);
+                Ok(Edit::Remove(id))
+            }
+            Edit::Remove(id) => {
+                let index = position(document, id)?;
+                let entry = document.shapes.remove(index);
+                Ok(Edit::Insert { index, entry })
+            }
+            Edit::Replace(entry) => {
+                let index = position(document, entry.id)?;
+                Ok(Edit::Replace(mem::replace(
+                    &mut document.shapes[index],
+                    entry,
+                )))
+            }
+            Edit::SetCrop(crop) => {
+                if let Some(rect) = crop
+                    && !inside_image(rect, document)
+                {
+                    return Err(CommandError::CropOutsideImage(rect));
+                }
+                Ok(Edit::SetCrop(mem::replace(&mut document.crop, crop)))
+            }
+        }
+    }
+}
+
+fn position(document: &Document, id: ShapeId) -> Result<usize, CommandError> {
+    document
+        .shapes
+        .iter()
+        .position(|entry| entry.id == id)
+        .ok_or(CommandError::UnknownShape(id))
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "image sides are far below 2^24, where f32 stops being exact"
+)]
+fn inside_image(rect: RectF, document: &Document) -> bool {
+    rect.width > 0.0
+        && rect.height > 0.0
+        && rect.x >= 0.0
+        && rect.y >= 0.0
+        && rect.x + rect.width <= document.base.width() as f32
+        && rect.y + rect.height <= document.base.height() as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::document::{Color, Fill, RgbaImage};
+
+    fn history() -> History {
+        let base = RgbaImage::new(100, 50, vec![0; 100 * 50 * 4]).unwrap();
+        History::new(Document::new(Arc::new(base)))
+    }
+
+    fn rect(x: f32) -> Shape {
+        Shape::Rect {
+            rect: RectF {
+                x,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            fill: Fill::Hollow,
+        }
+    }
+
+    fn style() -> Style {
+        Style {
+            color: Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            stroke_width: 3.0,
+        }
+    }
+
+    fn add(history: &mut History, shape: Shape) -> ShapeId {
+        history
+            .apply(Command::Add {
+                shape,
+                style: style(),
+            })
+            .unwrap();
+        history.document().shapes().last().unwrap().id
+    }
+
+    fn xs(history: &History) -> Vec<f32> {
+        history
+            .document()
+            .shapes()
+            .iter()
+            .map(|entry| match &entry.shape {
+                Shape::Rect { rect, .. } => rect.x,
+                other => panic!("tests add only rectangles, got {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn f38_undo_then_redo_returns_to_each_state_in_turn() {
+        let mut history = history();
+        let empty = history.document().clone();
+        add(&mut history, rect(1.0));
+        let added = history.document().clone();
+
+        assert!(history.undo().unwrap());
+        assert_eq!(history.document(), &empty);
+        assert!(history.redo().unwrap());
+        assert_eq!(history.document(), &added);
+    }
+
+    #[test]
+    fn f38_undo_is_unlimited() {
+        let mut history = history();
+        for step in 0..1000_u16 {
+            add(&mut history, rect(f32::from(step)));
+        }
+        for _ in 0..1000 {
+            assert!(history.undo().unwrap());
+        }
+        assert_eq!(history.document().shapes(), []);
+        assert!(!history.undo().unwrap());
+    }
+
+    #[test]
+    fn f38_undoing_a_removal_puts_the_shape_back_at_its_stacking_position() {
+        let mut history = history();
+        add(&mut history, rect(1.0));
+        let middle = add(&mut history, rect(2.0));
+        add(&mut history, rect(3.0));
+
+        history.apply(Command::Remove(middle)).unwrap();
+        assert_eq!(xs(&history), [1.0, 3.0]);
+        history.undo().unwrap();
+        assert_eq!(xs(&history), [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn f38_undoing_a_replace_restores_the_previous_shape_in_place() {
+        let mut history = history();
+        let first = add(&mut history, rect(1.0));
+        add(&mut history, rect(2.0));
+
+        history
+            .apply(Command::Replace {
+                id: first,
+                shape: rect(9.0),
+                style: style(),
+            })
+            .unwrap();
+        assert_eq!(xs(&history), [9.0, 2.0]);
+        history.undo().unwrap();
+        assert_eq!(xs(&history), [1.0, 2.0]);
+    }
+
+    #[test]
+    fn f38_undoing_a_crop_restores_the_previous_crop() {
+        let mut history = history();
+        let crop = RectF {
+            x: 10.0,
+            y: 10.0,
+            width: 20.0,
+            height: 20.0,
+        };
+        history.apply(Command::SetCrop(Some(crop))).unwrap();
+        assert_eq!(history.document().crop(), Some(crop));
+        history.undo().unwrap();
+        assert_eq!(history.document().crop(), None);
+    }
+
+    #[test]
+    fn f38_a_new_edit_discards_the_edits_to_redo() {
+        let mut history = history();
+        add(&mut history, rect(1.0));
+        history.undo().unwrap();
+        add(&mut history, rect(2.0));
+
+        assert!(!history.redo().unwrap());
+        assert_eq!(xs(&history), [2.0]);
+    }
+
+    #[test]
+    fn f38_an_added_shape_never_reuses_an_undone_shapes_id() {
+        let mut history = history();
+        let undone = add(&mut history, rect(1.0));
+        history.undo().unwrap();
+        let added = add(&mut history, rect(2.0));
+
+        assert_ne!(undone, added);
+    }
+
+    #[test]
+    fn f38_a_command_on_an_unknown_shape_changes_nothing() {
+        let mut history = history();
+        let id = add(&mut history, rect(1.0));
+        history.undo().unwrap();
+        let before = history.document().clone();
+
+        assert_eq!(
+            history.apply(Command::Remove(id)),
+            Err(CommandError::UnknownShape(id))
+        );
+        assert_eq!(history.document(), &before);
+        assert!(
+            history.redo().unwrap(),
+            "a failed command keeps the edits to redo"
+        );
+    }
+
+    #[test]
+    fn f37_a_crop_must_be_a_non_empty_area_inside_the_image() {
+        let mut history = history();
+        let outside = [
+            (-1.0, 0.0, 10.0, 10.0),
+            (0.0, 0.0, 101.0, 10.0),
+            (0.0, 45.0, 10.0, 10.0),
+            (5.0, 5.0, 0.0, 10.0),
+            (5.0, 5.0, 10.0, -1.0),
+            (f32::NAN, 0.0, 10.0, 10.0),
+        ];
+        for (x, y, width, height) in outside {
+            let crop = RectF {
+                x,
+                y,
+                width,
+                height,
+            };
+            assert!(
+                matches!(
+                    history.apply(Command::SetCrop(Some(crop))),
+                    Err(CommandError::CropOutsideImage(_))
+                ),
+                "{crop:?} was accepted"
+            );
+        }
+        assert_eq!(history.document().crop(), None);
+    }
+
+    #[test]
+    fn f38_history_of_a_document_with_shapes_issues_fresh_ids() {
+        let mut first = history();
+        let existing = add(&mut first, rect(1.0));
+        let mut second = History::new(first.document().clone());
+
+        assert_ne!(add(&mut second, rect(2.0)), existing);
+    }
+}

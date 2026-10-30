@@ -1,27 +1,101 @@
 use std::sync::Arc;
 
 /// A capture with annotations on top. All coordinates are in base-image physical pixels.
+/// Changed only through [`crate::History`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
-    pub base: Arc<RgbaImage>,
-    /// Drawn in order, so the last shape is on top.
-    pub shapes: Vec<ShapeEntry>,
+    pub(crate) base: Arc<RgbaImage>,
+    pub(crate) shapes: Vec<ShapeEntry>,
+    pub(crate) crop: Option<RectF>,
 }
+
+impl Document {
+    /// A document showing `base` with no shapes and no crop.
+    #[must_use]
+    pub fn new(base: Arc<RgbaImage>) -> Self {
+        Self {
+            base,
+            shapes: Vec::new(),
+            crop: None,
+        }
+    }
+
+    /// The capture, never changed by an edit.
+    #[must_use]
+    pub fn base(&self) -> &Arc<RgbaImage> {
+        &self.base
+    }
+
+    /// In drawing order, so the last shape is on top.
+    #[must_use]
+    pub fn shapes(&self) -> &[ShapeEntry] {
+        &self.shapes
+    }
+
+    /// The part of the base image an export keeps, inside the image with a positive size;
+    /// `None` keeps all of it.
+    #[must_use]
+    pub fn crop(&self) -> Option<RectF> {
+        self.crop
+    }
+}
+
+/// Names one shape for the life of its [`crate::History`]; never reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ShapeId(pub(crate) u64);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapeEntry {
+    pub id: ShapeId,
     pub shape: Shape,
     pub style: Style,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
-    Arrow { from: PointF, to: PointF },
-    Line { from: PointF, to: PointF },
-    Rect(RectF),
-    Ellipse(RectF),
+    Arrow {
+        from: PointF,
+        to: PointF,
+    },
+    Line {
+        from: PointF,
+        to: PointF,
+    },
+    Rect {
+        rect: RectF,
+        fill: Fill,
+    },
+    Ellipse {
+        rect: RectF,
+        fill: Fill,
+    },
     Pen(Vec<PointF>),
+    /// `size` is the font size in pixels.
+    Text {
+        at: PointF,
+        text: String,
+        size: f32,
+    },
+    /// Multiplies the image under it by the style colour.
     Highlight(RectF),
+    /// Replaces the pixels under it on export (C-22).
+    Redact {
+        rect: RectF,
+        mode: RedactMode,
+    },
+}
+
+/// Whether a rectangle or ellipse is drawn as an outline or filled with the style colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fill {
+    Hollow,
+    Solid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RedactMode {
+    Pixelate,
+    Blur,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn rgba_image_rejects_a_zero_width_or_height() {
+    fn f01_rgba_image_rejects_a_zero_width_or_height() {
         for (width, height) in [(0, 0), (0, 3), (2, 0)] {
             assert_eq!(
                 RgbaImage::new(width, height, Vec::new()),
