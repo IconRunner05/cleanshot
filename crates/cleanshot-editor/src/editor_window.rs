@@ -7,9 +7,9 @@ use cleanshot_core::{
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
-    KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString, Styled,
-    Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px,
-    size,
+    KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window, WindowBounds,
+    WindowHandle, WindowOptions, div, px, size,
 };
 
 use crate::Error;
@@ -114,7 +114,7 @@ impl EditorView {
         cx.notify();
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let gpui = event.keystroke.modifiers;
         let modifiers = Modifiers {
             ctrl: gpui.control,
@@ -138,6 +138,8 @@ impl EditorView {
             KeyAction::PickTool(tool) => self.tool = tool,
             KeyAction::FitView => self.placement = None,
             KeyAction::HoldToPan => self.space_held = true,
+            KeyAction::FocusNext => window.focus_next(cx),
+            KeyAction::FocusPrevious => window.focus_prev(cx),
         }
         cx.notify();
     }
@@ -166,6 +168,9 @@ impl EditorView {
 
 fn notice_panel(text: SharedString, theme: Theme) -> impl IntoElement {
     div()
+        .id("notice")
+        .role(Role::Status)
+        .aria_label(text.clone())
         .absolute()
         .bottom(px(16.0))
         .left(px(16.0))
@@ -219,17 +224,27 @@ impl Render for EditorView {
             on_pointer,
         );
         div()
+            .id("editor")
+            .role(Role::Application)
+            .aria_label("Cleanshot editor")
             .size_full()
             .relative()
             .bg(theme.backdrop)
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|view, event, _, cx| view.key_down(event, cx)))
+            .on_key_down(cx.listener(Self::key_down))
             .on_key_up(cx.listener(|view, event: &KeyUpEvent, _, _| {
                 if event.keystroke.key == "space" {
                     view.space_held = false;
                 }
             }))
-            .child(canvas.size_full())
+            .child(
+                div()
+                    .id("screenshot")
+                    .role(Role::Image)
+                    .aria_label("Screenshot")
+                    .size_full()
+                    .child(canvas.size_full()),
+            )
             .child(toolbar(self.tool, theme, on_pick))
             .children(
                 self.notice

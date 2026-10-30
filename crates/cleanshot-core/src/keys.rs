@@ -12,6 +12,9 @@ pub enum KeyAction {
     FitView,
     /// Space went down: a drag pans the image until it comes up (F-39).
     HoldToPan,
+    /// Tab and Shift+Tab: the next or previous toolbar button (F-58).
+    FocusNext,
+    FocusPrevious,
 }
 
 /// The editor's key map. `key` is the key's name as the editor's toolkit gives it: one
@@ -35,6 +38,8 @@ pub fn action_for_key(key: &str, modifiers: Modifiers, dragging: bool) -> Option
         "delete" => Some(KeyAction::RemoveSelected),
         "escape" => Some(KeyAction::ClearSelection),
         "space" => Some(KeyAction::HoldToPan),
+        "tab" if modifiers.shift => Some(KeyAction::FocusPrevious),
+        "tab" => Some(KeyAction::FocusNext),
         _ => single_char(key)
             .and_then(Tool::for_key)
             .map(KeyAction::PickTool),
@@ -108,6 +113,22 @@ mod tests {
         assert_eq!(
             action_for_key("space", NONE, false),
             Some(KeyAction::HoldToPan)
+        );
+    }
+
+    #[test]
+    fn f58_tab_moves_focus_forward_and_shift_tab_back() {
+        let shift = Modifiers {
+            shift: true,
+            ..NONE
+        };
+        assert_eq!(
+            action_for_key("tab", NONE, false),
+            Some(KeyAction::FocusNext)
+        );
+        assert_eq!(
+            action_for_key("tab", shift, false),
+            Some(KeyAction::FocusPrevious)
         );
     }
 

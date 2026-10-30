@@ -3,8 +3,8 @@ use std::borrow::Cow;
 use cleanshot_core::Tool;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AssetSource, BoxShadow, ElementId, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, div, hsla, point, px, svg,
+    AssetSource, BoxShadow, ElementId, InteractiveElement, IntoElement, ParentElement, Role,
+    SharedString, StatefulInteractiveElement, Styled, Toggled, div, hsla, point, px, svg,
 };
 
 use crate::theme::{ACCENT, ON_ACCENT, Theme};
@@ -53,17 +53,17 @@ impl AssetSource for Icons {
     }
 }
 
-/// The tools in toolbar order, each with its Lucide icon and its name as the user reads it.
-pub(crate) const TOOLS: [(Tool, &str, &str); 9] = [
-    (Tool::Select, "mouse-pointer-2", "Select (V)"),
-    (Tool::Arrow, "move-up-right", "Arrow (A)"),
-    (Tool::Line, "minus", "Line (L)"),
-    (Tool::Rectangle, "square", "Rectangle (R)"),
-    (Tool::Ellipse, "circle", "Ellipse (O)"),
-    (Tool::Pen, "pencil", "Pen (P)"),
-    (Tool::Highlighter, "highlighter", "Highlighter (H)"),
-    (Tool::Redact, "square-dashed", "Redact (X)"),
-    (Tool::Crop, "crop", "Crop (C)"),
+/// The tools in toolbar order, each with its Lucide icon, its accessible name and its key.
+pub(crate) const TOOLS: [(Tool, &str, &str, char); 9] = [
+    (Tool::Select, "mouse-pointer-2", "Select", 'V'),
+    (Tool::Arrow, "move-up-right", "Arrow", 'A'),
+    (Tool::Line, "minus", "Line", 'L'),
+    (Tool::Rectangle, "square", "Rectangle", 'R'),
+    (Tool::Ellipse, "circle", "Ellipse", 'O'),
+    (Tool::Pen, "pencil", "Pen", 'P'),
+    (Tool::Highlighter, "highlighter", "Highlighter", 'H'),
+    (Tool::Redact, "square-dashed", "Redact", 'X'),
+    (Tool::Crop, "crop", "Crop", 'C'),
 ];
 
 /// The floating tool panel (CHARTER 4: dark material, hairline border, soft shadow, 12 px
@@ -73,11 +73,22 @@ pub(crate) fn toolbar(
     theme: Theme,
     on_pick: impl Fn(Tool, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
-    let buttons = TOOLS.map(|(tool, icon, name)| {
+    let buttons = TOOLS.map(|(tool, icon, name, key)| {
         let on_pick = on_pick.clone();
         let picked = tool == current;
         div()
             .id(ElementId::Name(name.into()))
+            .focusable()
+            .tab_stop(true)
+            .role(Role::RadioButton)
+            .aria_label(name)
+            .aria_keyshortcuts(key.to_string())
+            .aria_toggled(if picked {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
+            .focus_visible(|button| button.border_2().border_color(ACCENT))
             .size(px(28.0))
             .flex()
             .items_center()
@@ -105,6 +116,8 @@ pub(crate) fn toolbar(
         .child(
             div()
                 .id("toolbar")
+                .role(Role::Toolbar)
+                .aria_label("Tools")
                 .occlude()
                 .flex()
                 .gap(px(4.0))
@@ -130,15 +143,22 @@ mod tests {
 
     #[test]
     fn f30_every_toolbar_button_has_an_embedded_icon_and_names_its_key() {
-        for (tool, icon, name) in TOOLS {
+        for (tool, icon, name, key) in TOOLS {
             let svg = Icons.load(&format!("icons/{icon}.svg")).unwrap().unwrap();
             assert!(
                 svg.starts_with(b"<!-- @license lucide-static v1.65.0"),
                 "{icon}"
             );
-            let key = name.chars().rev().nth(1).unwrap();
             assert_eq!(Tool::for_key(key), Some(tool), "{name}");
         }
         assert_eq!(Icons.load("icons/not-an-icon.svg").unwrap(), None);
+    }
+
+    #[test]
+    fn f58_every_toolbar_button_has_its_own_accessible_name_and_key() {
+        let names: std::collections::HashSet<_> = TOOLS.iter().map(|tool| tool.2).collect();
+        let keys: std::collections::HashSet<_> = TOOLS.iter().map(|tool| tool.3).collect();
+        assert_eq!(names.len(), TOOLS.len());
+        assert_eq!(keys.len(), TOOLS.len());
     }
 }
