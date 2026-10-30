@@ -48,4 +48,9 @@ fn main() {
     let resource_file = out_dir.join("cleanshot.res");
     std::fs::write(&resource_file, resources).expect("OUT_DIR is writable");
     println!("cargo:rustc-link-arg-bins={}", resource_file.display());
+    // GPUI imports comctl32 v6 functions, so a test that opens the editor needs the manifest
+    // as much as the exe does. The field-test probe has no test target.
+    if std::env::var("CARGO_PKG_NAME").as_deref() == Ok("cleanshot-app") {
+        println!("cargo:rustc-link-arg-tests={}", resource_file.display());
+    }
 }

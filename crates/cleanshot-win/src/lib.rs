@@ -1,3 +1,5 @@
+#[cfg(feature = "ui-automation-test")]
+pub mod accessibility;
 pub mod capture;
 pub mod clipboard;
 #[cfg(feature = "field-test")]
@@ -59,6 +61,9 @@ pub enum Error {
     PrintScreenSetting(#[source] windows::core::Error),
     #[error("the tray has no icon to show a warning from")]
     WarningNotShown,
+    #[cfg(feature = "ui-automation-test")]
+    #[error("UI Automation could not read this process's windows")]
+    Accessibility(#[source] windows::core::Error),
     #[error("the pointer is on no captured monitor")]
     NoMonitorAtPointer,
     #[error("no display output could be duplicated")]

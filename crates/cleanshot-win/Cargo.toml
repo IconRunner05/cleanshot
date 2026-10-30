@@ -33,6 +33,10 @@ windows = { version = "0.62.2", features = [
 ] }
 
 [features]
+# What the UI Automation tests read; never in cleanshot.exe.
+ui-automation-test = [
+    "windows/Win32_UI_Accessibility",
+]
 field-test = [
     "windows/Win32_UI_HiDpi",
 ]

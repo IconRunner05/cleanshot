@@ -9,11 +9,18 @@ publish.workspace = true
 name = "cleanshot"
 path = "src/main.rs"
 
+[[test]]
+name = "accessibility"
+harness = false
+
 [dependencies]
 cleanshot-core.workspace = true
 cleanshot-render.workspace = true
 cleanshot-win.workspace = true
 cleanshot-editor.workspace = true
+
+[dev-dependencies]
+cleanshot-win = { workspace = true, features = ["ui-automation-test"] }
 
 [lints]
 workspace = true
