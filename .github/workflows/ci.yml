@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a ci/ branch replaces that branch's older run. Every other ref gets a group
+# of its own, so each commit on main keeps its run.
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/heads/ci/') && format('{0}-{1}', github.workflow, github.ref) || github.run_id }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
