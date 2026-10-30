@@ -46,6 +46,7 @@ struct EditorView {
     deliver: Option<Deliver>,
     focus: FocusHandle,
     _appearance: Subscription,
+    _activation: Subscription,
 }
 
 impl EditorView {
@@ -59,6 +60,14 @@ impl EditorView {
         window.focus(&focus, cx);
         // F-58: redraw in the new theme when the system switches between light and dark.
         let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
+        // D-46: Space released in another window never sends this one its key-up.
+        let activation = cx.observe_window_activation(window, |view, window, cx| {
+            if !window.is_window_active() {
+                view.space_held = false;
+                view.pan = None;
+                cx.notify();
+            }
+        });
         Self {
             base: render_image(document.base()),
             document: Rc::new(document.clone()),
@@ -74,6 +83,7 @@ impl EditorView {
             deliver,
             focus,
             _appearance: appearance,
+            _activation: activation,
         }
     }
 
