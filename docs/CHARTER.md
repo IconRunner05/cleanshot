@@ -244,6 +244,7 @@ The types live in `crates/cleanshot-core`; read them there. All coordinates are 
 - **Shape**: one annotation (arrow, line, rectangle, ellipse, pen, text, highlight, redact), drawn with a `Style`. Step, bubble and spotlight arrive with M4.
 - **Command**: one edit (add, remove, replace a shape, set the crop). Every edit is a command (F-38).
 - **History**: a document with its edits, undoable and redoable without limit. It issues shape ids (D-26).
+- **Settings**: what `cleanshot.toml` holds, read field by field so a bad value keeps its default (F-54, D-30).
 
 ### Runtime model
 
@@ -446,6 +447,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-30 | 2026-10-30 | `cleanshot.toml` holds `save_folder` (absent = Pictures\Screenshots), `save_format` (png, jpg, bmp), `after_capture` (toolbar, copy), `show_thumbnail`, `show_pointer`, `remember_last_selection`, `start_with_windows` and a `[hotkeys]` table (`region`, `last_region`, `full_screen`, `window`, `capture_panel`). A hotkey is any of Ctrl, Alt, Shift and Win once each, then one key (A-Z, 0-9, F1-F24, PrtSc), joined by `+`. Defaults: png, toolbar, thumbnail on, the other switches off, and the default global hotkeys under F-51. Reading never fails: unknown keys are ignored, an unusable value keeps its default and is reported, and a file over 64 KB or not TOML gives every default | decided (owner) | The file format and the two defaults the open questions held were the owner's call, made 2026-10-30. Parsed into a TOML table and decoded field by field inside core, so nothing untyped leaves it (C-13) and one bad value cannot cost the rest (F-54) |
 | D-27 | 2026-10-30 | Redaction replaces every pixel its rectangle touches, in stacking order: shapes under it are redacted with the image, shapes over it stay. Pixelate sets each cell (at most 16 px, spread evenly over the area) to its average; blur pixelates first, then smooths the cells. A one-pixel area is one cell and keeps its value | assumed | A plain blur can be partly reversed; blurring cell averages leaks nothing pixelate does not. Even cells leave no 1-pixel cell that would keep an original pixel (C-22). Stacking order lets a user annotate on top of a redaction |
 | D-26 | 2026-10-30 | Commands carry no "before" value: applying an edit computes the edit that reverts it, which undo and redo replay. Only `History` issues `ShapeId`s and never reuses one | assumed | A stored "before" can disagree with the document; a computed one cannot (STANDARDS.md: never store what can be derived). Ids from one place stay unique across undo and redo |
 | D-21 | 2026-10-30 | Release exes are built by GitHub Actions on `windows-latest`; builds on the Macs or Linux are scan-only. The repo is public | decided | Owner's call. `gpui_windows` compiles its shaders into the exe only when built on Windows; a cross-built exe would read them from the build machine's disk and cannot render. Public repos get hosted runners for free |
@@ -476,7 +478,6 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 - [ ] winget `PackageIdentifier` / publisher name and the GitHub owner.
 - [ ] Code-signing route (signing service and who holds the certificate).
 - [ ] ARM64 in the v1.0 release, or after?
-- [ ] Default after capture: show toolbar (proposed) or copy immediately? Thumbnail on by default (proposed: on)?
 
 ### Known risks
 
