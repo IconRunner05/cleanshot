@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Code is formatted
+        run: cargo fmt --all -- --check
+
+      - name: Clippy reports no warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests pass on x64
+        run: cargo test --workspace
+
+      - name: Workspace builds for ARM64 (C-06)
+        run: cargo build --workspace --target aarch64-pc-windows-msvc
+
+      - name: Install cargo-deny and cargo-audit
+        run: cargo install --locked cargo-deny@0.19.7 cargo-audit@0.22.2
+
+      - name: Dependencies pass bans, licences, advisories and sources (C-10, CHARTER 6)
+        run: cargo deny check
+
+      - name: No dependency has a published advisory
+        run: cargo audit
