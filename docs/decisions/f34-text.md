@@ -28,7 +28,7 @@ The export copies GPUI's own glyph path, so this note starts from it (`gpui_wind
 ```rust
 Text(TextBlock)
 
-pub struct TextBlock { at: PointF, text: String, size: f32, em_extent: SizeF }
+pub struct TextBlock { at: PointF, text: String, size: f32, em_width: f32 }
 ```
 
 - `at` is the top-left corner of the first line box, in image pixels.
@@ -36,13 +36,14 @@ pub struct TextBlock { at: PointF, text: String, size: f32, em_extent: SizeF }
   user pressed Enter, so display and export never have to agree on a break.
 - `size` is the font size in image pixels. The line height is `LINE_HEIGHT * size`, with
   `LINE_HEIGHT` = 1.25.
-- `em_extent` is the laid-out box (layout box, not ink bounds) at size 1, in ems. It is measured
-  with `NATURAL` measuring mode, where advances scale linearly with size, so
-  `extent() = em_extent * size` stays right through any resize. Measuring at size 1 rules out the
-  zoom level at commit time.
-- The fields are private. The only constructor is `TextBlock::new(at, text, size, em_extent)`, and
+- `em_width` is the widest line's layout width (layout box, not ink bounds) at size 1, in ems. It is
+  measured with `NATURAL` measuring mode, where advances scale linearly with size, so it stays
+  right through any resize. Measuring at size 1 rules out the zoom level at commit time. The height
+  is not stored: with hard breaks only it is `lines * LINE_HEIGHT * size`, and `extent()` derives
+  both.
+- The fields are private. The only constructor is `TextBlock::new(at, text, size, em_width)`, and
   only an edit commit calls it, with a fresh measurement of `text`. A move changes `at`, and a resize
-  changes `size`. No operation changes `text` without a new `TextBlock`, so `em_extent` cannot go
+  changes `size`. No operation changes `text` without a new `TextBlock`, so `em_width` cannot go
   stale.
 - Core uses `extent()` for `shape_at`, the selection outline and `Drag`. Core has no font engine,
   so the measurement must come in from outside.
@@ -155,7 +156,7 @@ commit says so, records the platform part as not yet proven, and does not tick t
   - the same Latin text laid out from the system font collection gives a different mask, which
     shows the embedded Inter was used;
   - an emoji gives at least one mask with `Some` colour.
-- Drift: for each sample text, the editor's `em_extent` (GPUI, at size 1) and win's layout box at
+- Drift: for each sample text, the editor's `em_width` (GPUI, at size 1) and win's layout width at
   size 1 agree within 1/64 em. This compares layout box to layout box.
 
 ## Who does what
@@ -192,5 +193,5 @@ decision is needed.
 ## Review answers taken
 
 - One undo step per committed edit, with the IME and unchanged-text rules above.
-- `em_extent` stays stored, measured at size 1, behind `TextBlock`'s only constructor.
+- `em_width` stays stored, measured at size 1, behind `TextBlock`'s only constructor.
 - SemiBold only.

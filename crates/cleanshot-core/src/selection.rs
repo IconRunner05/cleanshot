@@ -53,8 +53,8 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
                 .map(|(handle, at)| (Handle::Box(handle), at))
                 .collect()
         }),
-        // Text has no extent in core until the text tool measures it, so it has no handles.
-        Shape::Text { .. } => Vec::new(),
+        // F-34: text resizes by its font size, which the text tool does not offer yet.
+        Shape::Text(_) => Vec::new(),
     }
 }
 
@@ -131,11 +131,7 @@ pub fn moved(shape: &Shape, offset: PointF) -> Shape {
             fill: *fill,
         },
         Shape::Pen(points) => Shape::Pen(points.iter().copied().map(shift).collect()),
-        Shape::Text { at, text, size } => Shape::Text {
-            at: shift(*at),
-            text: text.clone(),
-            size: *size,
-        },
+        Shape::Text(block) => Shape::Text(block.moved_to(shift(block.at()))),
         Shape::Highlight(rect) => Shape::Highlight(shift_rect(*rect)),
         Shape::Redact { rect, mode } => Shape::Redact {
             rect: shift_rect(*rect),
@@ -187,7 +183,7 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
             | Shape::Redact { .. },
             Handle::Start | Handle::End,
         )
-        | (Shape::Text { .. }, Handle::Box(_) | Handle::Start | Handle::End) => shape.clone(),
+        | (Shape::Text(_), Handle::Box(_) | Handle::Start | Handle::End) => shape.clone(),
     }
 }
 
@@ -234,8 +230,7 @@ fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
             rect,
             fill: Fill::Solid,
         } => inside_ellipse(grown(*rect, reach), point),
-        // Text has no extent in core until the text tool measures it, so nothing hits it yet.
-        Shape::Text { .. } => false,
+        Shape::Text(block) => inside(grown(block.extent(), reach), point),
     }
 }
 
@@ -261,7 +256,8 @@ fn bounds(shape: &Shape) -> Option<RectF> {
             }
             Some(box_between(low, high))
         }
-        Shape::Arrow { .. } | Shape::Line { .. } | Shape::Text { .. } => None,
+        Shape::Text(block) => Some(block.extent()),
+        Shape::Arrow { .. } | Shape::Line { .. } => None,
     }
 }
 
@@ -525,6 +521,29 @@ mod tests {
         assert_eq!(
             moved(&shape, point(3.0, -2.0)),
             Shape::Pen(vec![point(3.0, -2.0), point(13.0, 3.0)])
+        );
+    }
+
+    fn text(at: PointF) -> Shape {
+        Shape::Text(crate::TextBlock::new(at, "two\nlines".into(), 20.0, 3.0).unwrap())
+    }
+
+    #[test]
+    fn f34_a_text_shape_is_hit_anywhere_in_its_measured_lines() {
+        let (history, ids) = document(vec![text(point(10.0, 10.0))]);
+        let document = history.document();
+
+        assert_eq!(shape_at(document, point(69.0, 59.0), 0.0), Some(ids[0]));
+        assert_eq!(shape_at(document, point(72.0, 30.0), 0.0), None);
+        assert_eq!(shape_at(document, point(30.0, 62.0), 0.0), None);
+        assert_eq!(shape_at(document, point(73.0, 30.0), 2.0), Some(ids[0]));
+    }
+
+    #[test]
+    fn f34_a_move_shifts_a_text_shape_and_keeps_its_text_and_size() {
+        assert_eq!(
+            moved(&text(point(10.0, 10.0)), point(3.0, -2.0)),
+            text(point(13.0, 8.0))
         );
     }
 

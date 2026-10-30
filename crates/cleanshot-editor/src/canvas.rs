@@ -283,7 +283,7 @@ fn paint_shape(shape: &Shape, style: Style, fit: &Fit, window: &mut Window) {
             paint_polygon(window, stroke, &points, false, color);
         }
         // The editor's text and redaction previews come with their tools, after the M0 gate.
-        Shape::Text { .. } | Shape::Redact { .. } => {}
+        Shape::Text(_) | Shape::Redact { .. } => {}
     }
 }
 

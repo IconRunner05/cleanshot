@@ -139,7 +139,7 @@ fn constrained_handle(shape: &Shape, handle: Handle, to: PointF) -> PointF {
         Shape::Rect { .. }
         | Shape::Ellipse { .. }
         | Shape::Pen(_)
-        | Shape::Text { .. }
+        | Shape::Text(_)
         | Shape::Highlight(_)
         | Shape::Redact { .. } => None,
     };

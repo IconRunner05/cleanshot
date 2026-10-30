@@ -1,6 +1,8 @@
 use std::f32::consts::{FRAC_PI_6, PI};
 use std::sync::Arc;
 
+use crate::TextBlock;
+
 /// A capture with annotations on top. All coordinates are in base-image physical pixels.
 /// Changed only through [`crate::History`].
 #[derive(Clone, Debug, PartialEq)]
@@ -77,12 +79,7 @@ pub enum Shape {
         fill: Fill,
     },
     Pen(Vec<PointF>),
-    /// `size` is the font size in pixels.
-    Text {
-        at: PointF,
-        text: String,
-        size: f32,
-    },
+    Text(TextBlock),
     /// Multiplies the image under it by the style colour.
     Highlight(RectF),
     /// Replaces the pixels under it on export (C-22).

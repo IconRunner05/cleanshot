@@ -28,5 +28,5 @@ pub use settings::{
     AfterCapture, Hotkey, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers, SaveFormat, Settings,
     SettingsProblem,
 };
-pub use text::{GlyphMask, GlyphMaskError, TextMasks};
+pub use text::{GlyphMask, GlyphMaskError, LINE_HEIGHT, TextBlock, TextBlockError, TextMasks};
 pub use tool::Tool;

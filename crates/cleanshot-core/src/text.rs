@@ -1,6 +1,83 @@
 use std::collections::HashMap;
 
-use crate::{Color, ShapeId};
+use crate::{Color, PointF, RectF, ShapeId};
+
+/// A line's height as a multiple of the font size.
+pub const LINE_HEIGHT: f32 = 1.25;
+
+/// A text shape: lines broken only where the user pressed Enter, with the width DirectWrite or
+/// GPUI measured for exactly this text (F-34).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBlock {
+    at: PointF,
+    text: String,
+    size: f32,
+    em_width: f32,
+}
+
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum TextBlockError {
+    #[error("a font size must be a positive number of pixels, but it is {0}")]
+    SizeNotPositive(f32),
+    #[error("a measured width must be a finite number of ems, at least 0, but it is {0}")]
+    WidthNotMeasured(f32),
+}
+
+impl TextBlock {
+    /// Text whose first line box has its top-left corner at `at`, `size` pixels high per em,
+    /// with `em_width` the widest line's layout width at size 1, measured for this `text`.
+    ///
+    /// # Errors
+    ///
+    /// [`TextBlockError::SizeNotPositive`] unless `size` is finite and above 0;
+    /// [`TextBlockError::WidthNotMeasured`] unless `em_width` is finite and at least 0.
+    pub fn new(at: PointF, text: String, size: f32, em_width: f32) -> Result<Self, TextBlockError> {
+        if !(size.is_finite() && size > 0.0) {
+            return Err(TextBlockError::SizeNotPositive(size));
+        }
+        if !(em_width.is_finite() && em_width >= 0.0) {
+            return Err(TextBlockError::WidthNotMeasured(em_width));
+        }
+        Ok(Self {
+            at,
+            text,
+            size,
+            em_width,
+        })
+    }
+
+    #[must_use]
+    pub fn at(&self) -> PointF {
+        self.at
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The font size in image pixels.
+    #[must_use]
+    pub fn size(&self) -> f32 {
+        self.size
+    }
+
+    /// The layout box of every line, in image pixels.
+    #[must_use]
+    pub fn extent(&self) -> RectF {
+        let lines = self.text.split('\n').fold(0.0, |lines, _| lines + 1.0);
+        RectF {
+            x: self.at.x,
+            y: self.at.y,
+            width: self.em_width * self.size,
+            height: lines * LINE_HEIGHT * self.size,
+        }
+    }
+
+    pub(crate) fn moved_to(&self, at: PointF) -> Self {
+        Self { at, ..self.clone() }
+    }
+}
 
 /// The 8-bit coverage of one glyph layer of a text shape, in image pixels, as DirectWrite
 /// rasterised it for export (F-34).
@@ -121,6 +198,36 @@ mod tests {
             })
         );
         assert!(GlyphMask::new(0, 0, u32::MAX, u32::MAX, vec![0; 1], None).is_err());
+    }
+
+    #[test]
+    fn f34_a_text_block_needs_a_positive_size_and_a_measured_width() {
+        let at = PointF { x: 0.0, y: 0.0 };
+        let block = |size, em_width| TextBlock::new(at, "Hi".into(), size, em_width);
+        assert!(block(24.0, 0.0).is_ok());
+        assert_eq!(block(0.0, 1.0), Err(TextBlockError::SizeNotPositive(0.0)));
+        assert!(block(f32::NAN, 1.0).is_err());
+        assert!(block(f32::INFINITY, 1.0).is_err());
+        assert_eq!(
+            block(24.0, -0.5),
+            Err(TextBlockError::WidthNotMeasured(-0.5))
+        );
+        assert!(block(24.0, f32::NAN).is_err());
+    }
+
+    #[test]
+    fn f34_a_text_extent_is_its_measured_width_by_one_line_height_per_line() {
+        let at = PointF { x: 10.0, y: 20.0 };
+        let block = |text: &str| TextBlock::new(at, text.into(), 16.0, 2.5).unwrap();
+        let extent = |width, height| RectF {
+            x: 10.0,
+            y: 20.0,
+            width,
+            height,
+        };
+        assert_eq!(block("one").extent(), extent(40.0, 20.0));
+        assert_eq!(block("one\ntwo\n").extent(), extent(40.0, 60.0));
+        assert_eq!(block("").extent(), extent(40.0, 20.0));
     }
 
     #[test]

@@ -138,7 +138,7 @@ fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry) {
         ),
         Shape::Redact { rect, mode } => redact(pixmap, *rect, *mode),
         // Text waits for DirectWrite glyph masks handed in by the caller.
-        Shape::Text { .. } => {}
+        Shape::Text(_) => {}
     }
 }
 
