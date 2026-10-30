@@ -10,7 +10,7 @@ use gpui::{
 use crate::Error;
 use crate::canvas::{document_canvas, render_image};
 
-pub(crate) struct EditorView {
+struct EditorView {
     document: Rc<Document>,
     base: Arc<RenderImage>,
 }
@@ -24,7 +24,7 @@ impl Render for EditorView {
 }
 
 /// An open editor window. Dropping it leaves the window open; [`EditorWindow::close`] closes it.
-pub struct EditorWindow(pub(crate) WindowHandle<EditorView>);
+pub struct EditorWindow(WindowHandle<EditorView>);
 
 /// Opens an editor window showing `document`.
 ///
