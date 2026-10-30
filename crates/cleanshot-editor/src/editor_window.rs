@@ -1,25 +1,158 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use cleanshot_core::{Document, RgbaImage};
+use cleanshot_core::{
+    Command, CommandError, Document, Drag, History, Press, RgbaImage, ShapeId, Tool,
+};
 use gpui::{
-    App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, RenderImage, Styled,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
+    App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
+    ParentElement, Render, RenderImage, SharedString, Styled, TitlebarOptions, Window,
+    WindowBounds, WindowHandle, WindowOptions, div, px, rgba, size,
 };
 
 use crate::Error;
-use crate::canvas::{document_canvas, render_image};
+use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
 
 struct EditorView {
+    history: History,
+    /// The history's document as last drawn; renewed after each edit.
     document: Rc<Document>,
     base: Arc<RenderImage>,
+    tool: Tool,
+    selected: Option<ShapeId>,
+    drag: Option<Drag>,
+    shift: bool,
+    /// Why the last edit was refused, until the next press.
+    notice: Option<SharedString>,
+    focus: FocusHandle,
+}
+
+impl EditorView {
+    fn new(document: Document, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        Self {
+            base: render_image(document.base()),
+            document: Rc::new(document.clone()),
+            history: History::new(document),
+            tool: Tool::Select,
+            selected: None,
+            drag: None,
+            shift: false,
+            notice: None,
+            focus,
+        }
+    }
+
+    fn pointer(&mut self, pointer: Pointer, cx: &mut Context<Self>) {
+        match pointer {
+            Pointer::Press { at, reach } => {
+                let Press { selected, drag } =
+                    Drag::press(&self.document, self.tool, self.selected, at, reach);
+                (self.selected, self.drag, self.notice) = (selected, drag, None);
+            }
+            Pointer::Move { at, shift } => {
+                let Some(drag) = &mut self.drag else {
+                    return;
+                };
+                drag.extend(at);
+                self.shift = shift;
+            }
+            Pointer::Release { shift } => {
+                let Some(drag) = self.drag.take() else {
+                    return;
+                };
+                if let Some(command) = drag.command(shift) {
+                    self.apply(command);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.control || modifiers.alt || modifiers.platform || self.drag.is_some() {
+            return;
+        }
+        let key = event.keystroke.key.as_str();
+        if key == "delete" {
+            if let Some(id) = self.selected.take() {
+                self.apply(Command::Remove(id));
+            }
+        } else if key == "escape" {
+            self.selected = None;
+        } else if let Some(tool) = single_char(key).and_then(Tool::for_key) {
+            self.tool = tool;
+        } else {
+            return;
+        }
+        cx.notify();
+    }
+
+    fn apply(&mut self, command: Command) {
+        match self.history.apply(command) {
+            Ok(()) => self.document = Rc::new(self.history.document().clone()),
+            Err(error) => self.notice = Some(refusal(&error).into()),
+        }
+    }
+}
+
+fn notice_panel(text: SharedString) -> impl IntoElement {
+    div()
+        .absolute()
+        .bottom(px(16.0))
+        .left(px(16.0))
+        .px(px(12.0))
+        .py(px(8.0))
+        .rounded(px(7.0))
+        .bg(rgba(0x1c1c_1eb8))
+        .text_color(gpui::white())
+        .text_size(px(13.0))
+        .child(text)
+}
+
+fn single_char(key: &str) -> Option<char> {
+    let mut chars = key.chars();
+    let first = chars.next()?;
+    chars.next().is_none().then_some(first)
+}
+
+fn refusal(error: &CommandError) -> &'static str {
+    match error {
+        CommandError::UnknownShape(_) => {
+            "That shape is no longer in the image, so nothing changed."
+        }
+        CommandError::CropOutsideImage(_) => {
+            "A crop needs an area inside the image, so the crop was not changed."
+        }
+    }
 }
 
 impl Render for EditorView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity().downgrade();
+        let on_pointer: OnPointer = Rc::new(move |pointer, _, cx| {
+            // Err only means the window closed, and with it everything the pointer could change.
+            let _ = view.update(cx, |view, cx| view.pointer(pointer, cx));
+        });
+        let overlay = Overlay {
+            preview: self.drag.as_ref().and_then(|drag| drag.command(self.shift)),
+            selected: self.selected,
+        };
+        let canvas = document_canvas(
+            Rc::clone(&self.document),
+            Arc::clone(&self.base),
+            overlay,
+            on_pointer,
+        );
         div()
             .size_full()
-            .child(document_canvas(Rc::clone(&self.document), Arc::clone(&self.base)).size_full())
+            .relative()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|view, event, _, cx| view.key_down(event, cx)))
+            .child(canvas.size_full())
+            .children(self.notice.clone().map(notice_panel))
     }
 }
 
@@ -42,12 +175,10 @@ pub(crate) fn open_with(
     document: Document,
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
-    let base = render_image(document.base());
-    let document = Rc::new(document);
     let options = window_options(cx);
     cx.open_window(options, |window, cx| {
         on_open(window, cx);
-        cx.new(|_| EditorView { document, base })
+        cx.new(|cx| EditorView::new(document, window, cx))
     })
     .map(EditorWindow)
     .map_err(|error| Error::WindowOpen(error.into()))

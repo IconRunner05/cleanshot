@@ -3,11 +3,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeEntry, arrow_head,
+    Color, Command, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeId, Style, arrow_head,
+    handles,
 };
 use gpui::{
-    BorderStyle, Bounds, Canvas, PathBuilder, Pixels, Point, RenderImage, Rgba, Window, canvas,
-    fill, point, px, quad, size, transparent_black,
+    App, BorderStyle, Bounds, Canvas, DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PathBuilder, Pixels, Point, RenderImage, Rgba, Window, canvas, fill, point, px,
+    quad, size, transparent_black,
 };
 use smallvec::smallvec;
 
@@ -23,8 +25,51 @@ pub(crate) fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
     Arc::new(RenderImage::new(smallvec![image::Frame::new(buffer)]))
 }
 
-/// Draws the document's base image scaled to fit the element, with its shapes on top.
-pub(crate) fn document_canvas(document: Rc<Document>, base: Arc<RenderImage>) -> Canvas<()> {
+/// The pointer on the canvas, in image pixels, clamped to the image.
+#[derive(Clone, Copy)]
+pub(crate) enum Pointer {
+    /// The left button went down over the canvas. `reach` is how far from `at`, in image
+    /// pixels, a press still grips a shape or handle.
+    Press {
+        at: PointF,
+        reach: f32,
+    },
+    Move {
+        at: PointF,
+        shift: bool,
+    },
+    Release {
+        shift: bool,
+    },
+}
+
+pub(crate) type OnPointer = Rc<dyn Fn(Pointer, &mut Window, &mut App)>;
+
+/// What is drawn over the document: the edit a drag would make, and the selected shape's
+/// handles.
+pub(crate) struct Overlay {
+    pub preview: Option<Command>,
+    pub selected: Option<ShapeId>,
+}
+
+/// How far from a shape or handle, in screen pixels, a press still grips it.
+const POINTER_REACH: f32 = 6.0;
+const HANDLE_SIZE: f32 = 8.0;
+const ACCENT: Rgba = Rgba {
+    r: 0.0,
+    g: 0.478,
+    b: 1.0,
+    a: 1.0,
+};
+
+/// Draws the document's base image scaled to fit the element, its shapes with `overlay`'s
+/// preview on top, and reports the pointer to `on_pointer`, following a drag outside the element.
+pub(crate) fn document_canvas(
+    document: Rc<Document>,
+    base: Arc<RenderImage>,
+    overlay: Overlay,
+    on_pointer: OnPointer,
+) -> Canvas<()> {
     canvas(
         |_, _, _| {},
         move |bounds, (), window, _| {
@@ -38,14 +83,100 @@ pub(crate) fn document_canvas(document: Rc<Document>, base: Arc<RenderImage>) ->
                 0,
                 false,
             );
+            let (replaced, added) = match &overlay.preview {
+                Some(Command::Replace { id, shape, style }) => (Some((*id, shape, style)), None),
+                Some(Command::Add { shape, style }) => (None, Some((shape, style))),
+                Some(Command::Remove(_) | Command::SetCrop(_)) | None => (None, None),
+            };
+            let mut selected_shape = None;
             for entry in document.shapes() {
-                paint_shape(entry, &fit, window);
+                let (shape, style) = match replaced {
+                    Some((id, shape, style)) if id == entry.id => (shape, style),
+                    Some(_) | None => (&entry.shape, &entry.style),
+                };
+                paint_shape(shape, *style, &fit, window);
+                if overlay.selected == Some(entry.id) {
+                    selected_shape = Some(shape);
+                }
             }
+            if let Some((shape, style)) = added {
+                paint_shape(shape, *style, &fit, window);
+            }
+            if let Some(Command::SetCrop(Some(crop))) = &overlay.preview {
+                paint_outline(fit.bounds(*crop), window);
+            }
+            if let Some(shape) = selected_shape {
+                for (_, at) in handles(shape) {
+                    paint_handle(fit.point(at), window);
+                }
+            }
+            listen_for_pointer(&fit, bounds, &on_pointer, window);
         },
     )
 }
 
+fn listen_for_pointer(
+    fit: &Fit,
+    bounds: Bounds<Pixels>,
+    on_pointer: &OnPointer,
+    window: &mut Window,
+) {
+    let fit = *fit;
+    let image_point = move |position| fit.image_point(position);
+    let reach = POINTER_REACH / fit.scale;
+    let on_press = Rc::clone(on_pointer);
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble
+            && event.button == MouseButton::Left
+            && bounds.contains(&event.position)
+        {
+            let at = image_point(event.position);
+            on_press(Pointer::Press { at, reach }, window, cx);
+        }
+    });
+    let on_move = Rc::clone(on_pointer);
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) {
+            let at = image_point(event.position);
+            let shift = event.modifiers.shift;
+            on_move(Pointer::Move { at, shift }, window, cx);
+        }
+    });
+    let on_release = Rc::clone(on_pointer);
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+            let shift = event.modifiers.shift;
+            on_release(Pointer::Release { shift }, window, cx);
+        }
+    });
+}
+
+fn paint_outline(bounds: Bounds<Pixels>, window: &mut Window) {
+    window.paint_quad(quad(
+        bounds,
+        px(0.0),
+        transparent_black(),
+        px(1.0),
+        ACCENT,
+        BorderStyle::Dashed,
+    ));
+}
+
+fn paint_handle(centre: Point<Pixels>, window: &mut Window) {
+    let side = px(HANDLE_SIZE);
+    let bounds = Bounds::centered_at(centre, size(side, side));
+    window.paint_quad(quad(
+        bounds,
+        px(2.0),
+        gpui::white(),
+        px(1.0),
+        ACCENT,
+        BorderStyle::Solid,
+    ));
+}
+
 /// Maps document pixels onto the element: uniform scale, centred.
+#[derive(Clone, Copy)]
 struct Fit {
     origin: Point<Pixels>,
     scale: f32,
@@ -77,6 +208,17 @@ impl Fit {
         }
     }
 
+    /// The image pixel under `position`, clamped to the image.
+    fn image_point(&self, position: Point<Pixels>) -> PointF {
+        let offset = position - self.origin;
+        let image =
+            |screen: Pixels, side: Pixels| f32::from(screen.clamp(px(0.0), side)) / self.scale;
+        PointF {
+            x: image(offset.x, self.image_bounds.size.width),
+            y: image(offset.y, self.image_bounds.size.height),
+        }
+    }
+
     fn point(&self, point_f: PointF) -> Point<Pixels> {
         self.origin + point(px(point_f.x * self.scale), px(point_f.y * self.scale))
     }
@@ -92,11 +234,11 @@ impl Fit {
     }
 }
 
-fn paint_shape(entry: &ShapeEntry, fit: &Fit, window: &mut Window) {
-    let color = rgba(entry.style.color);
-    let width = px(entry.style.stroke_width * fit.scale);
+fn paint_shape(shape: &Shape, style: Style, fit: &Fit, window: &mut Window) {
+    let color = rgba(style.color);
+    let width = px(style.stroke_width * fit.scale);
     let stroke = PathBuilder::stroke(width);
-    match &entry.shape {
+    match shape {
         Shape::Line { from, to } => paint_polygon(
             window,
             stroke,
@@ -112,7 +254,7 @@ fn paint_shape(entry: &ShapeEntry, fit: &Fit, window: &mut Window) {
                 false,
                 color,
             );
-            let head = arrow_head(*from, *to, entry.style.stroke_width).map(|p| fit.point(p));
+            let head = arrow_head(*from, *to, style.stroke_width).map(|p| fit.point(p));
             paint_polygon(window, stroke, &head, false, color);
         }
         Shape::Rect {
@@ -206,6 +348,16 @@ mod tests {
         assert_eq!(small.scale, 0.5);
         assert_eq!(small.image_bounds.size, size(px(50.0), px(25.0)));
         assert_eq!(small.image_bounds.center(), point(px(500.0), px(300.0)));
+    }
+
+    #[test]
+    fn f30_a_pointer_outside_the_image_lands_on_its_nearest_edge() {
+        let small = fit(100, 50, 2.0);
+        let image_point = |x, y| small.image_point(point(px(x), px(y)));
+        assert_eq!(image_point(475.0, 287.5), PointF { x: 0.0, y: 0.0 });
+        assert_eq!(image_point(500.0, 300.0), PointF { x: 50.0, y: 25.0 });
+        assert_eq!(image_point(0.0, 1000.0), PointF { x: 0.0, y: 50.0 });
+        assert_eq!(image_point(900.0, -5.0), PointF { x: 100.0, y: 0.0 });
     }
 
     #[test]
