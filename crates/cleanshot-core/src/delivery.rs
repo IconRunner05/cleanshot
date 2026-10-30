@@ -29,4 +29,6 @@ pub enum DeliveryError {
     NoFreeName { name: String },
     #[error("the file could not be written to {folder:?}")]
     NotWritten { folder: PathBuf },
+    #[error("the text could not be drawn")]
+    TextNotDrawn,
 }

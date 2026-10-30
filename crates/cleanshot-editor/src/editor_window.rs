@@ -240,6 +240,9 @@ fn delivery_notice(outcome: Result<Delivered, DeliveryError>) -> SharedString {
         Err(DeliveryError::NotWritten { folder }) => {
             format!("Could not write to {}", folder.display()).into()
         }
+        Err(DeliveryError::TextNotDrawn) => {
+            "The text could not be drawn, so nothing was copied or saved".into()
+        }
     }
 }
 
