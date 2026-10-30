@@ -66,9 +66,9 @@ impl TextEdit {
     /// Types or pastes `new` over `range`, or over the composition or selection when `range` is
     /// `None`, ending any composition with the caret after it. Line breaks become `\n`.
     pub fn replace(&mut self, range: Option<Range<usize>>, new: &str) {
-        let start = self.splice(range, new);
-        self.anchor = start;
-        self.head = start;
+        let end = self.splice(range, new);
+        self.anchor = end;
+        self.head = end;
         self.marked = None;
     }
 
