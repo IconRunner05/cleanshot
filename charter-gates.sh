@@ -3,9 +3,7 @@
 #   ./charter-gates.sh                     Mac or Linux fold bar: builds a scan-only exe with
 #                                          cargo-xwin and scans its imports and headers.
 #   ./charter-gates.sh --release-exe PATH  CI on windows-latest: scans the shipped exe, size too.
-# The scan-only exe is never shipped and cannot render: gpui_windows embeds its shaders only
-# when built on Windows, so the scan-only profile builds it with debug assertions, which make
-# it read its HLSL from this machine's cargo checkout (D-21).
+# D-21: the scan-only exe is never shipped and cannot render.
 set -euo pipefail
 shopt -s nullglob
 cd "$(dirname "$0")"
