@@ -27,6 +27,7 @@ fn main() {
         }
     };
     let (settings, warning) = load_settings();
+    let region = settings.hotkeys.region;
     let settings = Rc::new(settings);
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
@@ -34,7 +35,7 @@ fn main() {
     cleanshot_editor::run(move |cx| {
         let app = cx.to_async();
         let overlay = Rc::clone(&overlay);
-        let created = Tray::create(move |request| {
+        let created = Tray::create(region, move |request| {
             let overlay = Rc::clone(&overlay);
             let settings = Rc::clone(&settings);
             let closer = app.clone();
@@ -51,10 +52,19 @@ fn main() {
             .detach();
         })
         .expect("the tray window and icon are created");
-        if let Some(warning) = warning
-            && let Err(error) = created.warn("Cleanshot settings", &warning)
-        {
-            eprintln!("{warning} ({error})");
+        // F-51: a hotkey another program holds is shown, not swallowed.
+        let taken = match created.region_hotkey() {
+            (_, Ok(())) => None,
+            (hotkey, Err(_)) => Some(format!(
+                "{hotkey} is taken by another program, so it does not capture. Choose another region hotkey in cleanshot.toml."
+            )),
+        };
+        let warnings: Vec<String> = warning.into_iter().chain(taken).collect();
+        if !warnings.is_empty() {
+            let text = warnings.join(" ");
+            if let Err(error) = created.warn("Cleanshot", &text) {
+                eprintln!("{text} ({error})");
+            }
         }
         launched_tray.replace(Some(created));
     })

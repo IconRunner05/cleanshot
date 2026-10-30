@@ -157,10 +157,9 @@ fn report_tray(report: &mut String) {
         Ok(run) => {
             line(report, "Foreground window", run.foreground_window);
             line(report, "Tray icon shown (NIM_ADD)", run.icon_shown);
-            for (hotkey, registered) in &run.hotkeys {
-                let registered = registered.as_ref().map(|()| "registered");
-                line(report, &format!("Hotkey {hotkey:?}"), outcome(&registered));
-            }
+            let (hotkey, registered) = &run.hotkey;
+            let registered = registered.as_ref().map(|()| "registered");
+            line(report, &format!("Hotkey {hotkey}"), outcome(&registered));
             line(report, "SendInput events accepted (of 6)", run.inputs_sent);
             let delivered = run.hotkey_delivered_after.map_or_else(
                 || format!("not within {HOTKEY_TIMEOUT:?}"),

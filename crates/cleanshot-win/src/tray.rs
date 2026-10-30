@@ -1,10 +1,11 @@
 use std::cell::{Cell, RefCell};
 
+use cleanshot_core::{Hotkey, Key};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, UnregisterHotKey,
-    VK_SNAPSHOT,
+    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
+    UnregisterHotKey, VK_F1, VK_SNAPSHOT,
 };
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY,
@@ -36,30 +37,7 @@ pub enum Request {
     Exit,
 }
 
-/// A global hotkey that captures a region (F-51).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Hotkey {
-    PrintScreen,
-    CtrlShift4,
-}
-
-impl Hotkey {
-    const ALL: [Self; 2] = [Self::PrintScreen, Self::CtrlShift4];
-
-    fn id(self) -> i32 {
-        match self {
-            Self::PrintScreen => 1,
-            Self::CtrlShift4 => 2,
-        }
-    }
-
-    fn keys(self) -> (HOT_KEY_MODIFIERS, u32) {
-        match self {
-            Self::PrintScreen => (MOD_NOREPEAT, u32::from(VK_SNAPSHOT.0)),
-            Self::CtrlShift4 => (MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, u32::from(b'4')),
-        }
-    }
-}
+const REGION_HOTKEY_ID: i32 = 1;
 
 struct State {
     on_request: RefCell<Box<dyn FnMut(Request)>>,
@@ -84,18 +62,22 @@ impl State {
 /// requests. Dropping it removes the icon and the hotkeys.
 pub struct Tray {
     window: HWND,
-    hotkeys: Vec<(Hotkey, Result<(), Error>)>,
+    region: Hotkey,
+    region_registered: Result<(), Error>,
 }
 
 impl Tray {
-    /// Adds the tray icon and registers every [`Hotkey`]. A hotkey another program holds is
-    /// reported by [`Tray::hotkeys`], not as an error here.
+    /// Adds the tray icon and registers `region` as the region-capture hotkey (F-51). A hotkey
+    /// another program holds is reported by [`Tray::region_hotkey`], not as an error here.
     ///
     /// # Errors
     ///
     /// [`Error::Window`] if the hidden window cannot be created. A shell that refuses the icon
     /// is not an error: the icon appears when the taskbar next starts.
-    pub fn create(on_request: impl FnMut(Request) + 'static) -> Result<Self, Error> {
+    pub fn create(
+        region: Hotkey,
+        on_request: impl FnMut(Request) + 'static,
+    ) -> Result<Self, Error> {
         // SAFETY: a null module name asks for this exe's own handle, which lives as long as
         // the process.
         let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
@@ -139,24 +121,21 @@ impl Tray {
         // frees this Box once.
         unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize) };
 
-        let hotkeys = Hotkey::ALL
-            .into_iter()
-            .map(|hotkey| {
-                let (modifiers, key) = hotkey.keys();
-                // SAFETY: `window` was created above on this thread.
-                let result = unsafe { RegisterHotKey(Some(window), hotkey.id(), modifiers, key) };
-                (hotkey, result.map_err(Error::HotkeyTaken))
-            })
-            .collect();
-        let tray = Self { window, hotkeys };
+        let (modifiers, key) = virtual_key(region);
+        // SAFETY: `window` was created above on this thread.
+        let registered = unsafe { RegisterHotKey(Some(window), REGION_HOTKEY_ID, modifiers, key) };
+        let tray = Self {
+            window,
+            region,
+            region_registered: registered.map_err(Error::HotkeyTaken),
+        };
         tray.state().icon_shown.set(add_icon(window));
         Ok(tray)
     }
 
-    /// The outcome of registering each [`Hotkey`].
-    #[must_use]
-    pub fn hotkeys(&self) -> &[(Hotkey, Result<(), Error>)] {
-        &self.hotkeys
+    /// The region hotkey and whether Windows registered it.
+    pub fn region_hotkey(&self) -> (Hotkey, Result<(), &Error>) {
+        (self.region, self.region_registered.as_ref().copied())
     }
 
     /// Whether the shell took the icon at the last try: at creation or when the taskbar last
@@ -196,12 +175,10 @@ impl Tray {
 
 impl Drop for Tray {
     fn drop(&mut self) {
-        for (hotkey, result) in &self.hotkeys {
-            if result.is_ok() {
-                // SAFETY: the hotkey was registered on this window, which is still alive.
-                let unregistered = unsafe { UnregisterHotKey(Some(self.window), hotkey.id()) };
-                debug_assert!(unregistered.is_ok(), "a registered hotkey unregisters");
-            }
+        if self.region_registered.is_ok() {
+            // SAFETY: the hotkey was registered on this window, which is still alive.
+            let unregistered = unsafe { UnregisterHotKey(Some(self.window), REGION_HOTKEY_ID) };
+            debug_assert!(unregistered.is_ok(), "a registered hotkey unregisters");
         }
         let icon = icon_data(self.window);
         // SAFETY: `icon` names this window's icon. Deleting an icon the shell lost is harmless,
@@ -230,6 +207,30 @@ fn signal_capture(window: HWND) -> Result<(), Error> {
     // SAFETY: posting copies no memory; the window may close first, which fails the post.
     unsafe { PostMessageW(Some(window), capture_signal(), WPARAM(0), LPARAM(0)) }
         .map_err(Error::NoRunningTray)
+}
+
+/// The `RegisterHotKey` modifiers and virtual key for `hotkey`. Auto-repeat never fires it
+/// twice.
+fn virtual_key(hotkey: Hotkey) -> (HOT_KEY_MODIFIERS, u32) {
+    let held = hotkey.modifiers();
+    let mut modifiers = MOD_NOREPEAT;
+    for (down, flag) in [
+        (held.ctrl, MOD_CONTROL),
+        (held.alt, MOD_ALT),
+        (held.shift, MOD_SHIFT),
+        (held.win, MOD_WIN),
+    ] {
+        if down {
+            modifiers |= flag;
+        }
+    }
+    // Letters and digits are their own upper-case ASCII codes as virtual keys.
+    let key = match hotkey.key() {
+        Key::Letter(letter) | Key::Digit(letter) => u32::from(letter),
+        Key::Function(number) => u32::from(VK_F1.0) + u32::from(number) - 1,
+        Key::PrintScreen => u32::from(VK_SNAPSHOT.0),
+    };
+    (modifiers, key)
 }
 
 fn capture_signal() -> u32 {
@@ -379,16 +380,54 @@ mod tests {
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_F24;
     use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW};
 
     use super::*;
+
+    fn hotkey(text: &str) -> Hotkey {
+        Hotkey::parse(text).expect("a valid hotkey")
+    }
+
+    #[test]
+    fn f51_a_hotkey_maps_to_its_modifiers_and_virtual_key() {
+        assert_eq!(
+            virtual_key(hotkey("Ctrl+Shift+4")),
+            (MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, u32::from(b'4'))
+        );
+        assert_eq!(
+            virtual_key(hotkey("Win+Alt+Q")),
+            (MOD_WIN | MOD_ALT | MOD_NOREPEAT, u32::from(b'Q'))
+        );
+        assert_eq!(
+            virtual_key(hotkey("F24")),
+            (MOD_NOREPEAT, u32::from(VK_F24.0))
+        );
+        assert_eq!(
+            virtual_key(hotkey("PrtSc")),
+            (MOD_NOREPEAT, u32::from(VK_SNAPSHOT.0))
+        );
+    }
+
+    #[test]
+    fn f51_a_hotkey_already_held_is_reported_not_fatal() {
+        let first = Tray::create(hotkey("Ctrl+Alt+F15"), |_| {}).expect("the first tray");
+        let second = Tray::create(hotkey("Ctrl+Alt+F15"), |_| {}).expect("the second tray");
+        assert!(first.region_hotkey().1.is_ok());
+        assert!(matches!(
+            second.region_hotkey().1,
+            Err(Error::HotkeyTaken(_))
+        ));
+    }
 
     #[test]
     fn c14_a_second_launch_signal_asks_the_tray_to_capture() {
         let received = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&received);
-        let tray = Tray::create(move |request| sink.borrow_mut().push(request))
-            .expect("the tray window is created");
+        let tray = Tray::create(hotkey("Ctrl+Alt+F13"), move |request| {
+            sink.borrow_mut().push(request);
+        })
+        .expect("the tray window is created");
         // Other tests' trays share the window class, so the signal goes to this test's own.
         signal_capture(tray.window).expect("the tray window takes the signal");
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -406,7 +445,8 @@ mod tests {
 
     #[test]
     fn f54_a_settings_warning_shows_from_the_tray_icon() {
-        let tray = Tray::create(|_| {}).expect("the tray window is created");
+        let tray =
+            Tray::create(hotkey("Ctrl+Alt+F14"), |_| {}).expect("the tray window is created");
         assert!(tray.icon_shown(), "the runner's shell takes the icon");
         let long = "x".repeat(400);
         tray.warn("Cleanshot settings", &long)

@@ -35,7 +35,9 @@ use windows::core::{PCWSTR, w};
 
 use crate::Error;
 use crate::capture::monitor_handles;
-use crate::tray::{Hotkey, Request, Tray};
+use cleanshot_core::Hotkey;
+
+use crate::tray::{Request, Tray};
 
 /// The Windows release, read from the registry.
 #[derive(Debug)]
@@ -72,7 +74,7 @@ pub struct Adapter {
 #[derive(Debug)]
 pub struct TrayRun {
     pub icon_shown: bool,
-    pub hotkeys: Vec<(Hotkey, Result<(), String>)>,
+    pub hotkey: (Hotkey, Result<(), String>),
     pub foreground_window: bool,
     pub inputs_sent: u32,
     pub hotkey_delivered_after: Option<Duration>,
@@ -263,13 +265,18 @@ pub fn d3d11_feature_level(driver: Driver) -> Result<u32, windows::core::Error> 
 /// Creates the tray, presses Ctrl+Shift+4 with `SendInput`, and pumps this thread's messages
 /// until the tray reports the hotkey or `timeout` passes.
 ///
+/// # Panics
+///
+/// Never: the probe's hotkey text is fixed and valid.
+///
 /// # Errors
 ///
 /// [`Error::Window`] if the tray window cannot be created.
 pub fn drive_tray(timeout: Duration) -> Result<TrayRun, Error> {
     let delivered = Rc::new(Cell::new(false));
     let seen = Rc::clone(&delivered);
-    let tray = Tray::create(move |request| {
+    let region = Hotkey::parse("Ctrl+Shift+4").expect("Ctrl+Shift+4 is a valid hotkey");
+    let tray = Tray::create(region, move |request| {
         if request == Request::CaptureRegion {
             seen.set(true);
         }
@@ -283,16 +290,10 @@ pub fn drive_tray(timeout: Duration) -> Result<TrayRun, Error> {
     }
     Ok(TrayRun {
         icon_shown: tray.icon_shown(),
-        hotkeys: tray
-            .hotkeys()
-            .iter()
-            .map(|(hotkey, result)| {
-                (
-                    *hotkey,
-                    result.as_ref().copied().map_err(ToString::to_string),
-                )
-            })
-            .collect(),
+        hotkey: {
+            let (hotkey, registered) = tray.region_hotkey();
+            (hotkey, registered.map_err(ToString::to_string))
+        },
         foreground_window,
         inputs_sent,
         hotkey_delivered_after: delivered.get().then(|| start.elapsed()),
