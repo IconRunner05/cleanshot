@@ -6,7 +6,7 @@ version = 2
 yanked = "deny"
 ignore = [
     { id = "RUSTSEC-2024-0436", reason = "D-14: paste is unmaintained, not vulnerable; gpui pulls it in through image, exr and pulp" },
-    { id = "RUSTSEC-2026-0192", reason = "D-14: ttf-parser is unmaintained, not vulnerable; gpui pulls it in through usvg and fontdb" },
+    { id = "RUSTSEC-2026-0192", reason = "D-14: ttf-parser is unmaintained, not vulnerable; gpui depends on it directly and through usvg" },
     { id = "RUSTSEC-2026-0206", reason = "D-14: rustybuzz is unmaintained, not vulnerable; gpui pulls it in through usvg" },
 ]
 
