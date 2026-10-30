@@ -1,4 +1,4 @@
-use std::f32::consts::{FRAC_PI_6, TAU};
+use std::f32::consts::{FRAC_PI_6, PI, TAU};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -136,7 +136,7 @@ fn arrow_head(tail: Point<Pixels>, tip: Point<Pixels>, width: Pixels) -> [Point<
     let length = f32::from(width * 4.0).max(10.0);
     let angle = f32::from(tip.y - tail.y).atan2(f32::from(tip.x - tail.x));
     let barb = |side: f32| {
-        let barb_angle = angle + std::f32::consts::PI + side * FRAC_PI_6;
+        let barb_angle = angle + PI + side * FRAC_PI_6;
         tip + point(px(length * barb_angle.cos()), px(length * barb_angle.sin()))
     };
     [barb(1.0), tip, barb(-1.0)]
