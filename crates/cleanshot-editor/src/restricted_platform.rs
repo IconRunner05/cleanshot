@@ -16,8 +16,7 @@ use gpui::{
 use gpui_windows::WindowsPlatform;
 use smallvec::SmallVec;
 
-// C-11: GPUI is only ever given this type, so WindowsPlatform is never a `dyn Platform` and
-// the methods stubbed below are not linked into the exe.
+// C-11: GPUI only ever gets this type, so WindowsPlatform's stubbed methods are not linked.
 pub(crate) struct RestrictedPlatform(pub(crate) WindowsPlatform);
 
 impl Platform for RestrictedPlatform {
