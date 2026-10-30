@@ -15,3 +15,11 @@ clean, well organised, and written by a human for a human.
   one row in CHARTER §11 with `Status: assumed`.
 - **Tests named after IDs** where they prove a criterion (`f21_never_overwrites_existing_file`).
 - **Charter in step.** A behaviour change updates `docs/CHARTER.md` in the same change set.
+- **Windows-only tests are shown red and green on GitHub Actions.** The commit message quotes
+  the failure line, the URLs of a `ci/<seat>-red` run (fix removed) and a `ci/<seat>` run, and
+  the SHA and tree hash the green run built (amending the message changes the SHA, not the
+  tree). Check:
+  - `gh run view <green> --json headSha` equals the named SHA;
+  - `git rev-parse <named>^{tree}` equals `git rev-parse <commit>^{tree}`;
+  - the red run's head commit has the named SHA as its parent, and `gh run view <red>` fails on
+    that test for the reason quoted.
