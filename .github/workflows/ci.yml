@@ -37,7 +37,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Tests pass on x64
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
       - name: Workspace builds for ARM64 (C-06)
         run: cargo build --workspace --target aarch64-pc-windows-msvc
@@ -52,6 +52,8 @@ jobs:
         run: cargo audit
 
   release-exe:
+    # A red twin proves a test fails; only the checks job runs tests.
+    if: ${{ !endsWith(github.ref, '-red') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,6 +92,7 @@ jobs:
           if-no-files-found: error
 
   probe:
+    if: ${{ !endsWith(github.ref, '-red') }}
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
