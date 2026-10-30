@@ -54,11 +54,13 @@ impl TextBlock {
         })
     }
 
+    /// The top-left corner of the first line box, in image pixels.
     #[must_use]
     pub fn at(&self) -> PointF {
         self.at
     }
 
+    /// The text, with `\n` where the user broke a line.
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text

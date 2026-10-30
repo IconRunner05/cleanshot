@@ -30,6 +30,7 @@ impl TextEdit {
         }
     }
 
+    /// The text as typed so far, composition included.
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
@@ -92,6 +93,7 @@ impl TextEdit {
         self.marked = None;
     }
 
+    /// Ctrl+A: selects the whole text, with the caret at its end.
     pub fn select_all(&mut self) {
         self.anchor = 0;
         self.head = utf16_len(&self.text);
