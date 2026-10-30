@@ -28,7 +28,7 @@ pub(crate) fn document_canvas(document: Rc<Document>, base: Arc<RenderImage>) ->
     canvas(
         |_, _, _| {},
         move |bounds, (), window, _| {
-            let fit = Fit::new(bounds, &document);
+            let fit = Fit::new(bounds, &document, window.scale_factor());
             // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
             let _ = window.paint_image(
                 fit.image_bounds,
@@ -57,11 +57,13 @@ impl Fit {
         clippy::cast_precision_loss,
         reason = "image sides are far below 2^24, where f32 stops being exact"
     )]
-    fn new(bounds: Bounds<Pixels>, document: &Document) -> Self {
+    fn new(bounds: Bounds<Pixels>, document: &Document, scale_factor: f32) -> Self {
         let width = document.base().width() as f32;
         let height = document.base().height() as f32;
-        let scale =
-            (f32::from(bounds.size.width) / width).min(f32::from(bounds.size.height) / height);
+        // D-41: one image pixel never covers more than one device pixel, so a small capture stays sharp.
+        let scale = (f32::from(bounds.size.width) / width)
+            .min(f32::from(bounds.size.height) / height)
+            .min(1.0 / scale_factor);
         let fitted = size(px(width * scale), px(height * scale));
         let origin = bounds.origin
             + point(
@@ -184,5 +186,31 @@ fn rgba(color: Color) -> Rgba {
         g: f32::from(color.g) / 255.0,
         b: f32::from(color.b) / 255.0,
         a: f32::from(color.a) / 255.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fit(image_width: u32, image_height: u32, scale_factor: f32) -> Fit {
+        let pixels = vec![0; image_width as usize * image_height as usize * 4];
+        let image = RgbaImage::new(image_width, image_height, pixels).unwrap();
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(1000.0), px(600.0)));
+        Fit::new(bounds, &Document::new(Arc::new(image)), scale_factor)
+    }
+
+    #[test]
+    fn f23_a_small_capture_is_drawn_one_image_pixel_per_device_pixel() {
+        let small = fit(100, 50, 2.0);
+        assert_eq!(small.scale, 0.5);
+        assert_eq!(small.image_bounds.size, size(px(50.0), px(25.0)));
+        assert_eq!(small.image_bounds.center(), point(px(500.0), px(300.0)));
+    }
+
+    #[test]
+    fn f23_a_large_capture_shrinks_to_fit_the_canvas() {
+        let large = fit(4000, 1200, 1.0);
+        assert_eq!(large.image_bounds.size, size(px(1000.0), px(300.0)));
     }
 }

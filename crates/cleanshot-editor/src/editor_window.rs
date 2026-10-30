@@ -1,10 +1,10 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use cleanshot_core::Document;
+use cleanshot_core::{Document, RgbaImage};
 use gpui::{
-    App, AppContext, Context, IntoElement, ParentElement, Render, RenderImage, Styled, Window,
-    WindowHandle, WindowOptions, div,
+    App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, RenderImage, Styled,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 
 use crate::Error;
@@ -26,13 +26,13 @@ impl Render for EditorView {
 /// An open editor window. Dropping it leaves the window open; [`EditorWindow::close`] closes it.
 pub struct EditorWindow(WindowHandle<EditorView>);
 
-/// Opens an editor window showing `document`.
+/// Opens an editor window on `capture`, with no shapes yet (F-23).
 ///
 /// # Errors
 ///
 /// [`Error::WindowOpen`] if the platform cannot create the window.
-pub fn open(cx: &mut App, document: Document) -> Result<EditorWindow, Error> {
-    open_with(cx, document, |_, _| {})
+pub fn open(cx: &mut App, capture: RgbaImage) -> Result<EditorWindow, Error> {
+    open_with(cx, Document::new(Arc::new(capture)), |_, _| {})
 }
 
 /// [`open`], running `on_open` on the new window before its first frame. `on_open` runs only
@@ -44,7 +44,8 @@ pub(crate) fn open_with(
 ) -> Result<EditorWindow, Error> {
     let base = render_image(document.base());
     let document = Rc::new(document);
-    cx.open_window(WindowOptions::default(), |window, cx| {
+    let options = window_options(cx);
+    cx.open_window(options, |window, cx| {
         on_open(window, cx);
         cx.new(|_| EditorView { document, base })
     })
@@ -57,5 +58,28 @@ impl EditorWindow {
     pub fn close(self, cx: &mut App) {
         // Err only means the window is already gone, which is the state close asks for.
         let _ = self.0.update(cx, |_, window, _| window.remove_window());
+    }
+}
+
+/// D-41: the editor opens centred, filling most of the primary display, under the native
+/// title bar so the Windows caption buttons and Snap behave as everywhere else (CHARTER 4).
+fn window_options(cx: &App) -> WindowOptions {
+    let window_size = cx
+        .primary_display()
+        .map_or(size(px(1280.0), px(800.0)), |display| {
+            display.visible_bounds().size.map(|side| side * 0.8)
+        });
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            window_size,
+            cx,
+        ))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Cleanshot".into()),
+            ..TitlebarOptions::default()
+        }),
+        window_min_size: Some(size(px(480.0), px(320.0))),
+        ..WindowOptions::default()
     }
 }
