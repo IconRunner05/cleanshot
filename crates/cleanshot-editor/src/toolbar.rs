@@ -3,9 +3,11 @@ use std::borrow::Cow;
 use cleanshot_core::Tool;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AssetSource, BoxShadow, ElementId, InteractiveElement, IntoElement, ParentElement, Rgba,
-    SharedString, StatefulInteractiveElement, Styled, div, hsla, point, px, rgba, svg,
+    AssetSource, BoxShadow, ElementId, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, div, hsla, point, px, svg,
 };
+
+use crate::theme::{ACCENT, ON_ACCENT, Theme};
 
 /// The Lucide icons the editor draws, embedded in the exe under their Lucide names.
 pub(crate) struct Icons;
@@ -64,17 +66,11 @@ pub(crate) const TOOLS: [(Tool, &str, &str); 9] = [
     (Tool::Crop, "crop", "Crop (C)"),
 ];
 
-pub(crate) const ACCENT: Rgba = Rgba {
-    r: 0.0,
-    g: 0.478,
-    b: 1.0,
-    a: 1.0,
-};
-
 /// The floating tool panel (CHARTER 4: dark material, hairline border, soft shadow, 12 px
 /// corners, 28 px buttons with 7 px corners). `on_pick` is called with the tool clicked.
 pub(crate) fn toolbar(
     current: Tool,
+    theme: Theme,
     on_pick: impl Fn(Tool, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let buttons = TOOLS.map(|(tool, icon, name)| {
@@ -89,14 +85,14 @@ pub(crate) fn toolbar(
             .rounded(px(7.0))
             .when(picked, |button| button.bg(ACCENT))
             .when(!picked, |button| {
-                button.hover(|button| button.bg(rgba(0xffff_ff1a)))
+                button.hover(move |button| button.bg(theme.hover))
             })
             .on_click(move |_, window, cx| on_pick(tool, window, cx))
             .child(
                 svg()
                     .path(format!("icons/{icon}.svg"))
                     .size(px(16.0))
-                    .text_color(gpui::white()),
+                    .text_color(if picked { ON_ACCENT } else { theme.text }),
             )
     });
     div()
@@ -114,9 +110,9 @@ pub(crate) fn toolbar(
                 .gap(px(4.0))
                 .p(px(6.0))
                 .rounded(px(12.0))
-                .bg(rgba(0x1c1c_1eb8))
+                .bg(theme.material)
                 .border_1()
-                .border_color(rgba(0xffff_ff1f))
+                .border_color(theme.hairline)
                 .shadow(vec![BoxShadow {
                     color: hsla(0.0, 0.0, 0.0, 0.25),
                     offset: point(px(0.0), px(8.0)),

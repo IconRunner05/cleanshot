@@ -5,6 +5,7 @@ mod canvas;
 mod editor_window;
 mod placement;
 mod restricted_platform;
+mod theme;
 mod toolbar;
 
 use std::rc::Rc;

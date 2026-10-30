@@ -8,12 +8,14 @@ use cleanshot_core::{
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
     KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString, Styled,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, rgba, size,
+    Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px,
+    size,
 };
 
 use crate::Error;
 use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
 use crate::placement::Placement;
+use crate::theme::Theme;
 use crate::toolbar::toolbar;
 
 /// A Space-drag in progress: where it started and where the image was then.
@@ -39,12 +41,15 @@ struct EditorView {
     /// Why the last edit was refused, until the next press.
     notice: Option<SharedString>,
     focus: FocusHandle,
+    _appearance: Subscription,
 }
 
 impl EditorView {
     fn new(document: Document, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        // F-58: redraw in the new theme when the system switches between light and dark.
+        let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
         Self {
             base: render_image(document.base()),
             document: Rc::new(document.clone()),
@@ -58,6 +63,7 @@ impl EditorView {
             pan: None,
             notice: None,
             focus,
+            _appearance: appearance,
         }
     }
 
@@ -158,7 +164,7 @@ impl EditorView {
     }
 }
 
-fn notice_panel(text: SharedString) -> impl IntoElement {
+fn notice_panel(text: SharedString, theme: Theme) -> impl IntoElement {
     div()
         .absolute()
         .bottom(px(16.0))
@@ -166,8 +172,10 @@ fn notice_panel(text: SharedString) -> impl IntoElement {
         .px(px(12.0))
         .py(px(8.0))
         .rounded(px(7.0))
-        .bg(rgba(0x1c1c_1eb8))
-        .text_color(gpui::white())
+        .bg(theme.material)
+        .border_1()
+        .border_color(theme.hairline)
+        .text_color(theme.text)
         .text_size(px(13.0))
         .child(text)
 }
@@ -184,7 +192,8 @@ fn refusal(error: &CommandError) -> &'static str {
 }
 
 impl Render for EditorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::for_appearance(window.appearance());
         let view = cx.entity().downgrade();
         let picker = view.clone();
         let on_pick = move |tool, _: &mut Window, cx: &mut App| {
@@ -212,6 +221,7 @@ impl Render for EditorView {
         div()
             .size_full()
             .relative()
+            .bg(theme.backdrop)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event, _, cx| view.key_down(event, cx)))
             .on_key_up(cx.listener(|view, event: &KeyUpEvent, _, _| {
@@ -220,8 +230,12 @@ impl Render for EditorView {
                 }
             }))
             .child(canvas.size_full())
-            .child(toolbar(self.tool, on_pick))
-            .children(self.notice.clone().map(notice_panel))
+            .child(toolbar(self.tool, theme, on_pick))
+            .children(
+                self.notice
+                    .clone()
+                    .map(|notice| notice_panel(notice, theme)),
+            )
     }
 }
 

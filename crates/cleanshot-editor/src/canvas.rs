@@ -13,7 +13,7 @@ use gpui::{
 use smallvec::smallvec;
 
 use crate::placement::{Fit, Placement};
-use crate::toolbar::ACCENT;
+use crate::theme::ACCENT;
 
 const ELLIPSE_SEGMENTS: u16 = 64;
 
