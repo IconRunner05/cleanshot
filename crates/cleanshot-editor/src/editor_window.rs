@@ -16,9 +16,9 @@ use crate::Error;
 use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
 use crate::placement::Placement;
 use crate::theme::Theme;
+use crate::toolbar::toolbar;
 
 type Deliver = Rc<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
-use crate::toolbar::toolbar;
 
 /// A Space-drag in progress: where it started and where the image was then.
 #[derive(Clone, Copy)]
