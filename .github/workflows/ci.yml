@@ -37,6 +37,26 @@ jobs:
       - name: No dependency has a published advisory
         run: cargo audit
 
+      - name: Only cleanshot-win may contain unsafe code (C-16)
+        shell: pwsh
+        run: |
+          $roots = Get-ChildItem crates\*\src\lib.rs, crates\*\src\main.rs
+          if (-not $roots) { throw 'No crate roots were found under crates\, so the scan did not run.' }
+          $failed = $false
+          foreach ($root in $roots) {
+            if ($root.FullName -like '*\cleanshot-win\*') { continue }
+            if (-not (Select-String -LiteralPath $root.FullName -SimpleMatch '#![forbid(unsafe_code)]' -Quiet)) {
+              "::error::C-16: $(Resolve-Path -Relative $root.FullName) lacks #![forbid(unsafe_code)]."; $failed = $true
+            }
+          }
+          $hits = Get-ChildItem crates -Recurse -Filter *.rs |
+            Where-Object FullName -notlike '*\crates\cleanshot-win\*' |
+            Select-String '\bunsafe\b' -CaseSensitive
+          foreach ($hit in $hits) {
+            "::error::C-16: unsafe outside crates/cleanshot-win at $($hit.RelativePath($PWD.Path)):$($hit.LineNumber)."; $failed = $true
+          }
+          if ($failed) { exit 1 }
+
   release-exe:
     runs-on: windows-latest
     defaults:
@@ -94,3 +114,9 @@ jobs:
             }
           }
           if ($failed) { exit 1 }
+
+      - name: Release exe is under 15 MB (P-06)
+        run: |
+          $megabytes = (Get-Item $env:EXE).Length / 1e6
+          'The release exe is {0:N2} MB.' -f $megabytes
+          if ($megabytes -ge 15) { '::error::P-06: the release exe is {0:N2} MB; the budget is under 15 MB.' -f $megabytes; exit 1 }

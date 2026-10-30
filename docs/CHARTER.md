@@ -406,7 +406,7 @@ flowchart TD
 
 ### M0 · Spike and scaffold
 
-- [ ] Scaffold the workspace (section 5), licences, `deny.toml`, and CI gates 1–5 running on an empty app.
+- [ ] Scaffold the workspace (section 5), licences, `deny.toml`, and CI gates 1–5 running on an empty app. (Gates 1-5 written; first CI run pending a GitHub remote.)
 - [ ] Tray-only GPUI app: idle < 1% CPU, opens and closes an editor window on demand.
 - [ ] Overlay prototype: frozen capture on 2 monitors at mixed DPI in < 100 ms; pick GDI `BitBlt` vs DXGI Desktop Duplication (latency, HDR correctness) and log the decision.
 - [ ] GPUI canvas: 4K image + 200 shapes at 60 fps; text input and IME work in a custom element.
