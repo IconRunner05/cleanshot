@@ -410,7 +410,7 @@ flowchart TD
 
 ### M1 · Capture core
 
-- [ ] C-12 DLL hardening and C-14 single instance in `main`.
+- [x] C-12 DLL hardening and C-14 single instance in `main`.
 - [ ] F-01–F-07 and F-13: capture, overlay, selection, loupe, toolbar, last region, full screen.
 - [ ] F-20–F-22: copy, save, Save As.
 - [ ] F-50–F-54: tray, hotkeys, PrtSc conflict, single instance, settings file.

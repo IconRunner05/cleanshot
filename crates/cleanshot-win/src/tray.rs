@@ -12,16 +12,19 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, IDI_APPLICATION, LoadIconW, MF_STRING,
-    PostMessageW, RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow, SetWindowLongPtrW,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_HOTKEY,
-    WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    FindWindowW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, IDI_APPLICATION, LoadIconW,
+    MF_STRING, PostMessageW, RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow,
+    SetWindowLongPtrW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE,
+    WM_CONTEXTMENU, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
 use crate::Error;
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotTray");
+// C-14: the only message a second launch sends. Its parameters are always zero and never read.
+const CAPTURE_SIGNAL: PCWSTR = w!("Cleanshot.CaptureRegion");
 const ICON_MESSAGE: u32 = WM_APP + 1;
 const ICON_ID: u32 = 1;
 const MENU_CAPTURE_REGION: usize = 1;
@@ -62,6 +65,7 @@ impl Hotkey {
 struct State {
     on_request: RefCell<Box<dyn FnMut(Request)>>,
     taskbar_created: u32,
+    capture_signal: u32,
     icon_shown: Cell<bool>,
 }
 
@@ -132,6 +136,7 @@ impl Tray {
             on_request: RefCell::new(Box::new(on_request)),
             // SAFETY: the argument is a 'static, NUL-terminated string.
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
+            capture_signal: capture_signal(),
             icon_shown: Cell::new(false),
         });
         // SAFETY: `window` exists, so it will get WM_NCDESTROY, where the window procedure
@@ -189,6 +194,26 @@ impl Drop for Tray {
         let destroyed = unsafe { DestroyWindow(self.window) };
         debug_assert!(destroyed.is_ok(), "the tray window is destroyed once");
     }
+}
+
+/// Asks the Cleanshot already running in this session to capture a region (C-14).
+///
+/// # Errors
+///
+/// [`Error::NoRunningTray`] if no tray window exists in this session, for example while the
+/// other instance is still starting.
+pub fn ask_running_instance_to_capture() -> Result<(), Error> {
+    // SAFETY: the class name is a 'static, NUL-terminated string.
+    let window =
+        unsafe { FindWindowW(WINDOW_CLASS, PCWSTR::null()) }.map_err(Error::NoRunningTray)?;
+    // SAFETY: posting copies no memory; the window may close first, which fails the post.
+    unsafe { PostMessageW(Some(window), capture_signal(), WPARAM(0), LPARAM(0)) }
+        .map_err(Error::NoRunningTray)
+}
+
+fn capture_signal() -> u32 {
+    // SAFETY: the argument is a 'static, NUL-terminated string.
+    unsafe { RegisterWindowMessageW(CAPTURE_SIGNAL) }
 }
 
 fn struct_size<T>() -> u32 {
@@ -305,6 +330,7 @@ unsafe extern "system" fn window_procedure(
             Ok(WM_CONTEXTMENU) => show_menu(window),
             _ => None,
         },
+        message if message == state.capture_signal => Some(Request::CaptureRegion),
         message if message == state.taskbar_created => {
             state.icon_shown.set(add_icon(window));
             None
@@ -318,4 +344,35 @@ unsafe extern "system" fn window_procedure(
         state.send(request);
     }
     LRESULT(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
+    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW};
+
+    use super::*;
+
+    #[test]
+    fn c14_a_second_launch_signal_asks_the_tray_to_capture() {
+        let received = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&received);
+        let tray = Tray::create(move |request| sink.borrow_mut().push(request))
+            .expect("the tray window is created");
+        ask_running_instance_to_capture().expect("the tray window is found");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while received.borrow().is_empty() && Instant::now() < deadline {
+            let mut message = MSG::default();
+            // SAFETY: `message` is writable and the tray window belongs to this thread.
+            while unsafe { PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                // SAFETY: `message` was just filled by PeekMessageW.
+                unsafe { DispatchMessageW(&raw const message) };
+            }
+        }
+        drop(tray);
+        assert_eq!(*received.borrow(), [Request::CaptureRegion]);
+    }
 }

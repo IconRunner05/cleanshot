@@ -1,6 +1,7 @@
 pub mod capture;
 #[cfg(feature = "field-test")]
 pub mod field_test;
+pub mod instance;
 pub mod tray;
 
 use windows::Win32::System::LibraryLoader::{
@@ -29,4 +30,8 @@ pub enum Error {
     Capture(#[source] windows::core::Error),
     #[error("a monitor's capture has an impossible size")]
     CaptureShape(#[from] cleanshot_core::ImageError),
+    #[error("Windows refused the single-instance mutex")]
+    SingleInstance(#[source] windows::core::Error),
+    #[error("the running Cleanshot has no tray window yet")]
+    NoRunningTray(#[source] windows::core::Error),
 }

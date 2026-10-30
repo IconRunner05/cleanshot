@@ -3,10 +3,22 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cleanshot_win::tray::{Request, Tray};
+use cleanshot_win::instance::Launch;
+use cleanshot_win::tray::{Request, Tray, ask_running_instance_to_capture};
 
 fn main() {
     cleanshot_win::load_dlls_from_system32_only().expect("the DLL search path is restricted");
+    let instance = match Launch::claim().expect("the single-instance mutex opens") {
+        Launch::First(instance) => instance,
+        Launch::AlreadyRunning => {
+            // C-14: a second launch asks the running one to capture, then exits. If that
+            // one is still starting it has no tray window yet, and this launch is lost.
+            if let Err(error) = ask_running_instance_to_capture() {
+                eprintln!("Cleanshot is already running and could not be reached: {error}");
+            }
+            return;
+        }
+    };
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
     cleanshot_editor::run(move |cx| {
@@ -28,4 +40,5 @@ fn main() {
     })
     .expect("the Windows platform starts");
     drop(tray);
+    drop(instance);
 }
