@@ -251,7 +251,7 @@ The types live in `crates/cleanshot-core`; read them there. All coordinates are 
 - **UI thread:** the GPUI event loop. Tray, hotkeys and overlay windows live on this thread unless the M0 spike shows they must not. In that case the overlay gets its own Win32 message-loop thread and talks to the UI thread over a channel.
 - **Capture:** on hotkey, copy every monitor to memory before creating any window. The M0 spike chooses between GDI `BitBlt` and DXGI Desktop Duplication, based on latency and HDR correctness.
 - **Worker thread:** encode and file writes, so the UI never blocks; clipboard writes happen on the UI thread (OLE requirement).
-- **Export:** `render::flatten(&Document) -> RgbaImage` is the single source of output pixels (F-24).
+- **Export:** `render::flatten(&Document, &TextMasks) -> RgbaImage` is the single source of output pixels (F-24). Text glyph coverage comes from DirectWrite in win as plain masks (core's `TextMasks`), made by the same glyph path GPUI draws on screen; render composites them, so render stays pure Rust.
 
 ## 6. Dependency allow-list
 

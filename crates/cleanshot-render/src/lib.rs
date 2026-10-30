@@ -4,7 +4,7 @@ mod encode;
 mod flatten;
 mod redact;
 
-use cleanshot_core::{ImageError, RectF};
+use cleanshot_core::{ImageError, RectF, ShapeId};
 
 pub use encode::{Format, encode};
 pub use flatten::flatten;
@@ -16,6 +16,8 @@ pub enum Error {
     TooLarge { width: u32, height: u32 },
     #[error("the crop {0:?} does not cover any pixel of the image")]
     CropOutsideImage(RectF),
+    #[error("text shape {0:?} has no glyph masks")]
+    MissingTextMask(ShapeId),
     #[error("the flattened pixels did not form an image")]
     Output(#[source] ImageError),
     #[error("the image could not be encoded")]

@@ -108,8 +108,8 @@ same commit.
    Option<Color> }` and `TextMasks` (by `ShapeId`) are plain data in core. A `None` colour means the
    shape's colour, and `Some` is a colour-glyph layer.
 5. `render::flatten(&Document, &TextMasks)` paints each text shape in document order, filling its
-   colour through each gamma-corrected mask. A text shape with no mask is
-   `render::Error::MissingTextMask(ShapeId)`. The overlay's documents have no text and pass
+   colour through each gamma-corrected mask. A text shape with no entry in `TextMasks` is
+   `render::Error::MissingTextMask(ShapeId)`; one with no ink has an empty entry. The overlay's documents have no text and pass
    `TextMasks::default()`.
 
 Redaction and crop are unchanged: text above a redaction stays, text below it is destroyed with the

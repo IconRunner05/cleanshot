@@ -121,7 +121,9 @@ fn channel(mean: usize) -> u8 {
 mod tests {
     use std::sync::Arc;
 
-    use cleanshot_core::{Color, Command, Document, Fill, History, RgbaImage, Shape, Style};
+    use cleanshot_core::{
+        Color, Command, Document, Fill, History, RgbaImage, Shape, Style, TextMasks,
+    };
 
     use super::*;
     use crate::flatten;
@@ -171,7 +173,7 @@ mod tests {
         for (shape, style) in shapes {
             history.apply(Command::Add { shape, style }).unwrap();
         }
-        flatten(history.document()).unwrap()
+        flatten(history.document(), &TextMasks::default()).unwrap()
     }
 
     fn redaction(mode: RedactMode) -> (Shape, Style) {
@@ -265,7 +267,7 @@ mod tests {
                     style: style(MAGENTA),
                 })
                 .unwrap();
-            let flat = flatten(history.document()).unwrap();
+            let flat = flatten(history.document(), &TextMasks::default()).unwrap();
             pixels(&flat)
                 .filter(|&(x, y, _)| x < 32 && y < 16)
                 .map(|(_, _, pixel)| pixel)

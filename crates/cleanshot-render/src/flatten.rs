@@ -1,24 +1,27 @@
 use std::ops::Range;
 
 use cleanshot_core::{
-    Color, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeEntry, arrow_head,
+    Color, Document, Fill, GlyphMask, PointF, RectF, RgbaImage, Shape, ShapeEntry, TextMasks,
+    arrow_head,
 };
 use tiny_skia::{
     BlendMode, ColorU8, FillRule, IntRect, IntSize, LineCap, LineJoin, Paint, Path, PathBuilder,
-    Pixmap, Rect, Stroke, Transform,
+    Pixmap, PremultipliedColorU8, Rect, Stroke, Transform,
 };
 
 use crate::Error;
 use crate::redact::redact;
 
 /// The document's final pixels: the base image with every shape drawn on it in order, cut to
-/// the crop (F-37). Copy and save both export these pixels (F-24).
+/// the crop (F-37). Copy and save both export these pixels (F-24). Text shapes are painted
+/// from `masks`, their glyph coverage as DirectWrite rasterised it (F-34).
 ///
 /// # Errors
 ///
-/// [`Error::TooLarge`] if the image exceeds the renderer's size limit. The other variants mean
-/// the document broke one of core's guarantees.
-pub fn flatten(document: &Document) -> Result<RgbaImage, Error> {
+/// [`Error::TooLarge`] if the image exceeds the renderer's size limit;
+/// [`Error::MissingTextMask`] if `masks` has no entry for one of the document's text shapes.
+/// The other variants mean the document broke one of core's guarantees.
+pub fn flatten(document: &Document, masks: &TextMasks) -> Result<RgbaImage, Error> {
     let base = document.base();
     let too_large = || Error::TooLarge {
         width: base.width(),
@@ -37,7 +40,7 @@ pub fn flatten(document: &Document) -> Result<RgbaImage, Error> {
     let size = IntSize::from_wh(base.width(), base.height()).ok_or_else(too_large)?;
     let mut pixmap = Pixmap::from_vec(premultiplied, size).ok_or_else(too_large)?;
     for entry in document.shapes() {
-        draw(&mut pixmap, entry);
+        draw(&mut pixmap, entry, masks)?;
     }
     if let Some(crop) = document.crop() {
         pixmap = covered_pixels(crop, pixmap.width(), pixmap.height())
@@ -89,7 +92,7 @@ pub(crate) fn covered_pixels(
     ))
 }
 
-fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry) {
+fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry, masks: &TextMasks) -> Result<(), Error> {
     let paint = paint(entry.style.color, BlendMode::SourceOver);
     let stroke = Stroke {
         width: entry.style.stroke_width,
@@ -137,9 +140,64 @@ fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry) {
             &self::paint(entry.style.color, BlendMode::Multiply),
         ),
         Shape::Redact { rect, mode } => redact(pixmap, *rect, *mode),
-        // Text waits for DirectWrite glyph masks handed in by the caller.
-        Shape::Text(_) => {}
+        Shape::Text(_) => {
+            let layers = masks
+                .layers(entry.id)
+                .ok_or(Error::MissingTextMask(entry.id))?;
+            for layer in layers {
+                glyphs(pixmap, layer, layer.color().unwrap_or(entry.style.color));
+            }
+        }
     }
+    Ok(())
+}
+
+/// Paints `color` through one glyph layer's coverage, source over, clipped to the image.
+fn glyphs(pixmap: &mut Pixmap, mask: &GlyphMask, color: Color) {
+    if mask.width() == 0 || mask.height() == 0 {
+        return;
+    }
+    let (width, height) = (pixmap.width(), pixmap.height());
+    let pixels = pixmap.pixels_mut();
+    let rows = mask.coverage().chunks_exact(mask.width() as usize);
+    for (row, line) in rows.enumerate() {
+        let Some(y) = image_index(mask.top(), row, height) else {
+            continue;
+        };
+        for (column, &coverage) in line.iter().enumerate() {
+            let Some(x) = image_index(mask.left(), column, width) else {
+                continue;
+            };
+            let pixel = &mut pixels[y * width as usize + x];
+            *pixel = source_over(*pixel, color, coverage);
+        }
+    }
+}
+
+/// The image column or row `offset` past `start`, if it lies inside `0..limit`.
+fn image_index(start: i32, offset: usize, limit: u32) -> Option<usize> {
+    let position = i64::from(start) + i64::try_from(offset).ok()?;
+    usize::try_from(position)
+        .ok()
+        .filter(|&position| position < limit as usize)
+}
+
+/// `color` at `coverage` over `under`, in premultiplied bytes rounded to nearest.
+fn source_over(under: PremultipliedColorU8, color: Color, coverage: u8) -> PremultipliedColorU8 {
+    let times = |a: u8, b: u8| {
+        u8::try_from((u32::from(a) * u32::from(b) + 127) / 255)
+            .expect("a byte times a byte over 255 is a byte")
+    };
+    let over =
+        ColorU8::from_rgba(color.r, color.g, color.b, times(color.a, coverage)).premultiply();
+    let keep = 255 - over.alpha();
+    PremultipliedColorU8::from_rgba(
+        over.red() + times(under.red(), keep),
+        over.green() + times(under.green(), keep),
+        over.blue() + times(under.blue(), keep),
+        over.alpha() + times(under.alpha(), keep),
+    )
+    .expect("source over two premultiplied colours is premultiplied")
 }
 
 fn fill(pixmap: &mut Pixmap, path: Option<Path>, paint: &Paint) {
@@ -227,7 +285,7 @@ mod tests {
     fn a_document_with_no_shapes_flattens_to_its_base() {
         let history = history(numbered());
         assert_eq!(
-            &flatten(history.document()).unwrap(),
+            &flatten(history.document(), &TextMasks::default()).unwrap(),
             &**history.document().base()
         );
     }
@@ -250,7 +308,7 @@ mod tests {
             })
             .unwrap();
 
-        let flat = flatten(history.document()).unwrap();
+        let flat = flatten(history.document(), &TextMasks::default()).unwrap();
         assert_eq!(pixel(&flat, 1, 1), [200, 100, 0, 255]);
     }
 
@@ -265,7 +323,7 @@ mod tests {
         };
         history.apply(Command::SetCrop(Some(crop))).unwrap();
 
-        let flat = flatten(history.document()).unwrap();
+        let flat = flatten(history.document(), &TextMasks::default()).unwrap();
         assert_eq!((flat.width(), flat.height()), (2, 2));
         assert_eq!(pixel(&flat, 0, 0), pixel(&numbered(), 1, 1));
         assert_eq!(pixel(&flat, 1, 1), pixel(&numbered(), 2, 2));
@@ -282,8 +340,103 @@ mod tests {
         };
         history.apply(Command::SetCrop(Some(crop))).unwrap();
 
-        let flat = flatten(history.document()).unwrap();
+        let flat = flatten(history.document(), &TextMasks::default()).unwrap();
         assert_eq!((flat.width(), flat.height()), (2, 2));
         assert_eq!(pixel(&flat, 0, 0), pixel(&numbered(), 0, 0));
+    }
+
+    const BLUE: Color = Color {
+        r: 0,
+        g: 0,
+        b: 255,
+        a: 255,
+    };
+
+    fn with_text(base: RgbaImage) -> (History, cleanshot_core::ShapeId) {
+        let mut history = history(base);
+        let block = cleanshot_core::TextBlock::new(PointF { x: 0.0, y: 0.0 }, "a".into(), 2.0, 1.0)
+            .unwrap();
+        history
+            .apply(Command::Add {
+                shape: Shape::Text(block),
+                style: Style {
+                    color: BLUE,
+                    stroke_width: 1.0,
+                },
+            })
+            .unwrap();
+        let id = history.document().shapes()[0].id;
+        (history, id)
+    }
+
+    fn mask(left: i32, top: i32, width: u32, coverage: &[u8], color: Option<Color>) -> GlyphMask {
+        let height = u32::try_from(coverage.len()).unwrap() / width;
+        GlyphMask::new(left, top, width, height, coverage.to_vec(), color).unwrap()
+    }
+
+    #[test]
+    fn f34_a_text_shape_without_glyph_masks_is_refused() {
+        let (history, id) = with_text(numbered());
+        assert!(matches!(
+            flatten(history.document(), &TextMasks::default()),
+            Err(Error::MissingTextMask(missing)) if missing == id
+        ));
+    }
+
+    #[test]
+    fn f34_text_with_no_ink_leaves_the_image_as_it_was() {
+        let (history, id) = with_text(numbered());
+        let mut masks = TextMasks::default();
+        masks.insert(id, vec![mask(0, 0, 1, &[], None)]);
+        assert_eq!(
+            &flatten(history.document(), &masks).unwrap(),
+            &**history.document().base()
+        );
+    }
+
+    #[test]
+    fn f34_glyph_coverage_paints_the_shapes_colour_where_the_mask_sits() {
+        let (history, id) = with_text(uniform([200, 100, 50, 255]));
+        let mut masks = TextMasks::default();
+        masks.insert(id, vec![mask(1, 2, 3, &[255, 128, 0], None)]);
+        let flat = flatten(history.document(), &masks).unwrap();
+        assert_eq!(pixel(&flat, 1, 2), [0, 0, 255, 255]);
+        assert_eq!(pixel(&flat, 2, 2), [100, 50, 153, 255]);
+        assert_eq!(pixel(&flat, 3, 2), [200, 100, 50, 255]);
+        assert_eq!(pixel(&flat, 1, 1), [200, 100, 50, 255]);
+    }
+
+    #[test]
+    fn f34_a_colour_glyph_layer_keeps_its_own_colour_and_layers_paint_in_order() {
+        let (history, id) = with_text(uniform([200, 100, 50, 255]));
+        let white = Color {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        };
+        let mut masks = TextMasks::default();
+        masks.insert(
+            id,
+            vec![
+                mask(0, 0, 2, &[255, 255], None),
+                mask(1, 0, 1, &[255], Some(white)),
+            ],
+        );
+        let flat = flatten(history.document(), &masks).unwrap();
+        assert_eq!(pixel(&flat, 0, 0), [0, 0, 255, 255]);
+        assert_eq!(pixel(&flat, 1, 0), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn f34_a_glyph_mask_partly_outside_the_image_paints_only_the_part_inside() {
+        let (history, id) = with_text(uniform([200, 100, 50, 255]));
+        let mut masks = TextMasks::default();
+        masks.insert(id, vec![mask(-1, 2, 2, &[255, 255, 255, 255], None)]);
+        let flat = flatten(history.document(), &masks).unwrap();
+        assert_eq!(pixel(&flat, 0, 2), [0, 0, 255, 255]);
+        assert_eq!(pixel(&flat, 1, 2), [200, 100, 50, 255]);
+        assert_eq!(pixel(&flat, 3, 2), [200, 100, 50, 255]);
+        assert_eq!(pixel(&flat, 0, 1), [200, 100, 50, 255]);
     }
 }

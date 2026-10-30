@@ -3,7 +3,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, History, PointF, RectF, RedactMode, RgbaImage, Shape, Style,
+    Color, Command, Document, Fill, GlyphMask, History, PointF, RectF, RedactMode, RgbaImage,
+    Shape, Style, TextBlock, TextMasks,
 };
 use cleanshot_render::Format;
 
@@ -14,12 +15,24 @@ fn main() -> ExitCode {
     let bless = std::env::args().any(|arg| arg == "--bless");
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden");
     let mut failed = 0;
-    for (name, commands) in scenes() {
+    let shape_scenes = scenes().into_iter().map(|(name, commands)| {
+        let steps = commands
+            .into_iter()
+            .map(|command| (command, None))
+            .collect();
+        (name, steps)
+    });
+    for (name, steps) in shape_scenes.chain(text_scenes()) {
         let mut history = History::new(Document::new(Arc::new(gradient())));
-        for command in commands {
+        let mut masks = TextMasks::default();
+        for (command, layers) in steps {
             history.apply(command).unwrap();
+            if let Some(layers) = layers {
+                let added = history.document().shapes().last().unwrap().id;
+                masks.insert(added, layers);
+            }
         }
-        let flat = cleanshot_render::flatten(history.document()).unwrap();
+        let flat = cleanshot_render::flatten(history.document(), &masks).unwrap();
         let png = cleanshot_render::encode(&flat, Format::Png).unwrap();
         let path = directory.join(format!("{name}.png"));
         if bless {
@@ -276,5 +289,71 @@ fn crop() -> Vec<Command> {
             4.0,
         ),
         Command::SetCrop(Some(rect(12.0, 10.0, 56.5, 40.25))),
+    ]
+}
+
+/// A command, and for a text shape it adds, the glyph layers DirectWrite would have given it.
+type Step = (Command, Option<Vec<GlyphMask>>);
+
+fn text_scenes() -> Vec<(&'static str, Vec<Step>)> {
+    vec![("text", text()), ("text_redact_crop", text_redact_crop())]
+}
+
+fn text_shape(color: Color) -> Command {
+    let block = TextBlock::new(point(0.0, 0.0), "synthetic".into(), 12.0, 1.0).unwrap();
+    add(Shape::Text(block), color, 1.0)
+}
+
+/// Full coverage over a `width` by `height` box.
+fn solid(left: i32, top: i32, width: u32, height: u32, color: Option<Color>) -> GlyphMask {
+    let coverage = vec![255; (width * height) as usize];
+    GlyphMask::new(left, top, width, height, coverage, color).unwrap()
+}
+
+/// Coverage rising from 0 at the left edge to 255 at the right.
+fn ramp(left: i32, top: i32, width: u32, height: u32) -> GlyphMask {
+    let row: Vec<u8> = (0..width)
+        .map(|x| u8::try_from(x * 255 / (width - 1)).unwrap())
+        .collect();
+    let coverage = row.repeat(height as usize);
+    GlyphMask::new(left, top, width, height, coverage, None).unwrap()
+}
+
+fn text() -> Vec<Step> {
+    vec![
+        (text_shape(RED), Some(vec![solid(4, 4, 20, 10, None)])),
+        (text_shape(WHITE), Some(vec![ramp(30, 6, 30, 8)])),
+        (
+            text_shape(RED),
+            Some(vec![
+                solid(70, 4, 12, 12, None),
+                solid(73, 7, 6, 6, Some(YELLOW)),
+            ]),
+        ),
+        (text_shape(WHITE), Some(vec![solid(86, 40, 16, 8, None)])),
+        (text_shape(RED), Some(Vec::new())),
+        (
+            text_shape(TRANSLUCENT_BLACK),
+            Some(vec![ramp(-6, 50, 40, 20)]),
+        ),
+    ]
+}
+
+fn text_redact_crop() -> Vec<Step> {
+    vec![
+        (text_shape(RED), Some(vec![ramp(10, 10, 40, 20)])),
+        (
+            add(
+                Shape::Redact {
+                    rect: rect(20.0, 15.0, 30.0, 30.0),
+                    mode: RedactMode::Pixelate,
+                },
+                WHITE,
+                1.0,
+            ),
+            None,
+        ),
+        (text_shape(WHITE), Some(vec![solid(28, 36, 20, 6, None)])),
+        (Command::SetCrop(Some(rect(5.0, 5.0, 60.0, 50.0))), None),
     ]
 }
