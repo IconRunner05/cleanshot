@@ -23,3 +23,8 @@ clean, well organised, and written by a human for a human.
   - `git rev-parse <named>^{tree}` equals `git rev-parse <commit>^{tree}`;
   - the red run's head commit has the named SHA as its parent, and `gh run view <red>` fails on
     that test for the reason quoted.
+
+  A PASS survives a clean rebase onto a moved main (no conflict, no edit by the builder): the
+  orchestrator folds with `--allow-moved`, pushes main at once, and main's own CI run is the
+  tree-exact Windows run; if it goes red, the fold is reverted. A rebase with a conflict, or
+  any edit, needs a fresh green run.
