@@ -9,6 +9,10 @@ use windows::Win32::Graphics::Direct3D::{
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
 };
+use windows::Win32::Graphics::DirectWrite::{
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_PIXEL_GEOMETRY, DWRITE_RENDERING_MODE, DWriteCreateFactory,
+    IDWriteFactory, IDWriteRenderingParams1,
+};
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_NOT_FOUND, IDXGIFactory1,
 };
@@ -31,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetForegroundWindow, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW,
     QS_ALLINPUT, TranslateMessage,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{Interface, PCWSTR, w};
 
 use crate::Error;
 use crate::capture::monitor_handles;
@@ -78,6 +82,40 @@ pub struct TrayRun {
     pub foreground_window: bool,
     pub inputs_sent: u32,
     pub hotkey_delivered_after: Option<Duration>,
+}
+
+/// The rendering params DirectWrite gives a process that asks for the system's, the values
+/// GPUI reads for its text gamma and contrast (`directx_renderer.rs:855-862` at 14b7b0e).
+#[derive(Debug)]
+pub struct RenderingParams {
+    pub gamma: f32,
+    pub enhanced_contrast: f32,
+    pub grayscale_enhanced_contrast: f32,
+    pub cleartype_level: f32,
+    pub pixel_geometry: DWRITE_PIXEL_GEOMETRY,
+    pub rendering_mode: DWRITE_RENDERING_MODE,
+}
+
+/// F-34: what `IDWriteFactory::CreateRenderingParams` returns on this machine.
+///
+/// # Errors
+///
+/// The Windows error if DirectWrite refuses the factory or the params.
+pub fn rendering_params() -> Result<RenderingParams, windows::core::Error> {
+    // SAFETY: the factory and params are COM objects owned here; each getter reads a value.
+    unsafe {
+        let factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+        let params = factory.CreateRenderingParams()?;
+        let params1: IDWriteRenderingParams1 = params.cast()?;
+        Ok(RenderingParams {
+            gamma: params.GetGamma(),
+            enhanced_contrast: params.GetEnhancedContrast(),
+            grayscale_enhanced_contrast: params1.GetGrayscaleEnhancedContrast(),
+            cleartype_level: params.GetClearTypeLevel(),
+            pixel_geometry: params.GetPixelGeometry(),
+            rendering_mode: params.GetRenderingMode(),
+        })
+    }
 }
 
 /// Reads the Windows release from `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`.

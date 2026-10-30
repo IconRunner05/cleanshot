@@ -10,7 +10,7 @@ use cleanshot_editor::{BenchReport, bench};
 use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::{
     Driver, adapters, clipboard_round_trip, d3d11_feature_level, drive_tray, monitors,
-    windows_version,
+    rendering_params, windows_version,
 };
 
 const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -76,6 +76,7 @@ fn probe() -> String {
     report_tray(&mut report);
     report_capture(&mut report);
     report_clipboard(&mut report);
+    report_text(&mut report);
     report
 }
 
@@ -231,6 +232,38 @@ fn report_clipboard(report: &mut String) {
         }
     });
     line(report, "Write and read back", outcome(&read_back));
+}
+
+fn report_text(report: &mut String) {
+    report.push_str(
+        "
+## DirectWrite rendering params
+
+",
+    );
+    match rendering_params() {
+        Ok(params) => {
+            line(report, "Gamma", format!("{:?}", params.gamma));
+            line(
+                report,
+                "Enhanced contrast",
+                format!("{:?}", params.enhanced_contrast),
+            );
+            line(
+                report,
+                "Grayscale enhanced contrast",
+                format!("{:?}", params.grayscale_enhanced_contrast),
+            );
+            line(
+                report,
+                "ClearType level",
+                format!("{:?}", params.cleartype_level),
+            );
+            line(report, "Pixel geometry", params.pixel_geometry.0);
+            line(report, "Rendering mode", params.rendering_mode.0);
+        }
+        Err(error) => line(report, "Rendering params", format!("error: {error}")),
+    }
 }
 
 fn line(report: &mut String, name: &str, value: impl Display) {
