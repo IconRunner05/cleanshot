@@ -89,8 +89,8 @@ impl Tray {
     ///
     /// # Errors
     ///
-    /// [`Error::Window`] if the hidden window cannot be created, [`Error::TrayIcon`] if the
-    /// shell refuses the icon.
+    /// [`Error::Window`] if the hidden window cannot be created. A shell that refuses the icon
+    /// is not an error: the icon appears when the taskbar next starts.
     pub fn create(on_request: impl FnMut(Request) + 'static) -> Result<Self, Error> {
         // SAFETY: a null module name asks for this exe's own handle, which lives as long as
         // the process.
@@ -146,7 +146,7 @@ impl Tray {
             })
             .collect();
         let tray = Self { window, hotkeys };
-        add_icon(window)?;
+        add_icon(window);
         Ok(tray)
     }
 
@@ -196,16 +196,25 @@ fn icon_data(window: HWND) -> NOTIFYICONDATAW {
     icon
 }
 
-fn add_icon(window: HWND) -> Result<(), Error> {
+fn add_icon(window: HWND) {
     let mut icon = icon_data(window);
     // SAFETY: IDI_APPLICATION is a system icon, so no module handle is needed.
-    icon.hIcon = unsafe { LoadIconW(None, IDI_APPLICATION) }.map_err(Error::Window)?;
-    // SAFETY: `icon` is fully initialised and outlives both calls.
-    let added = unsafe {
-        Shell_NotifyIconW(NIM_ADD, &raw const icon).as_bool()
-            && Shell_NotifyIconW(NIM_SETVERSION, &raw const icon).as_bool()
+    let Ok(system_icon) = (unsafe { LoadIconW(None, IDI_APPLICATION) }) else {
+        return;
     };
-    if added { Ok(()) } else { Err(Error::TrayIcon) }
+    icon.hIcon = system_icon;
+    // F-50: the shell refuses the icon while the taskbar is not up, and then sends
+    // TaskbarCreated, so a refusal here is dropped and retried there.
+    // SAFETY: `icon` is fully initialised and outlives both calls.
+    unsafe {
+        if Shell_NotifyIconW(NIM_ADD, &raw const icon).as_bool() {
+            let versioned = Shell_NotifyIconW(NIM_SETVERSION, &raw const icon);
+            debug_assert!(
+                versioned.as_bool(),
+                "the shell takes version 4 for an icon it added"
+            );
+        }
+    }
 }
 
 fn show_menu(window: HWND) -> Option<Request> {
@@ -280,8 +289,7 @@ unsafe extern "system" fn window_procedure(
             _ => None,
         },
         message if message == state.taskbar_created => {
-            // The hotkeys keep working without the icon, and the next TaskbarCreated tries again.
-            let _ = add_icon(window);
+            add_icon(window);
             None
         }
         _ => {
