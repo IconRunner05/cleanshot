@@ -27,8 +27,7 @@ pub(crate) fn document_canvas(document: Rc<Document>, base: Arc<RenderImage>) ->
         |_, _, _| {},
         move |bounds, (), window, _| {
             let fit = Fit::new(bounds, &document);
-            // The atlas only fails when the GPU cannot allocate the texture; the frame then shows
-            // the shapes without the image rather than nothing.
+            // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
             let _ = window.paint_image(
                 fit.image_bounds,
                 fit.image_bounds,
@@ -125,8 +124,7 @@ fn paint_shape(entry: &ShapeEntry, fit: &Fit, window: &mut Window) {
 fn stroke(window: &mut Window, points: &[Point<Pixels>], closed: bool, width: Pixels, color: Rgba) {
     let mut builder = PathBuilder::stroke(width);
     builder.add_polygon(points, closed);
-    // A path lyon cannot tessellate (too many vertices, or no length) is left undrawn; the
-    // document still holds the shape.
+    // lyon rejects a path with no length or too many vertices; the document keeps the shape.
     if let Ok(path) = builder.build() {
         window.paint_path(path, color);
     }
