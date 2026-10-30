@@ -4,6 +4,7 @@ mod bench;
 mod canvas;
 mod editor_window;
 mod restricted_platform;
+mod toolbar;
 
 use std::rc::Rc;
 
@@ -14,6 +15,7 @@ use gpui_windows::WindowsPlatform;
 pub use crate::bench::{BenchReport, bench};
 pub use crate::editor_window::{EditorWindow, open};
 use crate::restricted_platform::RestrictedPlatform;
+use crate::toolbar::Icons;
 
 /// Why the editor could not start, open a window or run the bench.
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +39,8 @@ pub enum Error {
 pub fn run(on_launch: impl FnOnce(&mut App) + 'static) -> Result<(), Error> {
     let platform =
         WindowsPlatform::new(false).map_err(|error| Error::PlatformStart(error.into()))?;
-    Application::with_platform(Rc::new(RestrictedPlatform(platform))).run(on_launch);
+    Application::with_platform(Rc::new(RestrictedPlatform(platform)))
+        .with_assets(Icons)
+        .run(on_launch);
     Ok(())
 }

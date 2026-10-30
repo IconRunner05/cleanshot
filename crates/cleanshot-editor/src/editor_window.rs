@@ -12,6 +12,7 @@ use gpui::{
 
 use crate::Error;
 use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
+use crate::toolbar::toolbar;
 
 struct EditorView {
     history: History,
@@ -132,6 +133,14 @@ fn refusal(error: &CommandError) -> &'static str {
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().downgrade();
+        let picker = view.clone();
+        let on_pick = move |tool, _: &mut Window, cx: &mut App| {
+            // Err only means the window closed, and with it the tool there was to pick.
+            let _ = picker.update(cx, |view, cx| {
+                view.tool = tool;
+                cx.notify();
+            });
+        };
         let on_pointer: OnPointer = Rc::new(move |pointer, _, cx| {
             // Err only means the window closed, and with it everything the pointer could change.
             let _ = view.update(cx, |view, cx| view.pointer(pointer, cx));
@@ -152,6 +161,7 @@ impl Render for EditorView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event, _, cx| view.key_down(event, cx)))
             .child(canvas.size_full())
+            .child(toolbar(self.tool, on_pick))
             .children(self.notice.clone().map(notice_panel))
     }
 }

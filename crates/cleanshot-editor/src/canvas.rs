@@ -7,11 +7,13 @@ use cleanshot_core::{
     handles,
 };
 use gpui::{
-    App, BorderStyle, Bounds, Canvas, DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PathBuilder, Pixels, Point, RenderImage, Rgba, Window, canvas, fill, point, px,
-    quad, size, transparent_black,
+    App, BorderStyle, Bounds, Canvas, DispatchPhase, Hitbox, HitboxBehavior, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, RenderImage, Rgba,
+    Window, canvas, fill, point, px, quad, size, transparent_black,
 };
 use smallvec::smallvec;
+
+use crate::toolbar::ACCENT;
 
 const ELLIPSE_SEGMENTS: u16 = 64;
 
@@ -55,12 +57,6 @@ pub(crate) struct Overlay {
 /// How far from a shape or handle, in screen pixels, a press still grips it.
 const POINTER_REACH: f32 = 6.0;
 const HANDLE_SIZE: f32 = 8.0;
-const ACCENT: Rgba = Rgba {
-    r: 0.0,
-    g: 0.478,
-    b: 1.0,
-    a: 1.0,
-};
 
 /// Draws the document's base image scaled to fit the element, its shapes with `overlay`'s
 /// preview on top, and reports the pointer to `on_pointer`, following a drag outside the element.
@@ -69,10 +65,10 @@ pub(crate) fn document_canvas(
     base: Arc<RenderImage>,
     overlay: Overlay,
     on_pointer: OnPointer,
-) -> Canvas<()> {
+) -> Canvas<Hitbox> {
     canvas(
-        |_, _, _| {},
-        move |bounds, (), window, _| {
+        |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+        move |bounds, hitbox, window, _| {
             let fit = Fit::new(bounds, &document, window.scale_factor());
             // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
             let _ = window.paint_image(
@@ -110,17 +106,12 @@ pub(crate) fn document_canvas(
                     paint_handle(fit.point(at), window);
                 }
             }
-            listen_for_pointer(&fit, bounds, &on_pointer, window);
+            listen_for_pointer(&fit, hitbox, &on_pointer, window);
         },
     )
 }
 
-fn listen_for_pointer(
-    fit: &Fit,
-    bounds: Bounds<Pixels>,
-    on_pointer: &OnPointer,
-    window: &mut Window,
-) {
+fn listen_for_pointer(fit: &Fit, hitbox: Hitbox, on_pointer: &OnPointer, window: &mut Window) {
     let fit = *fit;
     let image_point = move |position| fit.image_point(position);
     let reach = POINTER_REACH / fit.scale;
@@ -128,7 +119,7 @@ fn listen_for_pointer(
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble
             && event.button == MouseButton::Left
-            && bounds.contains(&event.position)
+            && hitbox.is_hovered(window)
         {
             let at = image_point(event.position);
             on_press(Pointer::Press { at, reach }, window, cx);
