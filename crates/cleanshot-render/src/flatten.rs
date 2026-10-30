@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use cleanshot_core::{
     Color, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeEntry, arrow_head,
 };
@@ -7,6 +9,7 @@ use tiny_skia::{
 };
 
 use crate::Error;
+use crate::redact::redact;
 
 /// The document's final pixels: the base image with every shape drawn on it in order, cut to
 /// the crop (F-37). Copy and save both export these pixels (F-24).
@@ -37,7 +40,15 @@ pub fn flatten(document: &Document) -> Result<RgbaImage, Error> {
         draw(&mut pixmap, entry);
     }
     if let Some(crop) = document.crop() {
-        pixmap = pixel_bounds(crop)
+        pixmap = covered_pixels(crop, pixmap.width(), pixmap.height())
+            .and_then(|(columns, rows)| {
+                IntRect::from_xywh(
+                    i32::try_from(columns.start).ok()?,
+                    i32::try_from(rows.start).ok()?,
+                    columns.end - columns.start,
+                    rows.end - rows.start,
+                )
+            })
             .and_then(|bounds| pixmap.clone_rect(bounds))
             .ok_or(Error::CropOutsideImage(crop))?;
     }
@@ -52,18 +63,30 @@ pub fn flatten(document: &Document) -> Result<RgbaImage, Error> {
     RgbaImage::new(pixmap.width(), pixmap.height(), straight).map_err(Error::Output)
 }
 
-/// Every pixel the crop touches, so a crop on fractional coordinates loses no edge pixel.
+/// The columns and rows of every image pixel `rect` touches, so fractional coordinates lose no
+/// edge pixel; `None` if it touches none.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "core keeps a crop inside the image, whose sides fit in i32"
+    clippy::cast_sign_loss,
+    reason = "clamped to 0..=limit, a u32, first"
 )]
-fn pixel_bounds(crop: RectF) -> Option<IntRect> {
-    IntRect::from_ltrb(
-        crop.x.floor() as i32,
-        crop.y.floor() as i32,
-        (crop.x + crop.width).ceil() as i32,
-        (crop.y + crop.height).ceil() as i32,
-    )
+pub(crate) fn covered_pixels(
+    rect: RectF,
+    width: u32,
+    height: u32,
+) -> Option<(Range<u32>, Range<u32>)> {
+    let span = |start: f32, length: f32, limit: u32| {
+        let limit = f64::from(limit);
+        let first = f64::from(start).floor().clamp(0.0, limit);
+        let end = (f64::from(start) + f64::from(length))
+            .ceil()
+            .clamp(0.0, limit);
+        (first < end).then_some(first as u32..end as u32)
+    };
+    Some((
+        span(rect.x, rect.width, width)?,
+        span(rect.y, rect.height, height)?,
+    ))
 }
 
 fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry) {
@@ -113,8 +136,9 @@ fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry) {
             skia_rect(*rect).map(PathBuilder::from_rect),
             &self::paint(entry.style.color, BlendMode::Multiply),
         ),
-        // Text waits for DirectWrite glyph masks from the caller; redaction is the next commit.
-        Shape::Text { .. } | Shape::Redact { .. } => {}
+        Shape::Redact { rect, mode } => redact(pixmap, *rect, *mode),
+        // Text waits for DirectWrite glyph masks handed in by the caller.
+        Shape::Text { .. } => {}
     }
 }
 

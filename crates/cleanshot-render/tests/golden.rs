@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, History, PointF, RectF, RgbaImage, Shape, Style,
+    Color, Command, Document, Fill, History, PointF, RectF, RedactMode, RgbaImage, Shape, Style,
 };
 use cleanshot_render::Format;
 
@@ -138,101 +138,143 @@ const TRANSLUCENT_BLACK: Color = Color {
 
 fn scenes() -> Vec<(&'static str, Vec<Command>)> {
     vec![
-        (
-            "lines",
-            vec![
-                add(
-                    Shape::Line {
-                        from: point(8.0, 8.0),
-                        to: point(88.0, 20.0),
-                    },
-                    WHITE,
-                    2.0,
-                ),
-                add(
-                    Shape::Arrow {
-                        from: point(10.0, 56.0),
-                        to: point(80.0, 32.0),
-                    },
-                    RED,
-                    3.0,
-                ),
-                add(
-                    Shape::Pen(vec![
-                        point(20.0, 30.0),
-                        point(30.0, 44.0),
-                        point(44.0, 36.0),
-                        point(52.0, 50.0),
-                    ]),
-                    TRANSLUCENT_BLACK,
-                    4.0,
-                ),
-            ],
+        ("lines", lines()),
+        ("boxes", boxes()),
+        ("highlight_over_shapes", highlight_over_shapes()),
+        ("redact", redact()),
+        ("crop", crop()),
+    ]
+}
+
+fn lines() -> Vec<Command> {
+    vec![
+        add(
+            Shape::Line {
+                from: point(8.0, 8.0),
+                to: point(88.0, 20.0),
+            },
+            WHITE,
+            2.0,
         ),
-        (
-            "boxes",
-            vec![
-                add(
-                    Shape::Rect {
-                        rect: rect(6.0, 6.0, 36.0, 24.0),
-                        fill: Fill::Hollow,
-                    },
-                    RED,
-                    2.0,
-                ),
-                add(
-                    Shape::Rect {
-                        rect: rect(50.5, 6.5, 36.0, 24.0),
-                        fill: Fill::Solid,
-                    },
-                    TRANSLUCENT_BLACK,
-                    2.0,
-                ),
-                add(
-                    Shape::Ellipse {
-                        rect: rect(6.0, 34.0, 36.0, 24.0),
-                        fill: Fill::Hollow,
-                    },
-                    WHITE,
-                    3.0,
-                ),
-                add(
-                    Shape::Ellipse {
-                        rect: rect(50.0, 34.0, 36.0, 24.0),
-                        fill: Fill::Solid,
-                    },
-                    RED,
-                    1.0,
-                ),
-            ],
+        add(
+            Shape::Arrow {
+                from: point(10.0, 56.0),
+                to: point(80.0, 32.0),
+            },
+            RED,
+            3.0,
         ),
-        (
-            "highlight_over_shapes",
-            vec![
-                add(
-                    Shape::Line {
-                        from: point(4.0, 32.0),
-                        to: point(92.0, 32.0),
-                    },
-                    WHITE,
-                    6.0,
-                ),
-                add(Shape::Highlight(rect(16.0, 20.0, 64.0, 24.0)), YELLOW, 1.0),
-            ],
+        add(
+            Shape::Pen(vec![
+                point(20.0, 30.0),
+                point(30.0, 44.0),
+                point(44.0, 36.0),
+                point(52.0, 50.0),
+            ]),
+            TRANSLUCENT_BLACK,
+            4.0,
         ),
-        (
-            "crop",
-            vec![
-                add(
-                    Shape::Rect {
-                        rect: rect(20.0, 16.0, 40.0, 30.0),
-                        fill: Fill::Hollow,
-                    },
-                    RED,
-                    4.0,
-                ),
-                Command::SetCrop(Some(rect(12.0, 10.0, 56.5, 40.25))),
-            ],
+    ]
+}
+
+fn boxes() -> Vec<Command> {
+    vec![
+        add(
+            Shape::Rect {
+                rect: rect(6.0, 6.0, 36.0, 24.0),
+                fill: Fill::Hollow,
+            },
+            RED,
+            2.0,
         ),
+        add(
+            Shape::Rect {
+                rect: rect(50.5, 6.5, 36.0, 24.0),
+                fill: Fill::Solid,
+            },
+            TRANSLUCENT_BLACK,
+            2.0,
+        ),
+        add(
+            Shape::Ellipse {
+                rect: rect(6.0, 34.0, 36.0, 24.0),
+                fill: Fill::Hollow,
+            },
+            WHITE,
+            3.0,
+        ),
+        add(
+            Shape::Ellipse {
+                rect: rect(50.0, 34.0, 36.0, 24.0),
+                fill: Fill::Solid,
+            },
+            RED,
+            1.0,
+        ),
+    ]
+}
+
+fn highlight_over_shapes() -> Vec<Command> {
+    vec![
+        add(
+            Shape::Line {
+                from: point(4.0, 32.0),
+                to: point(92.0, 32.0),
+            },
+            WHITE,
+            6.0,
+        ),
+        add(Shape::Highlight(rect(16.0, 20.0, 64.0, 24.0)), YELLOW, 1.0),
+    ]
+}
+
+fn redact() -> Vec<Command> {
+    vec![
+        add(
+            Shape::Line {
+                from: point(4.0, 32.0),
+                to: point(92.0, 32.0),
+            },
+            WHITE,
+            4.0,
+        ),
+        add(
+            Shape::Redact {
+                rect: rect(6.0, 6.0, 38.5, 52.0),
+                mode: RedactMode::Pixelate,
+            },
+            WHITE,
+            1.0,
+        ),
+        add(
+            Shape::Redact {
+                rect: rect(52.0, 6.0, 38.0, 52.0),
+                mode: RedactMode::Blur,
+            },
+            WHITE,
+            1.0,
+        ),
+        add(
+            Shape::Arrow {
+                from: point(20.0, 56.0),
+                to: point(76.0, 16.0),
+            },
+            RED,
+            2.0,
+        ),
+    ]
+}
+
+fn crop() -> Vec<Command> {
+    vec![
+        add(
+            Shape::Rect {
+                rect: rect(20.0, 16.0, 40.0, 30.0),
+                fill: Fill::Hollow,
+            },
+            RED,
+            4.0,
+        ),
+        Command::SetCrop(Some(rect(12.0, 10.0, 56.5, 40.25))),
     ]
 }

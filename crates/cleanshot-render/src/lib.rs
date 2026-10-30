@@ -2,6 +2,7 @@
 
 mod encode;
 mod flatten;
+mod redact;
 
 use cleanshot_core::{ImageError, RectF};
 
