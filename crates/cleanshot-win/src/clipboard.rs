@@ -6,22 +6,20 @@ use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, Glo
 use windows::Win32::System::Ole::CF_DIBV5;
 use windows::core::w;
 
-use crate::Error;
-
 /// Replaces the clipboard's contents with one image in two formats (F-20): `bitmap`, a
 /// packed `CF_DIBV5`, and `png`, a PNG file under the registered "PNG" format.
 ///
 /// # Errors
 ///
-/// [`Error::Clipboard`] if another program holds the clipboard or Windows refuses the data.
-pub fn copy_image(bitmap: &[u8], png: &[u8]) -> Result<(), Error> {
-    replace_with(&[(u32::from(CF_DIBV5.0), bitmap), (png_format()?, png)]).map_err(Error::Clipboard)
+/// The Windows error if another program holds the clipboard or Windows refuses the data.
+pub fn copy_image(bitmap: &[u8], png: &[u8]) -> windows::core::Result<()> {
+    replace_with(&[(u32::from(CF_DIBV5.0), bitmap), (png_format()?, png)])
 }
 
-fn png_format() -> Result<u32, Error> {
+fn png_format() -> windows::core::Result<u32> {
     // SAFETY: the name is a 'static NUL-terminated string.
     match unsafe { RegisterClipboardFormatW(w!("PNG")) } {
-        0 => Err(Error::Clipboard(windows::core::Error::from_thread())),
+        0 => Err(windows::core::Error::from_thread()),
         format => Ok(format),
     }
 }

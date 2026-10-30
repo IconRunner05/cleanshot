@@ -11,8 +11,6 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::GUID;
 
-use crate::Error;
-
 const RESERVED_NAMES: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
@@ -58,13 +56,18 @@ pub enum SaveError {
     /// C-15: every numbered name up to the limit is taken.
     #[error("every name from {0:?} to its -{MOST_COLLISIONS} form is taken")]
     NoFreeName(String),
+    #[error("the file could not be written")]
+    Write(#[source] std::io::Error),
+}
+
+/// Why there is no folder to save in.
+#[derive(Debug, thiserror::Error)]
+pub enum FolderError {
     #[error("Windows could not name or create the screenshots folder")]
     NoFolder(#[source] windows::core::Error),
     /// The configured save folder is not a full path, so it would depend on the working folder.
     #[error("the save folder {0:?} is not a full path")]
     RelativeFolder(String),
-    #[error("the file could not be written")]
-    Write(#[source] std::io::Error),
 }
 
 /// The folder to save in: `configured` (the `save_folder` setting) when it is a full path,
@@ -72,14 +75,13 @@ pub enum SaveError {
 ///
 /// # Errors
 ///
-/// [`Error::Save`] with [`SaveError::RelativeFolder`] for a configured path that is not
-/// full, or with the Windows error if the shell cannot name or create the default.
-pub fn save_folder(configured: Option<&str>) -> Result<PathBuf, Error> {
+/// [`FolderError::RelativeFolder`] for a configured path that is not full, or
+/// [`FolderError::NoFolder`] if the shell cannot name or create the default.
+pub fn save_folder(configured: Option<&str>) -> Result<PathBuf, FolderError> {
     match configured {
         Some(folder) if Path::new(folder).is_absolute() => Ok(PathBuf::from(folder)),
-        Some(folder) => Err(Error::Save(SaveError::RelativeFolder(folder.to_owned()))),
-        None => known_folder(FOLDERID_Screenshots, KF_FLAG_CREATE)
-            .map_err(|error| Error::Save(SaveError::NoFolder(error))),
+        Some(folder) => Err(FolderError::RelativeFolder(folder.to_owned())),
+        None => known_folder(FOLDERID_Screenshots, KF_FLAG_CREATE).map_err(FolderError::NoFolder),
     }
 }
 
@@ -101,15 +103,15 @@ pub(crate) fn known_folder(id: GUID, flags: KNOWN_FOLDER_FLAG) -> windows::core:
 ///
 /// # Errors
 ///
-/// [`Error::Save`] carrying the [`SaveError`] that stopped it.
+/// The [`SaveError`] that stopped it.
 pub fn save(
     folder: &Path,
     template: &str,
     stamp: Stamp,
     extension: &str,
     bytes: &[u8],
-) -> Result<PathBuf, Error> {
-    write_new(folder, template, stamp, extension, bytes).map_err(Error::Save)
+) -> Result<PathBuf, SaveError> {
+    write_new(folder, template, stamp, extension, bytes)
 }
 
 fn write_new(
@@ -315,11 +317,11 @@ mod tests {
     fn c15_a_save_folder_that_is_not_a_full_path_is_refused() {
         assert!(matches!(
             save_folder(Some("Screenshots")),
-            Err(Error::Save(SaveError::RelativeFolder(_)))
+            Err(FolderError::RelativeFolder(_))
         ));
         assert!(matches!(
             save_folder(Some("..\\elsewhere")),
-            Err(Error::Save(SaveError::RelativeFolder(_)))
+            Err(FolderError::RelativeFolder(_))
         ));
         assert_eq!(
             save_folder(Some("D:\\Shots")).expect("a full path is kept"),

@@ -4,17 +4,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::cell::{Cell, RefCell};
+use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use cleanshot_core::{
-    AfterCapture, Hotkey, MAX_SETTINGS_BYTES, RgbaImage, SaveFormat, Settings, SettingsProblem,
+    AfterCapture, Delivered, DeliveryError, Document, Hotkey, MAX_SETTINGS_BYTES, Output,
+    SaveFormat, Settings, SettingsProblem, TextMasks, delivery_notice,
 };
-use cleanshot_render::{Format, encode};
-use cleanshot_win::capture::{Desktop, RECT, capture_desktop, monitor_under_cursor, region};
+use cleanshot_render::{Format, encode, flatten};
+use cleanshot_win::capture::{
+    Desktop, MonitorImage, RECT, capture_desktop, monitor_under_cursor, region,
+};
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::instance::Launch;
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
-use cleanshot_win::save::{self, Stamp};
+use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
 use cleanshot_win::settings_file::{read_settings, settings_path};
 use cleanshot_win::tray::{
     Request, Tray, ask_running_instance_to_capture, print_screen_fallback,
@@ -174,37 +179,26 @@ fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()
         None => return,
         Some(Plan::Overlay(selected)) => selected,
         Some(Plan::Copy(selected)) => {
-            let copied = region(&captures, selected)
-                .map_err(Box::from)
-                .and_then(|image| copy(&image));
-            if let Err(error) = copied {
-                session.warn(&format!("The capture did not finish: {error}."));
-            }
-            return;
+            return finish(session, &captures, selected, Output::Copy);
         }
     };
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
     let finishing = Rc::clone(session);
     let shown = Overlay::show(&captures, selected, move |event| {
-        let finished = match event {
-            OverlayEvent::Cancelled => Ok(()),
+        match event {
+            OverlayEvent::Cancelled => {}
             OverlayEvent::Copy(selected) => {
                 finishing.last_selection.set(Some(selected));
-                region(&frozen, selected)
-                    .map_err(Box::from)
-                    .and_then(|image| copy(&image))
+                finish(&finishing, &frozen, selected, Output::Copy);
             }
             OverlayEvent::Save(selected) => {
                 finishing.last_selection.set(Some(selected));
-                region(&frozen, selected)
-                    .map_err(Box::from)
-                    .and_then(|image| save(&image, &finishing.settings))
+                finish(&finishing, &frozen, selected, Output::Save);
             }
-            OverlayEvent::DrawFailed(error) => Err(error.into()),
-        };
-        if let Err(error) = finished {
-            finishing.warn(&format!("The capture did not finish: {error}."));
+            OverlayEvent::DrawFailed(error) => {
+                finishing.warn(&format!("The overlay could not draw: {error}."));
+            }
         }
         // The event arrives inside an overlay window's procedure, so the windows close
         // after it returns.
@@ -214,6 +208,18 @@ fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()
     match shown {
         Ok(shown) => *session.overlay.borrow_mut() = Some(shown),
         Err(error) => session.warn(&format!("The overlay could not open: {error}.")),
+    }
+}
+
+// The selection becomes a document with nothing drawn on it, so the overlay delivers through
+// the same path as the editor.
+fn finish(session: &Session, captures: &[MonitorImage], selected: RECT, output: Output) {
+    let image = match region(captures, selected) {
+        Ok(image) => image,
+        Err(error) => return session.warn(&format!("The capture did not finish: {error}.")),
+    };
+    if let Err(error) = deliver(output, &Document::new(Arc::new(image)), &session.settings) {
+        session.warn(&delivery_notice(&Err(error)));
     }
 }
 
@@ -238,33 +244,80 @@ fn region_hotkey(configured: Hotkey) -> (Hotkey, Option<String>) {
     }
 }
 
-fn copy(image: &RgbaImage) -> Result<(), Box<dyn std::error::Error>> {
-    // C-22: the raw capture goes straight to encode until flatten carries destructive
-    // redaction.
-    let bitmap = encode(image, Format::ClipboardBitmap)?;
-    let png = encode(image, Format::Png)?;
-    copy_image(&bitmap, &png)?;
-    Ok(())
+const FILE_NAME_TEMPLATE: &str = "Screenshot {date} {time}";
+
+/// Flattens `document`, redaction included (C-22), and copies it (F-20) or saves it in the
+/// configured folder and format (F-21). The overlay and the editor both finish here (D-48).
+fn deliver(
+    output: Output,
+    document: &Document,
+    settings: &Settings,
+) -> Result<Delivered, DeliveryError> {
+    // Only the overlay finishes here so far, and its documents hold no text.
+    let image = flatten(document, &TextMasks::default()).map_err(|error| from_render(&error))?;
+    match output {
+        Output::Copy => {
+            let bitmap =
+                encode(&image, Format::ClipboardBitmap).map_err(|error| from_render(&error))?;
+            let png = encode(&image, Format::Png).map_err(|error| from_render(&error))?;
+            copy_image(&bitmap, &png).map_err(|cause| {
+                eprintln!("the clipboard refused the image: {cause}");
+                DeliveryError::ClipboardBusy
+            })?;
+            Ok(Delivered::Copied)
+        }
+        Output::Save => {
+            let (format, extension) = match settings.save_format {
+                SaveFormat::Png => (Format::Png, "png"),
+                SaveFormat::Jpg => (Format::Jpeg, "jpg"),
+                SaveFormat::Bmp => (Format::Bmp, "bmp"),
+            };
+            let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
+            let folder = save::save_folder(settings.save_folder.as_deref()).map_err(from_folder)?;
+            save::save(&folder, FILE_NAME_TEMPLATE, Stamp::now(), extension, &bytes)
+                .map(Delivered::Saved)
+                .map_err(|error| from_save(error, &folder))
+        }
+    }
 }
 
-// F-21: the configured folder and format arrive with F-54's settings file.
-fn save(image: &RgbaImage, settings: &Settings) -> Result<(), Box<dyn std::error::Error>> {
-    let (format, extension) = match settings.save_format {
-        SaveFormat::Png => (Format::Png, "png"),
-        SaveFormat::Jpg => (Format::Jpeg, "jpg"),
-        SaveFormat::Bmp => (Format::Bmp, "bmp"),
-    };
-    // C-22: as in copy.
-    let bytes = encode(image, format)?;
-    let folder = save::save_folder(settings.save_folder.as_deref())?;
-    save::save(
-        &folder,
-        "Screenshot {date} {time}",
-        Stamp::now(),
-        extension,
-        &bytes,
-    )?;
-    Ok(())
+fn from_render(error: &cleanshot_render::Error) -> DeliveryError {
+    match error {
+        &cleanshot_render::Error::TooLarge { width, height } => {
+            DeliveryError::TooLarge { width, height }
+        }
+        cleanshot_render::Error::MissingTextMask(_) => DeliveryError::TextNotDrawn,
+        cleanshot_render::Error::CropOutsideImage(_)
+        | cleanshot_render::Error::Output(_)
+        | cleanshot_render::Error::Encode(_) => {
+            panic!("a document from core flattens and encodes: {error}")
+        }
+    }
+}
+
+fn from_folder(error: FolderError) -> DeliveryError {
+    match error {
+        FolderError::NoFolder(cause) => {
+            eprintln!("the screenshots folder is unknown: {cause}");
+            DeliveryError::NoSaveFolder
+        }
+        FolderError::RelativeFolder(configured) => DeliveryError::SaveFolderNotFull { configured },
+    }
+}
+
+fn from_save(error: SaveError, folder: &Path) -> DeliveryError {
+    match error {
+        SaveError::NoFreeName(name) => DeliveryError::NoFreeName { name },
+        SaveError::Write(cause) => {
+            eprintln!("{} could not be written: {cause}", folder.display());
+            DeliveryError::NotWritten {
+                folder: folder.to_owned(),
+            }
+        }
+        SaveError::UnknownField(_) | SaveError::UnsafeName(_) => {
+            panic!("the file-name template is a safe constant: {error}")
+        }
+    }
 }
 
 // F-54: reading never stops Cleanshot; whatever is wrong becomes one warning and the
@@ -307,7 +360,85 @@ fn describe(problem: &SettingsProblem) -> String {
 
 #[cfg(test)]
 mod tests {
+    use cleanshot_core::{Color, Command, History, RectF, RedactMode, RgbaImage, Shape, Style};
+
     use super::*;
+
+    fn redacted_document() -> Document {
+        let pixels = (0..=255u8)
+            .flat_map(|i| [i.wrapping_mul(37), 0, 255, 255])
+            .collect();
+        let image = RgbaImage::new(16, 16, pixels).expect("16x16 RGBA");
+        let mut history = History::new(Document::new(Arc::new(image)));
+        history
+            .apply(Command::Add {
+                shape: Shape::Redact {
+                    rect: RectF {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 16.0,
+                        height: 16.0,
+                    },
+                    mode: RedactMode::Pixelate,
+                },
+                style: Style {
+                    color: Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                    stroke_width: 1.0,
+                },
+            })
+            .expect("the redaction is added");
+        history.document().clone()
+    }
+
+    fn settings_saving_to(folder: &str) -> Settings {
+        Settings {
+            save_folder: Some(folder.to_owned()),
+            save_format: SaveFormat::Bmp,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn c22_a_saved_capture_holds_the_redacted_pixels_not_the_capture() {
+        let folder = std::env::temp_dir().join(format!("cleanshot-deliver-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("the test folder is created");
+        let document = redacted_document();
+        let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
+        let Ok(Delivered::Saved(path)) = deliver(Output::Save, &document, &settings) else {
+            panic!("the save did not deliver a file");
+        };
+        let written = std::fs::read(&path).expect("the saved file is readable");
+        std::fs::remove_dir_all(&folder).expect("the test folder is removable");
+        let flattened = flatten(&document, &TextMasks::default()).expect("the document flattens");
+        assert_eq!(written, encode(&flattened, Format::Bmp).expect("encodes"));
+        assert_ne!(
+            written,
+            encode(document.base(), Format::Bmp).expect("encodes")
+        );
+    }
+
+    #[test]
+    fn f21_each_save_failure_names_what_the_user_can_fix() {
+        let document = redacted_document();
+        assert_eq!(
+            deliver(Output::Save, &document, &settings_saving_to("Shots")),
+            Err(DeliveryError::SaveFolderNotFull {
+                configured: "Shots".to_owned()
+            })
+        );
+        let missing =
+            std::env::temp_dir().join(format!("cleanshot-missing-{}", std::process::id()));
+        let settings = settings_saving_to(missing.to_str().expect("a UTF-8 temp path"));
+        assert_eq!(
+            deliver(Output::Save, &document, &settings),
+            Err(DeliveryError::NotWritten { folder: missing })
+        );
+    }
 
     const MONITOR: RECT = RECT {
         left: -1920,
