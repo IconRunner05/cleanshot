@@ -13,9 +13,9 @@ lld_link=${LLD_LINK:-/opt/homebrew/opt/lld@22/bin/lld-link}
 size_budget_bytes=15000000
 release_inputs=(Cargo.lock Cargo.toml .cargo rust-toolchain.toml crates charter-gates.sh)
 system_dlls=(
-    advapi32.dll bcryptprimitives.dll combase.dll comctl32.dll d3d11.dll dcomp.dll dwmapi.dll
-    dwrite.dll dxgi.dll gdi32.dll icuuc.dll imm32.dll kernel32.dll ntdll.dll ole32.dll
-    oleaut32.dll shell32.dll uiautomationcore.dll user32.dll winmm.dll
+    advapi32.dll bcryptprimitives.dll combase.dll comctl32.dll d2d1.dll d3d11.dll dcomp.dll
+    dwmapi.dll dwrite.dll dxgi.dll gdi32.dll icuuc.dll imm32.dll kernel32.dll ntdll.dll
+    ole32.dll oleaut32.dll shell32.dll uiautomationcore.dll user32.dll winmm.dll
 )
 
 case ${1:-} in

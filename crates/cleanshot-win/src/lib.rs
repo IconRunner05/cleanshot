@@ -2,6 +2,7 @@ pub mod capture;
 #[cfg(feature = "field-test")]
 pub mod field_test;
 pub mod instance;
+pub mod overlay;
 pub mod tray;
 
 use windows::Win32::System::LibraryLoader::{
