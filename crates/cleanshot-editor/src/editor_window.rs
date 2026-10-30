@@ -32,9 +32,20 @@ pub struct EditorWindow(WindowHandle<EditorView>);
 ///
 /// [`Error::WindowOpen`] if the platform cannot create the window.
 pub fn open(cx: &mut App, document: Document) -> Result<EditorWindow, Error> {
+    open_with(cx, document, |_, _| {})
+}
+
+/// [`open`], running `on_open` on the new window before its first frame. `on_open` runs only
+/// when the window opens, and then exactly once.
+pub(crate) fn open_with(
+    cx: &mut App,
+    document: Document,
+    on_open: impl FnOnce(&mut Window, &mut App),
+) -> Result<EditorWindow, Error> {
     let base = render_image(&document.base);
     let document = Rc::new(document);
-    cx.open_window(WindowOptions::default(), |_, cx| {
+    cx.open_window(WindowOptions::default(), |window, cx| {
+        on_open(window, cx);
         cx.new(|_| EditorView { document, base })
     })
     .map(EditorWindow)
