@@ -1,21 +1,12 @@
 use cleanshot_core::{
-    Color, Document, Fill, ImageError, PointF, RectF, RgbaImage, Shape, ShapeEntry, arrow_head,
+    Color, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeEntry, arrow_head,
 };
 use tiny_skia::{
     BlendMode, ColorU8, FillRule, IntRect, IntSize, LineCap, LineJoin, Paint, Path, PathBuilder,
     Pixmap, Rect, Stroke, Transform,
 };
 
-/// Why a document could not be flattened.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("a {width}x{height} image is larger than the renderer can hold")]
-    TooLarge { width: u32, height: u32 },
-    #[error("the crop {0:?} does not cover any pixel of the image")]
-    CropOutsideImage(RectF),
-    #[error("the flattened pixels did not form an image")]
-    Output(#[source] ImageError),
-}
+use crate::Error;
 
 /// The document's final pixels: the base image with every shape drawn on it in order, cut to
 /// the crop (F-37). Copy and save both export these pixels (F-24).

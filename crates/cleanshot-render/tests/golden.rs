@@ -5,6 +5,7 @@ use std::sync::Arc;
 use cleanshot_core::{
     Color, Command, Document, Fill, History, PointF, RectF, RgbaImage, Shape, Style,
 };
+use cleanshot_render::Format;
 
 const WIDTH: u32 = 96;
 const HEIGHT: u32 = 64;
@@ -19,20 +20,14 @@ fn main() -> ExitCode {
             history.apply(command).unwrap();
         }
         let flat = cleanshot_render::flatten(history.document()).unwrap();
+        let png = cleanshot_render::encode(&flat, Format::Png).unwrap();
         let path = directory.join(format!("{name}.png"));
         if bless {
-            image::save_buffer(
-                &path,
-                flat.pixels(),
-                flat.width(),
-                flat.height(),
-                image::ExtendedColorType::Rgba8,
-            )
-            .unwrap();
+            std::fs::write(&path, &png).unwrap();
             println!("blessed {name}");
             continue;
         }
-        match compare(&flat, &path) {
+        match compare(&flat, &png, &path) {
             Ok(()) => println!("golden {name} ... ok"),
             Err(reason) => {
                 println!("golden {name} ... FAILED: {reason}");
@@ -50,7 +45,12 @@ fn main() -> ExitCode {
     }
 }
 
-fn compare(flat: &RgbaImage, path: &PathBuf) -> Result<(), String> {
+fn compare(flat: &RgbaImage, png: &[u8], path: &PathBuf) -> Result<(), String> {
+    let golden_bytes =
+        std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if golden_bytes == png {
+        return Ok(());
+    }
     let golden = image::open(path)
         .map_err(|error| format!("{}: {error}", path.display()))?
         .into_rgba8();
@@ -69,11 +69,7 @@ fn compare(flat: &RgbaImage, path: &PathBuf) -> Result<(), String> {
         .zip(golden.as_raw().as_chunks::<4>().0)
         .filter(|(ours, theirs)| ours != theirs)
         .count();
-    if differing == 0 {
-        Ok(())
-    } else {
-        Err(format!("{differing} pixels differ"))
-    }
+    Err(format!("PNG bytes differ; {differing} pixels differ"))
 }
 
 /// Opaque, with every pixel distinct enough that a shape drawn in the wrong place shows.
