@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use crate::{Command, PointF, Shape, ShapeId, Style, TextBlock, TextBlockError};
+
 /// The text box being typed into (F-34): its text, caret and selection, and the IME's
 /// composition, with every offset in UTF-16 code units as the platform's input methods count.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,6 +191,48 @@ fn line_breaks(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// Where a text box came from: opened on empty canvas, or on a text shape already there.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextOrigin {
+    New { at: PointF, size: f32 },
+    Existing { id: ShapeId, block: TextBlock },
+}
+
+/// The one command that commits `edit` (F-34, F-38: one undo step per text edit), with
+/// `em_width` measured for its text, or `None` when committing changes nothing: an empty new
+/// box, or an existing shape whose text is unchanged. Emptying an existing shape removes it.
+///
+/// # Errors
+///
+/// [`TextBlockError`] when the origin's size or `em_width` is not a valid [`TextBlock`]'s.
+pub fn commit_text(
+    origin: &TextOrigin,
+    edit: &TextEdit,
+    em_width: f32,
+    style: Style,
+) -> Result<Option<Command>, TextBlockError> {
+    let text = edit.text();
+    Ok(match origin {
+        TextOrigin::New { .. } if text.is_empty() => None,
+        TextOrigin::New { at, size } => Some(Command::Add {
+            shape: Shape::Text(TextBlock::new(*at, text.to_owned(), *size, em_width)?),
+            style,
+        }),
+        TextOrigin::Existing { block, .. } if block.text() == text => None,
+        TextOrigin::Existing { id, .. } if text.is_empty() => Some(Command::Remove(*id)),
+        TextOrigin::Existing { id, block } => Some(Command::Replace {
+            id: *id,
+            shape: Shape::Text(TextBlock::new(
+                block.at(),
+                text.to_owned(),
+                block.size(),
+                em_width,
+            )?),
+            style,
+        }),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,5 +338,67 @@ mod tests {
         );
         edit.replace_and_mark(None, "d", Some(3..4));
         assert_eq!((edit.text(), edit.selection()), ("a!\u{1F600}bd", 6..6));
+    }
+
+    const STYLE: Style = Style {
+        color: crate::Color {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 255,
+        },
+        stroke_width: 2.0,
+    };
+    const AT: PointF = PointF { x: 4.0, y: 8.0 };
+
+    fn existing(text: &str) -> TextOrigin {
+        TextOrigin::Existing {
+            id: ShapeId(7),
+            block: TextBlock::new(AT, text.into(), 30.0, 1.0).unwrap(),
+        }
+    }
+
+    fn commit(origin: &TextOrigin, typed: &str) -> Option<Command> {
+        commit_text(origin, &TextEdit::new(typed.into()), 2.5, STYLE).unwrap()
+    }
+
+    #[test]
+    fn f34_a_new_box_commits_one_add_with_its_measured_width_or_nothing_when_empty() {
+        let new = TextOrigin::New { at: AT, size: 24.0 };
+        assert_eq!(
+            commit(&new, "hi"),
+            Some(Command::Add {
+                shape: Shape::Text(TextBlock::new(AT, "hi".into(), 24.0, 2.5).unwrap()),
+                style: STYLE,
+            })
+        );
+        assert_eq!(commit(&new, ""), None);
+    }
+
+    #[test]
+    fn f34_reopened_text_commits_one_replace_nothing_when_unchanged_and_a_remove_when_emptied() {
+        assert_eq!(
+            commit(&existing("old"), "new"),
+            Some(Command::Replace {
+                id: ShapeId(7),
+                shape: Shape::Text(TextBlock::new(AT, "new".into(), 30.0, 2.5).unwrap()),
+                style: STYLE,
+            })
+        );
+        assert_eq!(commit(&existing("same"), "same"), None);
+        assert_eq!(
+            commit(&existing("old"), ""),
+            Some(Command::Remove(ShapeId(7)))
+        );
+    }
+
+    #[test]
+    fn f34_a_commit_with_an_unmeasured_width_is_refused() {
+        let new = TextOrigin::New { at: AT, size: 24.0 };
+        let edit = TextEdit::new("hi".into());
+        assert!(matches!(
+            commit_text(&new, &edit, f32::NAN, STYLE),
+            Err(TextBlockError::WidthNotMeasured(width)) if width.is_nan()
+        ));
     }
 }

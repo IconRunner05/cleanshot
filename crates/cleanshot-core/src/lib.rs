@@ -33,5 +33,5 @@ pub use text::{
     GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT, INTER_UNITS_PER_EM, LINE_HEIGHT,
     TextBlock, TextBlockError, TextMasks,
 };
-pub use text_edit::{CaretMove, TextEdit};
+pub use text_edit::{CaretMove, TextEdit, TextOrigin, commit_text};
 pub use tool::Tool;
