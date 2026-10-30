@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use cleanshot_core::{
     AfterCapture, Hotkey, MAX_SETTINGS_BYTES, RgbaImage, SaveFormat, Settings, SettingsProblem,
 };
 use cleanshot_render::{Format, encode};
-use cleanshot_win::capture::{Desktop, capture_desktop, monitor_under_cursor, region};
+use cleanshot_win::capture::{Desktop, RECT, capture_desktop, monitor_under_cursor, region};
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::instance::Launch;
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
@@ -36,28 +36,28 @@ fn main() {
     let hotkeys = [
         (Request::CaptureRegion, region),
         (Request::CaptureScreen, settings.hotkeys.full_screen),
+        (Request::CaptureLastRegion, settings.hotkeys.last_region),
     ];
-    let settings = Rc::new(settings);
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
-    let overlay: Rc<RefCell<Option<Overlay>>> = Rc::new(RefCell::new(None));
+    let session = Rc::new(Session {
+        settings,
+        overlay: RefCell::new(None),
+        last_selection: Cell::new(None),
+    });
     cleanshot_editor::run(move |cx| {
         let app = cx.to_async();
-        let overlay = Rc::clone(&overlay);
         let created = Tray::create(&hotkeys, move |request| {
-            let overlay = Rc::clone(&overlay);
-            let settings = Rc::clone(&settings);
+            let session = Rc::clone(&session);
             let closer = app.clone();
+            let defer = move |job: Box<dyn FnOnce()>| closer.spawn(async move |_| job()).detach();
             // The tray's window procedure can run while GPUI holds the app, so the request
             // waits for GPUI's executor instead of borrowing the app here.
             app.spawn(async move |cx| {
                 cx.update(|cx| match request {
-                    Request::CaptureRegion => capture(&overlay, settings, Capture::Region, move |job| {
-                        closer.spawn(async move |_| job()).detach();
-                    }),
-                    Request::CaptureScreen => capture(&overlay, settings, Capture::Screen, move |job| {
-                        closer.spawn(async move |_| job()).detach();
-                    }),
+                    Request::CaptureRegion => capture(&session, Capture::Region, defer),
+                    Request::CaptureScreen => capture(&session, Capture::Screen, defer),
+                    Request::CaptureLastRegion => capture(&session, Capture::LastRegion, defer),
                     Request::Exit => cx.quit(),
                 });
             })
@@ -85,22 +85,50 @@ fn main() {
     drop(instance);
 }
 
-#[derive(Clone, Copy)]
+/// What lives as long as the tray: read once at start, or held between captures.
+struct Session {
+    settings: Settings,
+    overlay: RefCell<Option<Overlay>>,
+    /// F-06: the last selection copied or saved, kept in memory only (C-20).
+    last_selection: Cell<Option<RECT>>,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum Capture {
     Region,
     Screen,
+    LastRegion,
+}
+
+#[derive(Debug, PartialEq)]
+enum Plan {
+    Copy(RECT),
+    Overlay(Option<RECT>),
+}
+
+/// What a capture of `kind` does once the screen is copied, or None when the pointer's
+/// monitor is unknown. F-07 follows `after_capture` (D-34); F-06 copies the last selection
+/// with no overlay, or opens one when there is none yet (D-35).
+fn plan(
+    kind: Capture,
+    after_capture: AfterCapture,
+    last_selection: Option<RECT>,
+    pointer_monitor: impl FnOnce() -> Option<RECT>,
+) -> Option<Plan> {
+    Some(match (kind, after_capture) {
+        (Capture::Region, _) => Plan::Overlay(None),
+        (Capture::Screen, AfterCapture::Copy) => Plan::Copy(pointer_monitor()?),
+        (Capture::Screen, AfterCapture::ShowToolbar) => Plan::Overlay(Some(pointer_monitor()?)),
+        (Capture::LastRegion, _) => last_selection.map_or(Plan::Overlay(None), Plan::Copy),
+    })
 }
 
 // F-01, F-02: the screen is copied before any window of ours appears, then frozen on every
 // monitor until Esc. F-07: a screen capture selects the pointer's monitor, then runs the
-// after-capture action.
-fn capture(
-    overlay: &Rc<RefCell<Option<Overlay>>>,
-    settings: Rc<Settings>,
-    kind: Capture,
-    defer: impl Fn(Box<dyn FnOnce()>) + 'static,
-) {
-    if overlay.borrow().is_some() {
+// after-capture action. F-06: the last region is copied with no overlay; with none yet, the
+// overlay opens as for a region.
+fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()>) + 'static) {
+    if session.overlay.borrow().is_some() {
         return;
     }
     let captures = match capture_desktop() {
@@ -111,34 +139,45 @@ fn capture(
         }
         Err(error) => return eprintln!("the screen could not be captured: {error}"),
     };
-    let selected = match kind {
-        Capture::Region => None,
-        Capture::Screen => match monitor_under_cursor(&captures) {
-            Ok(monitor) => Some(monitor),
-            Err(error) => return eprintln!("the screen to capture is unknown: {error}"),
-        },
-    };
-    if let (Some(monitor), AfterCapture::Copy) = (selected, settings.after_capture) {
-        let copied = region(&captures, monitor)
-            .map_err(Box::from)
-            .and_then(|image| copy(&image));
-        if let Err(error) = copied {
-            eprintln!("the capture did not finish: {error}");
+    let pointer_monitor = || match monitor_under_cursor(&captures) {
+        Ok(monitor) => Some(monitor),
+        Err(error) => {
+            eprintln!("the screen to capture is unknown: {error}");
+            None
         }
-        return;
-    }
+    };
+    let last = session.last_selection.get();
+    let selected = match plan(kind, session.settings.after_capture, last, pointer_monitor) {
+        None => return,
+        Some(Plan::Overlay(selected)) => selected,
+        Some(Plan::Copy(selected)) => {
+            let copied = region(&captures, selected)
+                .map_err(Box::from)
+                .and_then(|image| copy(&image));
+            if let Err(error) = copied {
+                eprintln!("the capture did not finish: {error}");
+            }
+            return;
+        }
+    };
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
-    let closing = Rc::clone(overlay);
+    let finishing = Rc::clone(session);
     let shown = Overlay::show(&captures, selected, move |event| {
         let finished = match event {
             OverlayEvent::Cancelled => Ok(()),
-            OverlayEvent::Copy(selected) => region(&frozen, selected)
-                .map_err(Box::from)
-                .and_then(|image| copy(&image)),
-            OverlayEvent::Save(selected) => region(&frozen, selected)
-                .map_err(Box::from)
-                .and_then(|image| save(&image, &settings)),
+            OverlayEvent::Copy(selected) => {
+                finishing.last_selection.set(Some(selected));
+                region(&frozen, selected)
+                    .map_err(Box::from)
+                    .and_then(|image| copy(&image))
+            }
+            OverlayEvent::Save(selected) => {
+                finishing.last_selection.set(Some(selected));
+                region(&frozen, selected)
+                    .map_err(Box::from)
+                    .and_then(|image| save(&image, &finishing.settings))
+            }
             OverlayEvent::DrawFailed(error) => Err(error.into()),
         };
         if let Err(error) = finished {
@@ -146,11 +185,11 @@ fn capture(
         }
         // The event arrives inside an overlay window's procedure, so the windows close
         // after it returns.
-        let closing = Rc::clone(&closing);
-        defer(Box::new(move || drop(closing.borrow_mut().take())));
+        let closing = Rc::clone(&finishing);
+        defer(Box::new(move || drop(closing.overlay.borrow_mut().take())));
     });
     match shown {
-        Ok(shown) => *overlay.borrow_mut() = Some(shown),
+        Ok(shown) => *session.overlay.borrow_mut() = Some(shown),
         Err(error) => eprintln!("the overlay could not open: {error}"),
     }
 }
@@ -240,5 +279,59 @@ fn describe(problem: &SettingsProblem) -> String {
         SettingsProblem::InvalidValue { key } => {
             format!("{key} has a value Cleanshot cannot use, so its default applies")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MONITOR: RECT = RECT {
+        left: -1920,
+        top: 0,
+        right: 0,
+        bottom: 1080,
+    };
+    const LAST: RECT = RECT {
+        left: 10,
+        top: 20,
+        right: 110,
+        bottom: 220,
+    };
+
+    #[test]
+    fn f07_full_screen_copies_or_preselects_the_pointer_monitor_by_after_capture() {
+        let monitor = || Some(MONITOR);
+        assert_eq!(
+            plan(Capture::Screen, AfterCapture::Copy, None, monitor),
+            Some(Plan::Copy(MONITOR))
+        );
+        assert_eq!(
+            plan(Capture::Screen, AfterCapture::ShowToolbar, None, monitor),
+            Some(Plan::Overlay(Some(MONITOR)))
+        );
+        assert_eq!(
+            plan(Capture::Screen, AfterCapture::Copy, None, || None),
+            None
+        );
+    }
+
+    #[test]
+    fn f06_last_region_copies_the_last_selection_or_opens_the_overlay_without_one() {
+        let monitor = || Some(MONITOR);
+        for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
+            assert_eq!(
+                plan(Capture::LastRegion, after, Some(LAST), monitor),
+                Some(Plan::Copy(LAST))
+            );
+            assert_eq!(
+                plan(Capture::LastRegion, after, None, monitor),
+                Some(Plan::Overlay(None))
+            );
+        }
+        assert_eq!(
+            plan(Capture::Region, AfterCapture::Copy, Some(LAST), monitor),
+            Some(Plan::Overlay(None))
+        );
     }
 }

@@ -39,6 +39,7 @@ const MENU_EXIT: usize = 3;
 pub enum Request {
     CaptureRegion,
     CaptureScreen,
+    CaptureLastRegion,
     Exit,
 }
 
