@@ -1,1 +1,12 @@
+pub mod tray;
 
+/// What went wrong in a call to Windows.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Windows refused to create the tray window or its icon")]
+    Window(#[source] windows::core::Error),
+    #[error("the shell refused to add the tray icon")]
+    TrayIcon,
+    #[error("another program has taken the hotkey")]
+    HotkeyTaken(#[source] windows::core::Error),
+}

@@ -357,6 +357,8 @@ name = "cleanshot-win"
 version = "0.1.0"
 dependencies = [
  "cleanshot-core",
+ "thiserror",
+ "windows",
 ]
 
 [[package]]
