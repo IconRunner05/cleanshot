@@ -2,8 +2,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Command, CommandError, Delivered, DeliveryError, Document, Drag, History, KeyAction, Modifiers,
-    Output, Press, RgbaImage, ShapeId, Tool, action_for_key,
+    Activity, Command, CommandError, Delivered, DeliveryError, Document, Drag, History, KeyAction,
+    Modifiers, Output, Press, RgbaImage, ShapeId, Tool, action_for_key,
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
@@ -142,8 +142,12 @@ impl EditorView {
             shift: gpui.shift,
             win: gpui.platform,
         };
-        let dragging = self.drag.is_some();
-        let Some(action) = action_for_key(&event.keystroke.key, modifiers, dragging) else {
+        let activity = if self.drag.is_some() {
+            Activity::Dragging
+        } else {
+            Activity::Idle
+        };
+        let Some(action) = action_for_key(&event.keystroke.key, modifiers, activity) else {
             return;
         };
         match action {
@@ -161,6 +165,8 @@ impl EditorView {
             KeyAction::FocusNext => window.focus_next(cx),
             KeyAction::FocusPrevious => window.focus_prev(cx),
             KeyAction::Deliver(output) => self.deliver(output),
+            // F-34: no text box opens until the text tool is wired, so no text key arrives yet.
+            KeyAction::Text(_) => {}
         }
         cx.notify();
     }

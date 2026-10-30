@@ -20,7 +20,7 @@ pub use document::{
 pub use drag::{Drag, Press};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Command, CommandError, History};
-pub use keys::{KeyAction, action_for_key};
+pub use keys::{Activity, KeyAction, TextKey, action_for_key};
 pub use selection::{
     BoxHandle, Handle, box_handle_at, box_handles, handle_at, handles, moved, resized, resized_box,
     shape_at,
