@@ -14,8 +14,8 @@ const ELLIPSE_SEGMENTS: u16 = 64;
 /// The base image in the BGRA layout GPUI uploads, made once per window.
 pub(crate) fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
     let mut buffer = image::RgbaImage::new(image.width(), image.height());
-    let bgra = buffer.as_chunks_mut::<4>().0.iter_mut();
-    for (bgra, rgba) in bgra.zip(image.pixels().as_chunks::<4>().0) {
+    let bgra_pixels = buffer.as_chunks_mut::<4>().0.iter_mut();
+    for (bgra, rgba) in bgra_pixels.zip(image.pixels().as_chunks::<4>().0) {
         *bgra = [rgba[2], rgba[1], rgba[0], rgba[3]];
     }
     Arc::new(RenderImage::new(smallvec![image::Frame::new(buffer)]))
