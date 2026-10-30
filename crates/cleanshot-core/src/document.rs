@@ -63,6 +63,8 @@ pub struct RgbaImage {
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ImageError {
+    #[error("an image needs at least one pixel, but it is {width}x{height}")]
+    ZeroSize { width: u32, height: u32 },
     #[error("a {width}x{height} RGBA image needs {width}*{height}*4 bytes, but {len} were given")]
     PixelCountMismatch { width: u32, height: u32, len: usize },
 }
@@ -72,8 +74,12 @@ impl RgbaImage {
     ///
     /// # Errors
     ///
+    /// [`ImageError::ZeroSize`] if `width` or `height` is 0;
     /// [`ImageError::PixelCountMismatch`] unless `pixels` holds exactly `width * height * 4` bytes.
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, ImageError> {
+        if width == 0 || height == 0 {
+            return Err(ImageError::ZeroSize { width, height });
+        }
         let expected = u128::from(width) * u128::from(height) * 4;
         if pixels.len() as u128 != expected {
             return Err(ImageError::PixelCountMismatch {
@@ -89,13 +95,13 @@ impl RgbaImage {
         })
     }
 
-    /// Width in physical pixels.
+    /// Width in physical pixels, at least 1.
     #[must_use]
     pub fn width(&self) -> u32 {
         self.width
     }
 
-    /// Height in physical pixels.
+    /// Height in physical pixels, at least 1.
     #[must_use]
     pub fn height(&self) -> u32 {
         self.height
@@ -129,6 +135,16 @@ mod tests {
                 len: 23
             })
         );
+    }
+
+    #[test]
+    fn rgba_image_rejects_a_zero_width_or_height() {
+        for (width, height) in [(0, 0), (0, 3), (2, 0)] {
+            assert_eq!(
+                RgbaImage::new(width, height, Vec::new()),
+                Err(ImageError::ZeroSize { width, height })
+            );
+        }
     }
 
     #[test]
