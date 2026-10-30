@@ -8,6 +8,10 @@ pub enum KeyAction {
     RemoveSelected,
     ClearSelection,
     PickTool(Tool),
+    /// Back to the view that fits the image in the window (F-39).
+    FitView,
+    /// Space went down: a drag pans the image until it comes up (F-39).
+    HoldToPan,
 }
 
 /// The editor's key map. `key` is the key's name as the editor's toolkit gives it: one
@@ -23,12 +27,14 @@ pub fn action_for_key(key: &str, modifiers: Modifiers, dragging: bool) -> Option
         return match key {
             "z" => Some(KeyAction::Undo),
             "y" => Some(KeyAction::Redo),
+            "0" => Some(KeyAction::FitView),
             _ => None,
         };
     }
     match key {
         "delete" => Some(KeyAction::RemoveSelected),
         "escape" => Some(KeyAction::ClearSelection),
+        "space" => Some(KeyAction::HoldToPan),
         _ => single_char(key)
             .and_then(Tool::for_key)
             .map(KeyAction::PickTool),
@@ -93,6 +99,16 @@ mod tests {
         );
         assert_eq!(action_for_key("q", NONE, false), None);
         assert_eq!(action_for_key("home", NONE, false), None);
+    }
+
+    #[test]
+    fn f39_ctrl_0_fits_the_view_and_space_holds_the_pan() {
+        assert_eq!(action_for_key("0", CTRL, false), Some(KeyAction::FitView));
+        assert_eq!(action_for_key("0", NONE, false), None);
+        assert_eq!(
+            action_for_key("space", NONE, false),
+            Some(KeyAction::HoldToPan)
+        );
     }
 
     #[test]

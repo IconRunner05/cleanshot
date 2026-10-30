@@ -3,16 +3,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, PointF, RectF, RgbaImage, Shape, ShapeId, Style, arrow_head,
-    handles,
+    Color, Command, Document, Fill, PointF, RgbaImage, Shape, ShapeId, Style, arrow_head, handles,
 };
 use gpui::{
     App, BorderStyle, Bounds, Canvas, DispatchPhase, Hitbox, HitboxBehavior, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, RenderImage, Rgba,
-    Window, canvas, fill, point, px, quad, size, transparent_black,
+    ScrollDelta, ScrollEvent, Window, canvas, fill, point, px, quad, size, transparent_black,
 };
 use smallvec::smallvec;
 
+use crate::placement::{Fit, Placement};
 use crate::toolbar::ACCENT;
 
 const ELLIPSE_SEGMENTS: u16 = 64;
@@ -32,16 +32,26 @@ pub(crate) fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
 pub(crate) enum Pointer {
     /// The left button went down over the canvas. `reach` is how far from `at`, in image
     /// pixels, a press still grips a shape or handle.
+    /// `position` is on the canvas, and `placement` is where the image was when it was pressed.
     Press {
         at: PointF,
         reach: f32,
+        position: Point<Pixels>,
+        placement: Placement,
     },
     Move {
         at: PointF,
         shift: bool,
+        position: Point<Pixels>,
     },
     Release {
         shift: bool,
+    },
+    /// Ctrl+wheel over the canvas: scale `placement` by `factor` about `around` (F-39).
+    Zoom {
+        factor: f32,
+        around: Point<Pixels>,
+        placement: Placement,
     },
 }
 
@@ -57,19 +67,26 @@ pub(crate) struct Overlay {
 /// How far from a shape or handle, in screen pixels, a press still grips it.
 const POINTER_REACH: f32 = 6.0;
 const HANDLE_SIZE: f32 = 8.0;
+/// D-46: each wheel line zooms by a fifth; a touchpad reports pixels, read as lines of 20.
+const ZOOM_PER_WHEEL_LINE: f32 = 1.2;
+const PIXELS_PER_WHEEL_LINE: f32 = 20.0;
 
 /// Draws the document's base image scaled to fit the element, its shapes with `overlay`'s
 /// preview on top, and reports the pointer to `on_pointer`, following a drag outside the element.
 pub(crate) fn document_canvas(
     document: Rc<Document>,
     base: Arc<RenderImage>,
+    placement: Option<Placement>,
     overlay: Overlay,
     on_pointer: OnPointer,
 ) -> Canvas<Hitbox> {
     canvas(
         |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
         move |bounds, hitbox, window, _| {
-            let fit = Fit::new(bounds, &document, window.scale_factor());
+            let image = document.base();
+            let placement = placement
+                .unwrap_or_else(|| Placement::fitted(bounds.size, image, window.scale_factor()));
+            let fit = Fit::new(bounds, image, placement);
             // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
             let _ = window.paint_image(
                 fit.image_bounds,
@@ -106,15 +123,23 @@ pub(crate) fn document_canvas(
                     paint_handle(fit.point(at), window);
                 }
             }
-            listen_for_pointer(&fit, hitbox, &on_pointer, window);
+            listen_for_pointer(&fit, placement, bounds.origin, hitbox, &on_pointer, window);
         },
     )
 }
 
-fn listen_for_pointer(fit: &Fit, hitbox: Hitbox, on_pointer: &OnPointer, window: &mut Window) {
+fn listen_for_pointer(
+    fit: &Fit,
+    placement: Placement,
+    canvas_origin: Point<Pixels>,
+    hitbox: Hitbox,
+    on_pointer: &OnPointer,
+    window: &mut Window,
+) {
     let fit = *fit;
     let image_point = move |position| fit.image_point(position);
     let reach = POINTER_REACH / fit.scale;
+    let zoom_hitbox = hitbox.clone();
     let on_press = Rc::clone(on_pointer);
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble
@@ -122,7 +147,14 @@ fn listen_for_pointer(fit: &Fit, hitbox: Hitbox, on_pointer: &OnPointer, window:
             && hitbox.is_hovered(window)
         {
             let at = image_point(event.position);
-            on_press(Pointer::Press { at, reach }, window, cx);
+            let position = event.position - canvas_origin;
+            let press = Pointer::Press {
+                at,
+                reach,
+                position,
+                placement,
+            };
+            on_press(press, window, cx);
         }
     });
     let on_move = Rc::clone(on_pointer);
@@ -130,7 +162,16 @@ fn listen_for_pointer(fit: &Fit, hitbox: Hitbox, on_pointer: &OnPointer, window:
         if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) {
             let at = image_point(event.position);
             let shift = event.modifiers.shift;
-            on_move(Pointer::Move { at, shift }, window, cx);
+            let position = event.position - canvas_origin;
+            on_move(
+                Pointer::Move {
+                    at,
+                    shift,
+                    position,
+                },
+                window,
+                cx,
+            );
         }
     });
     let on_release = Rc::clone(on_pointer);
@@ -138,6 +179,24 @@ fn listen_for_pointer(fit: &Fit, hitbox: Hitbox, on_pointer: &OnPointer, window:
         if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
             let shift = event.modifiers.shift;
             on_release(Pointer::Release { shift }, window, cx);
+        }
+    });
+    let on_zoom = Rc::clone(on_pointer);
+    window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble
+            && event.modifiers.control
+            && zoom_hitbox.is_hovered(window)
+        {
+            let lines = match event.delta {
+                ScrollDelta::Lines(lines) => lines.y,
+                ScrollDelta::Pixels(pixels) => f32::from(pixels.y) / PIXELS_PER_WHEEL_LINE,
+            };
+            let zoom = Pointer::Zoom {
+                factor: ZOOM_PER_WHEEL_LINE.powf(lines),
+                around: event.position - canvas_origin,
+                placement,
+            };
+            on_zoom(zoom, window, cx);
         }
     });
 }
@@ -164,65 +223,6 @@ fn paint_handle(centre: Point<Pixels>, window: &mut Window) {
         ACCENT,
         BorderStyle::Solid,
     ));
-}
-
-/// Maps document pixels onto the element: uniform scale, centred.
-#[derive(Clone, Copy)]
-struct Fit {
-    origin: Point<Pixels>,
-    scale: f32,
-    image_bounds: Bounds<Pixels>,
-}
-
-impl Fit {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "image sides are far below 2^24, where f32 stops being exact"
-    )]
-    fn new(bounds: Bounds<Pixels>, document: &Document, scale_factor: f32) -> Self {
-        let width = document.base().width() as f32;
-        let height = document.base().height() as f32;
-        // D-41: one image pixel never covers more than one device pixel, so a small capture stays sharp.
-        let scale = (f32::from(bounds.size.width) / width)
-            .min(f32::from(bounds.size.height) / height)
-            .min(1.0 / scale_factor);
-        let fitted = size(px(width * scale), px(height * scale));
-        let origin = bounds.origin
-            + point(
-                (bounds.size.width - fitted.width) / 2.0,
-                (bounds.size.height - fitted.height) / 2.0,
-            );
-        Self {
-            origin,
-            scale,
-            image_bounds: Bounds::new(origin, fitted),
-        }
-    }
-
-    /// The image pixel under `position`, clamped to the image.
-    fn image_point(&self, position: Point<Pixels>) -> PointF {
-        let offset = position - self.origin;
-        let image =
-            |screen: Pixels, side: Pixels| f32::from(screen.clamp(px(0.0), side)) / self.scale;
-        PointF {
-            x: image(offset.x, self.image_bounds.size.width),
-            y: image(offset.y, self.image_bounds.size.height),
-        }
-    }
-
-    fn point(&self, point_f: PointF) -> Point<Pixels> {
-        self.origin + point(px(point_f.x * self.scale), px(point_f.y * self.scale))
-    }
-
-    fn bounds(&self, rect: RectF) -> Bounds<Pixels> {
-        Bounds::new(
-            self.point(PointF {
-                x: rect.x,
-                y: rect.y,
-            }),
-            size(px(rect.width * self.scale), px(rect.height * self.scale)),
-        )
-    }
 }
 
 fn paint_shape(shape: &Shape, style: Style, fit: &Fit, window: &mut Window) {
@@ -319,41 +319,5 @@ fn rgba(color: Color) -> Rgba {
         g: f32::from(color.g) / 255.0,
         b: f32::from(color.b) / 255.0,
         a: f32::from(color.a) / 255.0,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fit(image_width: u32, image_height: u32, scale_factor: f32) -> Fit {
-        let pixels = vec![0; image_width as usize * image_height as usize * 4];
-        let image = RgbaImage::new(image_width, image_height, pixels).unwrap();
-        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(1000.0), px(600.0)));
-        Fit::new(bounds, &Document::new(Arc::new(image)), scale_factor)
-    }
-
-    #[test]
-    fn f23_a_small_capture_is_drawn_one_image_pixel_per_device_pixel() {
-        let small = fit(100, 50, 2.0);
-        assert_eq!(small.scale, 0.5);
-        assert_eq!(small.image_bounds.size, size(px(50.0), px(25.0)));
-        assert_eq!(small.image_bounds.center(), point(px(500.0), px(300.0)));
-    }
-
-    #[test]
-    fn f30_a_pointer_outside_the_image_lands_on_its_nearest_edge() {
-        let small = fit(100, 50, 2.0);
-        let image_point = |x, y| small.image_point(point(px(x), px(y)));
-        assert_eq!(image_point(475.0, 287.5), PointF { x: 0.0, y: 0.0 });
-        assert_eq!(image_point(500.0, 300.0), PointF { x: 50.0, y: 25.0 });
-        assert_eq!(image_point(0.0, 1000.0), PointF { x: 0.0, y: 50.0 });
-        assert_eq!(image_point(900.0, -5.0), PointF { x: 100.0, y: 0.0 });
-    }
-
-    #[test]
-    fn f23_a_large_capture_shrinks_to_fit_the_canvas() {
-        let large = fit(4000, 1200, 1.0);
-        assert_eq!(large.image_bounds.size, size(px(1000.0), px(300.0)));
     }
 }

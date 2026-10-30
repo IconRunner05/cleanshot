@@ -1,0 +1,187 @@
+use cleanshot_core::{PointF, RectF, RgbaImage};
+use gpui::{Bounds, Pixels, Point, Size, point, px, size};
+
+/// Zoom stops between these scales, in screen pixels per image pixel (D-46).
+const MIN_SCALE: f32 = 0.05;
+const MAX_SCALE: f32 = 32.0;
+
+/// Where the image sits on the canvas: its top-left corner, relative to the canvas, and its
+/// scale in screen pixels per image pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Placement {
+    pub corner: Point<Pixels>,
+    pub scale: f32,
+}
+
+impl Placement {
+    /// The image centred on a `canvas` of that size, as large as fits but never more than one
+    /// image pixel per device pixel (D-41).
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "image sides are far below 2^24, where f32 stops being exact"
+    )]
+    pub fn fitted(canvas: Size<Pixels>, image: &RgbaImage, scale_factor: f32) -> Self {
+        let (width, height) = (image.width() as f32, image.height() as f32);
+        let scale = (f32::from(canvas.width) / width)
+            .min(f32::from(canvas.height) / height)
+            .min(1.0 / scale_factor);
+        Self {
+            corner: point(
+                (canvas.width - px(width * scale)) / 2.0,
+                (canvas.height - px(height * scale)) / 2.0,
+            ),
+            scale,
+        }
+    }
+
+    /// Scaled by `factor` about `around`, a canvas point that stays over the same image pixel
+    /// (F-39). The scale stops at the zoom limits.
+    pub fn zoomed(self, factor: f32, around: Point<Pixels>) -> Self {
+        let scale = (self.scale * factor).clamp(MIN_SCALE, MAX_SCALE);
+        let ratio = scale / self.scale;
+        Self {
+            corner: around - (around - self.corner) * ratio,
+            scale,
+        }
+    }
+
+    /// Moved by `offset` on the canvas (F-39).
+    pub fn panned(self, offset: Point<Pixels>) -> Self {
+        Self {
+            corner: self.corner + offset,
+            ..self
+        }
+    }
+}
+
+/// A placement on the screen for one frame: maps image pixels to window pixels and back.
+#[derive(Clone, Copy)]
+pub(crate) struct Fit {
+    pub origin: Point<Pixels>,
+    pub scale: f32,
+    pub image_bounds: Bounds<Pixels>,
+}
+
+impl Fit {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "image sides are far below 2^24, where f32 stops being exact"
+    )]
+    pub fn new(canvas: Bounds<Pixels>, image: &RgbaImage, placement: Placement) -> Self {
+        let origin = canvas.origin + placement.corner;
+        let image_size = size(
+            px(image.width() as f32 * placement.scale),
+            px(image.height() as f32 * placement.scale),
+        );
+        Self {
+            origin,
+            scale: placement.scale,
+            image_bounds: Bounds::new(origin, image_size),
+        }
+    }
+
+    /// The image pixel under `position`, clamped to the image.
+    pub fn image_point(&self, position: Point<Pixels>) -> PointF {
+        let offset = position - self.origin;
+        let image =
+            |screen: Pixels, side: Pixels| f32::from(screen.clamp(px(0.0), side)) / self.scale;
+        PointF {
+            x: image(offset.x, self.image_bounds.size.width),
+            y: image(offset.y, self.image_bounds.size.height),
+        }
+    }
+
+    pub fn point(&self, point_f: PointF) -> Point<Pixels> {
+        self.origin + point(px(point_f.x * self.scale), px(point_f.y * self.scale))
+    }
+
+    pub fn bounds(&self, rect: RectF) -> Bounds<Pixels> {
+        Bounds::new(
+            self.point(PointF {
+                x: rect.x,
+                y: rect.y,
+            }),
+            size(px(rect.width * self.scale), px(rect.height * self.scale)),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CANVAS: Size<Pixels> = Size {
+        width: px(1000.0),
+        height: px(600.0),
+    };
+
+    fn image(width: u32, height: u32) -> RgbaImage {
+        RgbaImage::new(width, height, vec![0; width as usize * height as usize * 4]).unwrap()
+    }
+
+    fn fit(image_width: u32, image_height: u32, scale_factor: f32) -> Fit {
+        let image = image(image_width, image_height);
+        let canvas = Bounds::new(point(px(0.0), px(0.0)), CANVAS);
+        Fit::new(
+            canvas,
+            &image,
+            Placement::fitted(CANVAS, &image, scale_factor),
+        )
+    }
+
+    #[test]
+    fn f23_a_small_capture_is_drawn_one_image_pixel_per_device_pixel() {
+        let small = fit(100, 50, 2.0);
+        assert_eq!(small.scale, 0.5);
+        assert_eq!(small.image_bounds.size, size(px(50.0), px(25.0)));
+        assert_eq!(small.image_bounds.center(), point(px(500.0), px(300.0)));
+    }
+
+    #[test]
+    fn f23_a_large_capture_shrinks_to_fit_the_canvas() {
+        let large = fit(4000, 1200, 1.0);
+        assert_eq!(large.image_bounds.size, size(px(1000.0), px(300.0)));
+    }
+
+    #[test]
+    fn f30_a_pointer_outside_the_image_lands_on_its_nearest_edge() {
+        let small = fit(100, 50, 2.0);
+        let image_point = |x, y| small.image_point(point(px(x), px(y)));
+        assert_eq!(image_point(475.0, 287.5), PointF { x: 0.0, y: 0.0 });
+        assert_eq!(image_point(500.0, 300.0), PointF { x: 50.0, y: 25.0 });
+        assert_eq!(image_point(0.0, 1000.0), PointF { x: 0.0, y: 50.0 });
+        assert_eq!(image_point(900.0, -5.0), PointF { x: 100.0, y: 0.0 });
+    }
+
+    #[test]
+    fn f39_zooming_keeps_the_image_pixel_under_the_pointer() {
+        let image = image(400, 300);
+        let canvas = Bounds::new(point(px(20.0), px(30.0)), CANVAS);
+        let placement = Placement::fitted(CANVAS, &image, 1.0);
+        let pointer = point(px(612.0), px(411.0));
+        let before = Fit::new(canvas, &image, placement).image_point(canvas.origin + pointer);
+        let zoomed = placement.zoomed(3.0, pointer);
+        let after = Fit::new(canvas, &image, zoomed).image_point(canvas.origin + pointer);
+        assert_eq!(zoomed.scale, 3.0);
+        assert!((after.x - before.x).abs() < 1e-3 && (after.y - before.y).abs() < 1e-3);
+    }
+
+    #[test]
+    fn f39_zoom_stops_at_its_limits_and_a_pan_moves_the_image() {
+        let start = Placement {
+            corner: point(px(10.0), px(10.0)),
+            scale: 1.0,
+        };
+        assert_eq!(
+            start.zoomed(1000.0, point(px(0.0), px(0.0))).scale,
+            MAX_SCALE
+        );
+        assert_eq!(
+            start.zoomed(0.0001, point(px(0.0), px(0.0))).scale,
+            MIN_SCALE
+        );
+        let panned = start.panned(point(px(-30.0), px(5.0)));
+        assert_eq!(panned.corner, point(px(-20.0), px(15.0)));
+        assert_eq!(panned.scale, 1.0);
+    }
+}

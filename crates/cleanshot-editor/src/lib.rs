@@ -3,6 +3,7 @@
 mod bench;
 mod canvas;
 mod editor_window;
+mod placement;
 mod restricted_platform;
 mod toolbar;
 

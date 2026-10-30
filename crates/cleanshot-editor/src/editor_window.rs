@@ -7,13 +7,21 @@ use cleanshot_core::{
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
-    ParentElement, Render, RenderImage, SharedString, Styled, TitlebarOptions, Window,
-    WindowBounds, WindowHandle, WindowOptions, div, px, rgba, size,
+    KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString, Styled,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, rgba, size,
 };
 
 use crate::Error;
 use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
+use crate::placement::Placement;
 use crate::toolbar::toolbar;
+
+/// A Space-drag in progress: where it started and where the image was then.
+#[derive(Clone, Copy)]
+struct Pan {
+    from: Point<Pixels>,
+    placement: Placement,
+}
 
 struct EditorView {
     history: History,
@@ -24,6 +32,10 @@ struct EditorView {
     selected: Option<ShapeId>,
     drag: Option<Drag>,
     shift: bool,
+    /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
+    placement: Option<Placement>,
+    space_held: bool,
+    pan: Option<Pan>,
     /// Why the last edit was refused, until the next press.
     notice: Option<SharedString>,
     focus: FocusHandle,
@@ -41,6 +53,9 @@ impl EditorView {
             selected: None,
             drag: None,
             shift: false,
+            placement: None,
+            space_held: false,
+            pan: None,
             notice: None,
             focus,
         }
@@ -48,18 +63,34 @@ impl EditorView {
 
     fn pointer(&mut self, pointer: Pointer, cx: &mut Context<Self>) {
         match pointer {
-            Pointer::Press { at, reach } => {
+            Pointer::Press {
+                position,
+                placement,
+                ..
+            } if self.space_held => {
+                self.pan = Some(Pan {
+                    from: position,
+                    placement,
+                });
+            }
+            Pointer::Press { at, reach, .. } => {
                 let Press { selected, drag } =
                     Drag::press(&self.document, self.tool, self.selected, at, reach);
                 (self.selected, self.drag, self.notice) = (selected, drag, None);
             }
-            Pointer::Move { at, shift } => {
+            Pointer::Move { position, .. } if self.pan.is_some() => {
+                self.placement = self
+                    .pan
+                    .map(|pan| pan.placement.panned(position - pan.from));
+            }
+            Pointer::Move { at, shift, .. } => {
                 let Some(drag) = &mut self.drag else {
                     return;
                 };
                 drag.extend(at);
                 self.shift = shift;
             }
+            Pointer::Release { .. } if self.pan.is_some() => self.pan = None,
             Pointer::Release { shift } => {
                 let Some(drag) = self.drag.take() else {
                     return;
@@ -68,6 +99,11 @@ impl EditorView {
                     self.apply(command);
                 }
             }
+            Pointer::Zoom {
+                factor,
+                around,
+                placement,
+            } => self.placement = Some(placement.zoomed(factor, around)),
         }
         cx.notify();
     }
@@ -94,6 +130,8 @@ impl EditorView {
             }
             KeyAction::ClearSelection => self.selected = None,
             KeyAction::PickTool(tool) => self.tool = tool,
+            KeyAction::FitView => self.placement = None,
+            KeyAction::HoldToPan => self.space_held = true,
         }
         cx.notify();
     }
@@ -167,6 +205,7 @@ impl Render for EditorView {
         let canvas = document_canvas(
             Rc::clone(&self.document),
             Arc::clone(&self.base),
+            self.placement,
             overlay,
             on_pointer,
         );
@@ -175,6 +214,11 @@ impl Render for EditorView {
             .relative()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event, _, cx| view.key_down(event, cx)))
+            .on_key_up(cx.listener(|view, event: &KeyUpEvent, _, _| {
+                if event.keystroke.key == "space" {
+                    view.space_held = false;
+                }
+            }))
             .child(canvas.size_full())
             .child(toolbar(self.tool, on_pick))
             .children(self.notice.clone().map(notice_panel))
