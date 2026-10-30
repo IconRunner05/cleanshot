@@ -28,6 +28,10 @@ deny = [
     { name = "native-tls" },
     { name = "rustls" },
     { name = "arboard" },
+    { name = "windows-core", reason = "D-60: only cleanshot-win, for #[implement], besides windows and GPUI's own crates", wrappers = [
+        "accesskit_windows", "cleanshot-win", "gpui_windows", "windows",
+        "windows-collections", "windows-future", "windows-numerics",
+    ] },
 ]
 
 [[bans.features]]

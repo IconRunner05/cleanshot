@@ -9,6 +9,7 @@ pub mod overlay;
 pub mod save;
 mod selection;
 pub mod settings_file;
+pub mod text;
 pub mod tray;
 
 use windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS;
@@ -68,4 +69,8 @@ pub enum Error {
     NoMonitorAtPointer,
     #[error("no display output could be duplicated")]
     NothingDuplicated,
+    #[error("DirectWrite could not lay out or draw the text")]
+    Text(#[source] windows::core::Error),
+    #[error("a glyph mask has an impossible size")]
+    TextMaskShape(#[from] cleanshot_core::GlyphMaskError),
 }
