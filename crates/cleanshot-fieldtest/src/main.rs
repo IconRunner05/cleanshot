@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
 use std::fmt::{Display, Write as _};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::{
     Driver, adapters, clipboard_round_trip, d3d11_feature_level, drive_tray, make_dpi_aware,
     monitors, windows_version,
@@ -10,6 +11,7 @@ use cleanshot_win::field_test::{
 
 const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIPBOARD_MARKER: &str = "cleanshot field test";
+const CAPTURE_ATTEMPTS: u32 = 3;
 
 fn main() {
     let report_path = match std::env::args().collect::<Vec<_>>().as_slice() {
@@ -34,6 +36,7 @@ fn probe() -> String {
     report_windows(&mut report);
     report_display(&mut report);
     report_tray(&mut report);
+    report_capture(&mut report);
     report_clipboard(&mut report);
     report
 }
@@ -125,6 +128,50 @@ fn report_tray(report: &mut String) {
         }
         Err(error) => line(report, "Tray", format!("error: {error}")),
     }
+}
+
+fn report_capture(report: &mut String) {
+    report.push_str("\n## Capture\n\n");
+    for method in [Method::GdiBitBlt, Method::DesktopDuplication] {
+        for attempt in 1..=CAPTURE_ATTEMPTS {
+            let start = Instant::now();
+            let captured = capture_all(method);
+            let elapsed = start.elapsed();
+            let name = format!("{method:?} attempt {attempt}");
+            match captured {
+                Ok(monitors) => {
+                    let described: Vec<String> = monitors
+                        .iter()
+                        .map(|monitor| {
+                            format!(
+                                "{}x{} with {} distinct colours sampled",
+                                monitor.image.width(),
+                                monitor.image.height(),
+                                distinct_colours(monitor.image.pixels())
+                            )
+                        })
+                        .collect();
+                    line(
+                        report,
+                        &name,
+                        format!("{elapsed:?}: {}", described.join("; ")),
+                    );
+                }
+                Err(error) => line(report, &name, format!("{elapsed:?}: error: {error}")),
+            }
+        }
+    }
+}
+
+/// Distinct RGBA values among every 97th pixel: 1 means the capture is blank.
+fn distinct_colours(pixels: &[u8]) -> usize {
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .step_by(97)
+        .collect::<std::collections::HashSet<_>>()
+        .len()
 }
 
 fn report_clipboard(report: &mut String) {

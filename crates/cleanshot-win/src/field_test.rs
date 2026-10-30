@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HANDLE, HGLOBAL, HMODULE, LPARAM, RECT};
+use windows::Win32::Foundation::{HANDLE, HGLOBAL, HMODULE, RECT};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
 };
@@ -12,9 +12,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_NOT_FOUND, IDXGIFactory1,
 };
-use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
-};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO, MONITORINFOEXW};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
@@ -35,9 +33,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetForegroundWindow, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW,
     QS_ALLINPUT, TranslateMessage,
 };
-use windows::core::{BOOL, PCWSTR, w};
+use windows::core::{PCWSTR, w};
 
 use crate::Error;
+use crate::capture::monitor_handles;
 use crate::tray::{Hotkey, Request, Tray};
 
 /// The Windows release, read from the registry.
@@ -152,18 +151,10 @@ fn registry_number(value: PCWSTR) -> Result<u32, windows::core::Error> {
 /// Every monitor attached to the desktop, in the order Windows lists them.
 #[must_use]
 pub fn monitors() -> Vec<Monitor> {
-    unsafe extern "system" fn add(monitor: HMONITOR, _: HDC, _: *mut RECT, list: LPARAM) -> BOOL {
-        // SAFETY: `list` is the &mut Vec that `monitors` passed, alive for the whole call.
-        let list = unsafe { &mut *(list.0 as *mut Vec<HMONITOR>) };
-        list.push(monitor);
-        true.into()
-    }
-    let mut handles: Vec<HMONITOR> = Vec::new();
-    // SAFETY: `add` only pushes onto `handles`, which outlives the call.
-    let listed =
-        unsafe { EnumDisplayMonitors(None, None, Some(add), LPARAM(&raw mut handles as isize)) };
-    debug_assert!(listed.as_bool(), "the desktop's monitors can be listed");
-    handles.into_iter().map(describe_monitor).collect()
+    monitor_handles()
+        .into_iter()
+        .map(describe_monitor)
+        .collect()
 }
 
 fn describe_monitor(handle: HMONITOR) -> Monitor {
