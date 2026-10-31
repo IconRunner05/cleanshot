@@ -12,6 +12,14 @@ pub struct TextEdit {
     marked: Option<Range<usize>>,
 }
 
+/// A place in the text as the editor's layout counts it: the line, from 0, and the byte within
+/// that line's text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinePosition {
+    pub line: usize,
+    pub byte: usize,
+}
+
 /// Where an arrow, Home or End key moves the caret.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaretMove {
@@ -146,6 +154,36 @@ impl TextEdit {
         if !extend {
             self.anchor = self.head;
         }
+    }
+
+    /// Where `offset` falls, moved onto a whole character inside the text.
+    #[must_use]
+    pub fn position(&self, offset: usize) -> LinePosition {
+        let byte = self.byte_at(offset);
+        let before = &self.text[..byte];
+        let line_start = before.rfind('\n').map_or(0, |line_break| line_break + 1);
+        LinePosition {
+            line: before.matches('\n').count(),
+            byte: byte - line_start,
+        }
+    }
+
+    /// The offset at `position`: past the last line is the end of the text, past a line's end is
+    /// that end, and inside a character is that character's start.
+    #[must_use]
+    pub fn offset(&self, position: LinePosition) -> usize {
+        let mut line_starts = std::iter::once(0).chain(
+            self.text
+                .match_indices('\n')
+                .map(|(line_break, _)| line_break + 1),
+        );
+        let Some(line_start) = line_starts.nth(position.line) else {
+            return utf16_len(&self.text);
+        };
+        let rest = &self.text[line_start..];
+        let line = rest.split('\n').next().unwrap_or(rest);
+        let byte = line.floor_char_boundary(position.byte);
+        utf16_len(&self.text[..line_start + byte])
     }
 
     fn line_start(&self, offset: usize) -> usize {
@@ -488,5 +526,23 @@ mod tests {
             commit_text(&new, &edit, f32::NAN),
             Err(TextBlockError::WidthNotMeasured(width)) if width.is_nan()
         ));
+    }
+    #[test]
+    fn f34_an_offset_maps_to_its_line_and_byte_and_back_on_whole_characters() {
+        let edit = TextEdit::new("ab\n\u{1F600}c\n".into());
+        let at = |line, byte| LinePosition { line, byte };
+        assert_eq!(edit.position(0), at(0, 0));
+        assert_eq!(edit.position(2), at(0, 2));
+        assert_eq!(edit.position(3), at(1, 0));
+        assert_eq!(edit.position(4), at(1, 0));
+        assert_eq!(edit.position(5), at(1, 4));
+        assert_eq!(edit.position(6), at(1, 5));
+        assert_eq!(edit.position(99), at(2, 0));
+        assert_eq!(edit.offset(at(1, 4)), 5);
+        assert_eq!(edit.offset(at(1, 5)), 6);
+        assert_eq!(edit.offset(at(1, 2)), 3);
+        assert_eq!(edit.offset(at(0, 9)), 2);
+        assert_eq!(edit.offset(at(2, 3)), 7);
+        assert_eq!(edit.offset(at(7, 0)), 7);
     }
 }
