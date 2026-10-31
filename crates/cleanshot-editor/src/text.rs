@@ -1,18 +1,20 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use cleanshot_core::{INTER, LINE_HEIGHT, PointF, TextBlock};
 use gpui::{
-    App, Font, FontWeight, Global, Pixels, Point, Rgba, ShapedLine, TextAlign, TextRun, Window,
-    black, font, point, px,
+    App, Font, FontFeatures, FontWeight, Global, Pixels, Point, Rgba, ShapedLine, TextAlign,
+    TextRun, Window, black, font, point, px,
 };
 
 use crate::Error;
 use crate::placement::Fit;
 
-/// The embedded Inter at the one weight F-34 draws text in.
+/// The embedded Inter at the one weight F-34 draws text in, kerned (D-69).
 fn inter() -> Font {
     Font {
         weight: FontWeight::SEMIBOLD,
+        features: FontFeatures(Arc::new(vec![("kern".into(), 1)])),
         ..font("Inter")
     }
 }
