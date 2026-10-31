@@ -1,7 +1,8 @@
 # F-34 Text: layout, display, export and tests
 
-Status: approved by the orchestrator after blind review (2026-10-30). No code yet. Editor side: the editor seat
-(core, render, editor). DirectWrite side: the capture seat (win, app).
+Status: approved by the orchestrator after blind review (2026-10-30). Editor side (core, render,
+editor), the editor seat: built, except its half of the drift test. DirectWrite side (win,
+app), the capture seat.
 
 F-34 asks for multi-line text where IME works and Ctrl+A and Backspace behave like a text box. The
 export must match what was on screen, and `cleanshot-render` stays pure Rust with no OS calls
@@ -168,13 +169,12 @@ commit says so, records the platform part as not yet proven, and does not tick t
 - Win and app (capture seat): `win::text::masks`, the in-memory font loader, the text renderer
   callback, the IME test, and passing masks from `deliver` to `flatten`.
 
-## Decision rows this needs (from D-50..D-59)
+## Decision rows
 
-- Text keeps hard line breaks only, and is SemiBold Inter at a default 24 px.
-- Colour emoji export in colour, as on screen, through colour layers.
-- The export's fixed gamma and grayscale contrast: the values `CreateRenderingParams` returns on a
-  clean windows-latest runner, measured by a CI probe and written into the row with the run that
-  measured them.
+- D-50: the text tool, hard line breaks only, SemiBold Inter at a default 24 px.
+- D-51: the export's fixed gamma and grayscale contrast, from a windows-latest probe.
+- D-52: the open text box's look and its press, drag and commit rules.
+- D-53: colour emoji export in colour, through colour layers.
 
 ## A pure-Rust rasteriser instead
 
