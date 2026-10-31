@@ -502,4 +502,235 @@ mod tests {
             assert_eq!(Hotkey::parse(text), None, "{text:?}");
         }
     }
+
+    const EVERY_SETTING: &str = "save_folder = 'D:\\Shots\\Bildschirmfotos \u{1F4F7}'\n\
+        save_format = \"jpg\"\nafter_capture = \"copy\"\nshow_thumbnail = false\n\
+        show_pointer = true\nremember_last_selection = true\nstart_with_windows = true\n\
+        [hotkeys]\nregion = \"Ctrl+Shift+4\"\nlast_region = \"Shift+PrtSc\"\n\
+        full_screen = \"Ctrl+PrtSc\"\nwindow = \"Alt+F24\"\ncapture_panel = \"Win+5\"\n";
+
+    const KEYS: [&str; 13] = [
+        "save_folder",
+        "save_format",
+        "after_capture",
+        "show_thumbnail",
+        "show_pointer",
+        "remember_last_selection",
+        "start_with_windows",
+        "hotkeys",
+        "hotkeys.region",
+        "hotkeys.last_region",
+        "hotkeys.full_screen",
+        "hotkeys.window",
+        "hotkeys.capture_panel",
+    ];
+
+    /// A fixed-seed xorshift, so a failing input is the same on every run.
+    struct Dice(u64);
+
+    impl Dice {
+        fn below(&mut self, bound: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            usize::try_from(self.0 % bound as u64).expect("the remainder is below a usize")
+        }
+
+        fn byte(&mut self) -> u8 {
+            const TOML_BYTES: &[u8] = b"[]{}=\"'.,#+-_ \n\t\\0123456789aefilnrstuxyzCFPS";
+            if self.below(2) == 0 {
+                TOML_BYTES[self.below(TOML_BYTES.len())]
+            } else {
+                u8::try_from(self.below(256)).expect("below 256 fits a byte")
+            }
+        }
+    }
+
+    /// C-13, F-54: whatever the bytes, `from_toml` returns, and what it returns reads back the
+    /// same: oversize and unreadable input give the defaults and that one problem, any other
+    /// problem names a key Cleanshot reads, once.
+    fn assert_read_safely(bytes: &[u8]) {
+        let shown = String::from_utf8_lossy(&bytes[..bytes.len().min(120)]).into_owned();
+        let Ok((settings, problems)) = std::panic::catch_unwind(|| Settings::from_toml(bytes))
+        else {
+            panic!(
+                "from_toml panicked on {} bytes starting {shown:?}",
+                bytes.len()
+            );
+        };
+        let context = format!("{} bytes starting {shown:?}: {problems:?}", bytes.len());
+        if bytes.len() > MAX_SETTINGS_BYTES || problems.contains(&SettingsProblem::Unreadable) {
+            assert_eq!(settings, Settings::default(), "{context}");
+            assert_eq!(problems.len(), 1, "{context}");
+        }
+        if bytes.len() > MAX_SETTINGS_BYTES {
+            let too_large = SettingsProblem::TooLarge { bytes: bytes.len() };
+            assert_eq!(problems, [too_large], "{context}");
+        }
+        let mut seen = Vec::new();
+        for problem in &problems {
+            match problem {
+                SettingsProblem::TooLarge { .. } | SettingsProblem::Unreadable => {}
+                SettingsProblem::InvalidValue { key } => {
+                    assert!(KEYS.contains(&key.as_str()), "{key} in {context}");
+                    assert!(!seen.contains(key), "{key} twice in {context}");
+                    seen.push(key.clone());
+                }
+            }
+        }
+        let written = settings.to_toml();
+        if written.len() <= MAX_SETTINGS_BYTES {
+            let read_back = Settings::from_toml(written.as_bytes());
+            assert_eq!(read_back, (settings, Vec::new()), "{context}");
+        }
+    }
+
+    #[test]
+    fn c13_the_corruption_fixture_sets_every_setting_without_a_problem() {
+        let (settings, problems) = Settings::from_toml(EVERY_SETTING.as_bytes());
+        assert_eq!(problems, []);
+        assert_eq!(settings.save_format, SaveFormat::Jpg);
+        assert_eq!(settings.hotkeys.capture_panel, hotkey("Win+5"));
+    }
+
+    #[test]
+    fn c13_random_bytes_are_read_safely() {
+        let mut dice = Dice(0x5EED_C0DE);
+        for _ in 0..20_000 {
+            let length = dice.below(200);
+            let bytes: Vec<u8> = (0..length).map(|_| dice.byte()).collect();
+            assert_read_safely(&bytes);
+        }
+        let oversize: Vec<u8> = (0..=MAX_SETTINGS_BYTES).map(|_| dice.byte()).collect();
+        assert_read_safely(&oversize);
+    }
+
+    #[test]
+    fn c13_every_truncation_of_a_settings_file_is_read_safely() {
+        let bytes = EVERY_SETTING.as_bytes();
+        for end in 0..=bytes.len() {
+            assert_read_safely(&bytes[..end]);
+            assert_read_safely(&bytes[end..]);
+        }
+    }
+
+    #[test]
+    fn c13_a_settings_file_with_corrupted_bytes_is_read_safely() {
+        let mut dice = Dice(0xBAD_F11E);
+        for _ in 0..20_000 {
+            let mut bytes = EVERY_SETTING.as_bytes().to_vec();
+            for _ in 0..=dice.below(4) {
+                let at = dice.below(bytes.len());
+                match dice.below(3) {
+                    0 => bytes[at] = dice.byte(),
+                    1 => bytes.insert(at, dice.byte()),
+                    _ => drop(bytes.remove(at)),
+                }
+            }
+            assert_read_safely(&bytes);
+        }
+    }
+
+    #[test]
+    fn c13_invalid_utf8_anywhere_makes_the_file_unreadable() {
+        let bytes = EVERY_SETTING.as_bytes();
+        let invalid: [&[u8]; 5] = [
+            b"\xFF",
+            b"\xC0\xAF",
+            b"\xED\xA0\x80",
+            b"\xF0\x9F\x93",
+            b"\x80",
+        ];
+        for sequence in invalid {
+            for at in [0, 15, bytes.len() / 2, bytes.len()] {
+                let corrupted = [&bytes[..at], sequence, &bytes[at..]].concat();
+                assert_read_safely(&corrupted);
+                assert_eq!(
+                    Settings::from_toml(&corrupted).1,
+                    [SettingsProblem::Unreadable],
+                    "{sequence:?} at {at}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn c13_huge_values_are_read_safely() {
+        let long = "x".repeat(MAX_SETTINGS_BYTES - 32);
+        let mut texts = vec![
+            "show_pointer = 99999999999999999999999999\n".to_owned(),
+            "show_pointer = -9223372036854775808\n".to_owned(),
+            "save_format = 1e999\nafter_capture = nan\nshow_thumbnail = -inf\n".to_owned(),
+            "save_format = 1979-05-27T07:32:00Z\n".to_owned(),
+            format!("save_folder = \"{long}\"\n"),
+            format!("{long} = 1\n"),
+            format!(
+                "hotkeys = [{}1]\n",
+                "1,".repeat(MAX_SETTINGS_BYTES / 2 - 16)
+            ),
+            (0..6000)
+                .map(|n| format!("k{n} = 1\n"))
+                .collect::<Vec<_>>()
+                .concat(),
+            (0..4000)
+                .map(|n| format!("[t{n}]\n"))
+                .collect::<Vec<_>>()
+                .concat(),
+            format!("[hotkeys]\nregion = \"{}A\"\n", "Ctrl+".repeat(10_000)),
+        ];
+        for key in [
+            "F255",
+            "F256",
+            "F99999999999999999999",
+            "F-1",
+            "F\u{FF11}",
+            "+",
+            "\u{0}",
+        ] {
+            texts.push(format!(
+                "[hotkeys]\nregion = \"{}\"\n",
+                key.escape_default()
+            ));
+        }
+        for text in texts {
+            assert_read_safely(text.as_bytes());
+        }
+    }
+
+    /// The app reads its settings on the main thread, whose stack on Windows is 1 MiB.
+    #[test]
+    fn c13_nesting_past_the_toml_depth_limit_is_unreadable_on_a_main_thread_stack() {
+        let read_on_main_thread_stack = |text: String| {
+            std::thread::Builder::new()
+                .stack_size(1024 * 1024)
+                .spawn(move || {
+                    assert_read_safely(text.as_bytes());
+                    Settings::from_toml(text.as_bytes()).1
+                })
+                .expect("the test thread starts")
+                .join()
+                .expect("reading did not overflow the stack")
+        };
+        let shapes = [
+            ("a = ", "[", "", "]", ""),
+            ("a = ", "{a = ", "1", "}", ""),
+            ("[", "a.", "a", "", "]"),
+            ("", "a.", "a = 1", "", ""),
+        ];
+        for (before, opener, middle, closer, after) in shapes {
+            let deepest = (MAX_SETTINGS_BYTES - 16) / (opener.len() + closer.len());
+            for depth in [1, 79, 80, 81, 1_000, deepest] {
+                let (opened, closed) = (opener.repeat(depth), closer.repeat(depth));
+                let text = format!("{before}{opened}{middle}{closed}{after}");
+                let problems = read_on_main_thread_stack(text);
+                if depth > 100 {
+                    assert_eq!(
+                        problems,
+                        [SettingsProblem::Unreadable],
+                        "{opener} x {depth}"
+                    );
+                }
+            }
+        }
+    }
 }
