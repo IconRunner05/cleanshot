@@ -27,6 +27,8 @@ use crate::toolbar::{self, Control, Layout};
 
 mod window;
 
+#[cfg(feature = "field-test")]
+pub(crate) use window::WINDOW_CLASS;
 use window::{open_window, register_class};
 
 const DESKTOP_DPI: f32 = 96.0;

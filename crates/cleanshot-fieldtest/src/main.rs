@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::fmt::{Display, Write as _};
 use std::num::NonZeroU32;
+use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -17,24 +18,30 @@ const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIPBOARD_MARKER: &str = "cleanshot field test";
 const CAPTURE_ATTEMPTS: u32 = 3;
 const BENCH_REDRAWS: NonZeroU32 = NonZeroU32::new(600).expect("600 is not zero");
-const OVERLAY_GAP: Duration = Duration::from_millis(500);
+/// How long one overlay may take to show or to close before the run fails (D-62).
+const OVERLAY_TIMEOUT: Duration = Duration::from_secs(5);
+/// The pause after an overlay closes before the next press, as between a user's captures.
+const OVERLAY_SETTLE: Duration = Duration::from_millis(500);
 
 fn main() {
     let report_path = match std::env::args().collect::<Vec<_>>().as_slice() {
         [_, flag, path] if flag == "--report" => path.clone(),
-        [_, flag, times] if flag == "--overlays" => {
+        [_, flag, times, log] if flag == "--overlays" => {
             let Ok(times) = times.parse() else {
                 eprintln!("--overlays takes a count, not {times:?}");
                 std::process::exit(2);
             };
-            if open_and_cancel_overlays(times, OVERLAY_GAP) {
-                return;
+            let shown = |press| p01_lines(Path::new(log)) >= press;
+            if let Err(error) =
+                open_and_cancel_overlays(times, OVERLAY_TIMEOUT, OVERLAY_SETTLE, shown)
+            {
+                eprintln!("{error}");
+                std::process::exit(1);
             }
-            eprintln!("Windows refused a key event");
-            std::process::exit(1);
+            return;
         }
         _ => {
-            eprintln!("usage: cleanshot-fieldtest --report PATH | --overlays COUNT");
+            eprintln!("usage: cleanshot-fieldtest --report PATH | --overlays COUNT LOG");
             std::process::exit(2);
         }
     };
@@ -62,6 +69,16 @@ fn main() {
         &report[report.rfind("## GPUI editor bench").unwrap_or(0)..]
     );
     std::fs::write(&report_path, report).expect("the report path is writable");
+}
+
+/// How many overlays cleanshot.exe has logged as visible (P-01) in its `--log` file so far.
+fn p01_lines(log: &Path) -> u32 {
+    let log = std::fs::read_to_string(log).expect("cleanshot.exe was started with --log here");
+    let shown = log
+        .lines()
+        .filter(|line| line.contains(" perf P-01 "))
+        .count();
+    u32::try_from(shown).expect("fewer than 4 billion overlays")
 }
 
 fn report_bench(report: &mut String, timings: BenchReport) {

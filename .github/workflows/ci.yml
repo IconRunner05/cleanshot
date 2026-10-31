@@ -154,11 +154,15 @@ jobs:
           printf '[hotkeys]\nregion = "Ctrl+Shift+4"\n' > "$run/cleanshot.toml"
           "$run/cleanshot.exe" --log &
           sleep 3
-          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --overlays 20
-          sleep 1
+          # Each press waits for the last overlay's P-01 line and for it to close, so a slow
+          # overlay is measured, not raced; one that never shows or closes fails the run.
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --overlays 20 "$run/cleanshot.log" || failed=$?
           taskkill //F //IM cleanshot.exe
           cat "$run/cleanshot.log"
-          times=$(sed -n 's/^[0-9]* perf P-01 overlay_visible_ms=\([0-9]*\).*/\1/p' "$run/cleanshot.log" | sort -n)
+          (( ${failed:-0} == 0 )) || { echo "FAIL D-62: the overlay run stopped (exit ${failed})"; exit 1; }
+          logged=$(sed -n 's/^[0-9]* perf P-01 overlay_visible_ms=\([0-9]*\).*/\1/p' "$run/cleanshot.log")
+          echo "P-01 first_ms=$(printf '%s\n' "$logged" | head -n 1) (the first overlay after start, also in the samples)"
+          times=$(printf '%s\n' "$logged" | sort -n)
           count=$(printf '%s\n' "$times" | grep -c .)
           (( count == 20 )) || { echo "FAIL D-62: ${count} of 20 hotkeys logged a P-01 line"; exit 1; }
           p95=$(printf '%s\n' "$times" | sed -n 19p)

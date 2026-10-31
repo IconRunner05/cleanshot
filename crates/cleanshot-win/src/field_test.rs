@@ -32,12 +32,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetForegroundWindow, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW,
-    QS_ALLINPUT, TranslateMessage,
+    DispatchMessageW, FindWindowW, GetForegroundWindow, MSG, MsgWaitForMultipleObjects, PM_REMOVE,
+    PeekMessageW, QS_ALLINPUT, TranslateMessage,
 };
 use windows::core::{Interface, PCWSTR, w};
 
 pub use crate::fade::animations_on;
+use crate::overlay::WINDOW_CLASS;
 
 use crate::Error;
 use crate::capture::monitor_handles;
@@ -346,18 +347,65 @@ pub fn drive_tray(timeout: Duration) -> Result<TrayRun, Error> {
     })
 }
 
-/// Presses Ctrl+Shift+4 and then Esc `times` times, `gap` apart, for another process's
-/// overlay to open and close (P-01). Returns whether Windows took every key event.
-#[must_use]
-pub fn open_and_cancel_overlays(times: u32, gap: Duration) -> bool {
+/// Why [`open_and_cancel_overlays`] stopped, naming the press it stopped on, from 1.
+#[derive(Debug, thiserror::Error)]
+pub enum OverlayRunError {
+    #[error("Windows refused the key events of press {0}")]
+    KeysRefused(u32),
+    #[error("press {0} showed no overlay in time")]
+    NotShown(u32),
+    #[error("the overlay of press {0} was still open after Esc")]
+    NotClosed(u32),
+}
+
+/// Presses Ctrl+Shift+4 and then Esc `times` times, for another process's overlay to open and
+/// close (P-01). Each press waits up to `timeout` for `shown(press)` to hold and then for every
+/// overlay window to close, so no press lands while the last overlay is still up, and then
+/// `settle` more, as a user's next capture would.
+///
+/// # Errors
+///
+/// [`OverlayRunError`] for the first press that Windows refused or that did not show or
+/// close its overlay within `timeout`.
+pub fn open_and_cancel_overlays(
+    times: u32,
+    timeout: Duration,
+    settle: Duration,
+    mut shown: impl FnMut(u32) -> bool,
+) -> Result<(), OverlayRunError> {
     let region = [VK_CONTROL, VK_SHIFT, VIRTUAL_KEY(u16::from(b'4'))];
-    (0..times).all(|_| {
-        let opened = press(&region) == 6;
-        std::thread::sleep(gap);
-        let cancelled = press(&[VK_ESCAPE]) == 2;
-        std::thread::sleep(gap);
-        opened && cancelled
-    })
+    for number in 1..=times {
+        if press(&region) != 6 {
+            return Err(OverlayRunError::KeysRefused(number));
+        }
+        if !within(timeout, || shown(number)) {
+            return Err(OverlayRunError::NotShown(number));
+        }
+        if press(&[VK_ESCAPE]) != 2 {
+            return Err(OverlayRunError::KeysRefused(number));
+        }
+        if !within(timeout, || !overlay_open()) {
+            return Err(OverlayRunError::NotClosed(number));
+        }
+        std::thread::sleep(settle);
+    }
+    Ok(())
+}
+
+fn within(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    while !done() {
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+fn overlay_open() -> bool {
+    // SAFETY: a lookup by a 'static class name; no window is touched.
+    unsafe { FindWindowW(WINDOW_CLASS, PCWSTR::null()) }.is_ok()
 }
 
 fn press(keys: &[VIRTUAL_KEY]) -> u32 {
