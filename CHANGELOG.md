@@ -26,7 +26,7 @@ Capture
   position and colour. Esc cancels and keeps nothing.
 - Overlay toolbar (F-05): Copy, Save, Edit and Cancel, under or over the selection. Tab
   moves between them and Enter or Space presses one; focus starts on Copy, so Enter copies.
-  Ctrl+S saves, E opens the editor, Esc cancels.
+  Ctrl+S saves, Ctrl+Shift+S asks where to save it (F-22), E opens the editor, Esc cancels.
 - Last region (F-06): Shift+PrtSc copies the rectangle you last copied or saved again, with
   no overlay. It is kept in memory only, so it is gone after a restart.
 - Full screen (F-07): Ctrl+PrtSc selects the monitor under the pointer and shows the toolbar,
