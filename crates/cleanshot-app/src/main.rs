@@ -19,7 +19,7 @@ use cleanshot_win::capture::{
 };
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::instance::Launch;
-use cleanshot_win::log::{Log, since_start};
+use cleanshot_win::log::{Log, Usage, since_start, usage};
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
 use cleanshot_win::settings_file::{read_settings, settings_path};
@@ -111,26 +111,28 @@ fn main() {
         })
         .expect("the tray window and icon are created");
         // F-51: a hotkey another program holds is shown, not swallowed.
-        let taken = created
+        let taken: Vec<String> = created
             .hotkeys()
             .filter(|(_, _, registered)| registered.is_err())
             .map(|(_, hotkey, _)| {
                 format!("{hotkey} is taken by another program, so it does not capture. Choose another in cleanshot.toml.")
-            });
-        let warnings: Vec<String> = warning
-            .into_iter()
-            .chain(log_warning)
-            .chain(fallback)
-            .chain(taken)
+            })
             .collect();
-        if !warnings.is_empty() {
-            let text = warnings.join(" ");
-            if let Err(error) = created.warn("Cleanshot", &text) {
-                eprintln!("{text} ({error})");
-            }
-        }
         launched_tray.replace(Some(created));
+        let warnings = [warning, log_warning, fallback].into_iter().flatten().chain(taken);
+        let text = warnings.collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            launched.warn(&text);
+        }
         launched.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
+        // P-04, P-05: the working set, and the CPU time spent with the tray idle, logged once.
+        if let Some(start) = launched.idle_start() {
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(IDLE_SAMPLE).await;
+                launched.idle_use(start);
+            })
+            .detach();
+        }
     })
     .expect("the Windows platform starts");
     // The tray's callback holds the session, which holds the tray, so the tray is taken
@@ -151,6 +153,33 @@ struct Session {
 }
 
 impl Session {
+    /// Under --log, the usage to measure P-05 from; None without it, so normal running starts
+    /// no timer (P-05).
+    fn idle_start(&self) -> Option<Usage> {
+        self.log.borrow().as_ref()?;
+        usage()
+            .inspect_err(|error| self.warn(&format!("Logging could not sample idle use: {error}.")))
+            .ok()
+    }
+
+    /// Logs the P-04 working set now and the P-05 CPU time spent since `start`.
+    fn idle_use(&self, start: Usage) {
+        let end = match usage() {
+            Ok(end) => end,
+            Err(error) => {
+                return self.warn(&format!("Logging could not sample idle use: {error}."));
+            }
+        };
+        self.perf(|_| format!("P-04 working_set_bytes={}", end.working_set_bytes));
+        self.perf(|_| {
+            format!(
+                "P-05 cpu_ms={} over_ms={}",
+                end.cpu.saturating_sub(start.cpu).as_millis(),
+                IDLE_SAMPLE.as_millis()
+            )
+        });
+    }
+
     /// Logs a `perf` line under `--log`, made from the time since the process started. A log
     /// that fails is closed, and the tray says so once.
     fn perf(&self, line: impl FnOnce(Duration) -> String) {
@@ -415,6 +444,8 @@ fn from_save(error: SaveError, folder: &Path) -> DeliveryError {
 
 // F-54: reading never stops Cleanshot; whatever is wrong becomes one warning and the
 // defaults stand in.
+const IDLE_SAMPLE: Duration = Duration::from_secs(10);
+
 fn open_log() -> Result<Log, String> {
     let settings = settings_path().map_err(|error| error.to_string())?;
     Log::open(&settings).map_err(|error| error.to_string())

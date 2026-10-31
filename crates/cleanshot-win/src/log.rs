@@ -4,10 +4,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use windows::Win32::Foundation::FILETIME;
+use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
 use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 
 const FILE_NAME: &str = "cleanshot.log";
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the counters are a few dozen bytes"
+)]
+const COUNTERS_SIZE: u32 = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
 
 /// Why the log could not be opened or written.
 #[derive(Debug, thiserror::Error)]
@@ -16,8 +22,10 @@ pub enum LogError {
     Open(#[source] std::io::Error),
     #[error("the log file could not be written")]
     Write(#[source] std::io::Error),
-    #[error("Windows did not say when this process started")]
+    #[error("Windows did not give this process's times")]
     Clock(#[source] windows::core::Error),
+    #[error("Windows did not give this process's memory counters")]
+    Memory(#[source] windows::core::Error),
 }
 
 /// C-23: the log `--log` turns on, `cleanshot.log` beside the settings file, emptied at each
@@ -62,6 +70,47 @@ impl Log {
 ///
 /// [`LogError::Clock`] if Windows does not give the process's times.
 pub fn since_start() -> Result<Duration, LogError> {
+    let times = process_times()?;
+    // SAFETY: a read of the system clock.
+    let now = unsafe { GetSystemTimePreciseAsFileTime() };
+    Ok(duration(ticks(now).saturating_sub(ticks(times.created))))
+}
+
+/// What this process holds and has spent so far (P-04, P-05).
+#[derive(Clone, Copy, Debug)]
+pub struct Usage {
+    pub working_set_bytes: usize,
+    /// CPU time in kernel and user mode together.
+    pub cpu: Duration,
+}
+
+/// This process's working set and CPU time now.
+///
+/// # Errors
+///
+/// [`LogError::Clock`] if Windows does not give the process's times, [`LogError::Memory`]
+/// if it does not give its memory counters.
+pub fn usage() -> Result<Usage, LogError> {
+    let times = process_times()?;
+    let mut counters = PROCESS_MEMORY_COUNTERS::default();
+    // SAFETY: `counters` is writable and COUNTERS_SIZE is its size; the pseudo-handle needs no
+    // closing.
+    unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut counters, COUNTERS_SIZE) }
+        .ok()
+        .map_err(LogError::Memory)?;
+    Ok(Usage {
+        working_set_bytes: counters.WorkingSetSize,
+        cpu: duration(ticks(times.kernel) + ticks(times.user)),
+    })
+}
+
+struct ProcessTimes {
+    created: FILETIME,
+    kernel: FILETIME,
+    user: FILETIME,
+}
+
+fn process_times() -> Result<ProcessTimes, LogError> {
     let (mut created, mut exited, mut kernel, mut user) = Default::default();
     // SAFETY: the pseudo-handle needs no closing, and each output is a writable local.
     unsafe {
@@ -74,10 +123,15 @@ pub fn since_start() -> Result<Duration, LogError> {
         )
     }
     .map_err(LogError::Clock)?;
-    // SAFETY: a read of the system clock.
-    let now = unsafe { GetSystemTimePreciseAsFileTime() };
-    let ticks = ticks(now).saturating_sub(ticks(created));
-    Ok(Duration::from_nanos(ticks.saturating_mul(100)))
+    Ok(ProcessTimes {
+        created,
+        kernel,
+        user,
+    })
+}
+
+fn duration(ticks: u64) -> Duration {
+    Duration::from_nanos(ticks.saturating_mul(100))
 }
 
 /// A FILETIME's count of 100-nanosecond ticks.
@@ -114,6 +168,25 @@ mod tests {
         assert_eq!(
             events,
             ["perf P-03 tray_ready_ms=1", "perf P-04 working_set_bytes=2"]
+        );
+    }
+
+    #[test]
+    fn p05_cpu_time_counts_work_this_process_does() {
+        let before = usage().expect("the usage reads").cpu;
+        let spin = std::time::Instant::now();
+        while spin.elapsed() < Duration::from_millis(200) {
+            std::hint::black_box(spin.elapsed());
+        }
+        let after = usage().expect("the usage reads");
+        assert!(
+            after.cpu.saturating_sub(before) >= Duration::from_millis(100),
+            "200 ms of spinning counted as {:?}",
+            after.cpu.saturating_sub(before)
+        );
+        assert!(
+            after.working_set_bytes > 0,
+            "a running process has a working set"
         );
     }
 }
