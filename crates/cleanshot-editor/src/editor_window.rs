@@ -132,6 +132,11 @@ impl EditorView {
                     .map(|pan| pan.placement.panned(position - pan.from));
             }
             Pointer::Move { at, shift, .. } => {
+                if let Some(text_box) = &mut self.text_box {
+                    text_box.drag_to(at, window);
+                    cx.notify();
+                    return;
+                }
                 let Some(drag) = &mut self.drag else {
                     return;
                 };
@@ -140,6 +145,10 @@ impl EditorView {
             }
             Pointer::Release { .. } if self.pan.is_some() => self.pan = None,
             Pointer::Release { shift } => {
+                if let Some(text_box) = &mut self.text_box {
+                    text_box.edit_mut().release();
+                    return;
+                }
                 let Some(drag) = self.drag.take() else {
                     return;
                 };

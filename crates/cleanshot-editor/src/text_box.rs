@@ -81,15 +81,22 @@ impl TextBox {
     }
 
     /// A press at `at` in image pixels, gripping within `reach` as a press on a shape does.
-    /// Inside the box it moves the caret to the character nearest `at`.
+    /// Inside the box it moves the caret to the character nearest `at`, and a drag from there
+    /// selects up to the pointer until the button comes up.
     pub fn press(&mut self, at: PointF, reach: f32, window: &Window) -> BoxPress {
         let inside = hits(&Shape::Text(self.block(window)), at, reach);
         let press = self.edit.press(inside);
         if press == BoxPress::PlaceCaret {
             let offset = self.offset_at(at, window);
-            self.edit.move_to(offset, false);
+            self.edit.place_caret(offset);
         }
         press
+    }
+
+    /// The pointer moved to `at` in image pixels with the button down.
+    pub fn drag_to(&mut self, at: PointF, window: &Window) {
+        let offset = self.offset_at(at, window);
+        self.edit.drag_to(offset);
     }
 
     /// Acts on `key`. [`TextKey::Commit`] closes the box, which only the editor can do, so it is

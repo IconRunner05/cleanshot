@@ -12,6 +12,8 @@ pub struct TextEdit {
     anchor: usize,
     head: usize,
     marked: Option<Range<usize>>,
+    /// A press placed the caret and the button is still down.
+    selecting: bool,
 }
 
 /// A place in the text as the editor's layout counts it: the line, from 0, and the byte within
@@ -52,6 +54,7 @@ impl TextEdit {
             anchor: end,
             head: end,
             marked: None,
+            selecting: false,
         }
     }
 
@@ -219,6 +222,26 @@ impl TextEdit {
         if !extend {
             self.anchor = self.head;
         }
+    }
+
+    /// A press inside the box: the caret goes to `offset`, and moves select from there until
+    /// [`TextEdit::release`].
+    pub fn place_caret(&mut self, offset: usize) {
+        self.move_to(offset, false);
+        self.selecting = true;
+    }
+
+    /// The pointer moved over `offset` with the button down: it selects from the placed caret,
+    /// and does nothing unless a press placed it.
+    pub fn drag_to(&mut self, offset: usize) {
+        if self.selecting {
+            self.move_to(offset, true);
+        }
+    }
+
+    /// The button came up: moves no longer select.
+    pub fn release(&mut self) {
+        self.selecting = false;
     }
 
     /// Where `offset` falls, moved onto a whole character inside the text.
@@ -689,5 +712,18 @@ mod tests {
                 style: STYLE,
             })
         );
+    }
+
+    #[test]
+    fn f34_a_drag_from_a_placed_caret_selects_until_the_button_comes_up() {
+        let mut edit = TextEdit::new("hello".into());
+        edit.drag_to(1);
+        assert_eq!(edit.selection(), 5..5);
+        edit.place_caret(1);
+        edit.drag_to(4);
+        assert_eq!((edit.selection(), edit.caret()), (1..4, 4));
+        edit.release();
+        edit.drag_to(0);
+        assert_eq!(edit.selection(), 1..4);
     }
 }
