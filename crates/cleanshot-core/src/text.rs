@@ -90,6 +90,23 @@ impl TextBlock {
         }
     }
 
+    /// The line, from 0, whose line box holds the height `y` in image pixels; the first line above
+    /// the block, the last below it.
+    #[must_use]
+    pub fn line_at(&self, y: f32) -> usize {
+        let step = LINE_HEIGHT * self.size;
+        self.text
+            .split('\n')
+            .skip(1)
+            .scan(self.at.y + step, |top, _| {
+                let line_top = *top;
+                *top += step;
+                Some(line_top)
+            })
+            .take_while(|line_top| *line_top <= y)
+            .count()
+    }
+
     /// Each line's text and where its baseline starts, in image pixels: the line box's top,
     /// plus half the leading Inter leaves in it, plus Inter's ascent.
     pub fn lines(&self) -> impl Iterator<Item = (&str, PointF)> {
@@ -341,5 +358,14 @@ mod tests {
         assert_eq!(layers[1].color(), Some(red));
         assert_eq!(masks.layers(second), Some([].as_slice()));
         assert_eq!(masks.layers(ShapeId(3)), None);
+    }
+
+    #[test]
+    fn f34_a_height_falls_on_the_line_whose_box_holds_it_or_the_nearest_line_outside() {
+        let block =
+            TextBlock::new(PointF { x: 0.0, y: 100.0 }, "a\nb\nc".into(), 20.0, 1.0).unwrap();
+        let top = |line: f32| 100.0 + line * LINE_HEIGHT * 20.0;
+        let heights = [0.0, top(0.5), top(1.0), top(2.0) - 0.5, top(2.5), 500.0];
+        assert_eq!(heights.map(|y| block.line_at(y)), [0, 0, 1, 1, 2, 2]);
     }
 }

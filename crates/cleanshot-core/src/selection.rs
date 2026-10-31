@@ -198,7 +198,10 @@ const BOX_HANDLES: [BoxHandle; 8] = [
     BoxHandle::Left,
 ];
 
-fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
+/// Whether a press at `point` lands on `shape`, within `reach` image pixels of its outline or inside
+/// it, as [`shape_at`] tests every shape.
+#[must_use]
+pub fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
     match shape {
         Shape::Arrow { from, to } | Shape::Line { from, to } => {
             segment_distance(*from, *to, point) <= reach

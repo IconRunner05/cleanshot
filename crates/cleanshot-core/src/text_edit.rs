@@ -1,6 +1,8 @@
 use std::ops::Range;
 
-use crate::{Command, PointF, Shape, ShapeId, Style, TextBlock, TextBlockError};
+use crate::{
+    Activity, Command, LineStep, PointF, Shape, ShapeId, Style, TextBlock, TextBlockError,
+};
 
 /// The text box being typed into (F-34): its text, caret and selection, and the IME's
 /// composition, with every offset in UTF-16 code units as the platform's input methods count.
@@ -18,6 +20,15 @@ pub struct TextEdit {
 pub struct LinePosition {
     pub line: usize,
     pub byte: usize,
+}
+
+/// Where Up or Down sends the caret (F-34).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineMove {
+    /// To this line, at the caret's x as the editor's layout finds it there.
+    ToLine(usize),
+    /// Past the first or last line: to this offset, the start or end of the text.
+    ToOffset(usize),
 }
 
 /// Where an arrow, Home or End key moves the caret.
@@ -62,6 +73,12 @@ impl TextEdit {
         self.head < self.anchor
     }
 
+    /// The end of the selection the caret is at.
+    #[must_use]
+    pub fn caret(&self) -> usize {
+        self.head
+    }
+
     /// The IME's uncommitted composition, while there is one.
     #[must_use]
     pub fn marked(&self) -> Option<Range<usize>> {
@@ -77,6 +94,30 @@ impl TextEdit {
             (false, true) => BoxPress::PlaceCaret,
             (false, false) => BoxPress::Commit,
         }
+    }
+
+    /// What the box is in the middle of, which decides what a key means.
+    #[must_use]
+    pub fn activity(&self) -> Activity {
+        match self.marked {
+            Some(_) => Activity::Composing,
+            None => Activity::EditingText,
+        }
+    }
+
+    /// Ctrl+C: the selected text, or `None` when nothing is selected, which leaves the clipboard
+    /// as it is.
+    #[must_use]
+    pub fn copied(&self) -> Option<String> {
+        let selection = self.selection();
+        (!selection.is_empty()).then(|| self.text_for_range(selection).0)
+    }
+
+    /// Ctrl+X: removes the selection and gives its text, as [`TextEdit::copied`] does.
+    pub fn cut(&mut self) -> Option<String> {
+        let text = self.copied()?;
+        self.replace(Some(self.selection()), "");
+        Some(text)
     }
 
     /// The text in `range`, and the range it actually covers once moved inside the text and
@@ -155,6 +196,19 @@ impl TextEdit {
             CaretMove::LineEnd => self.line_end(self.head),
         };
         self.move_to(to, extend);
+    }
+
+    /// Where Up or Down moves the caret from its line.
+    #[must_use]
+    pub fn line_move(&self, step: LineStep) -> LineMove {
+        let line = self.position(self.head).line;
+        let last = self.text.matches('\n').count();
+        match step {
+            LineStep::Up if line == 0 => LineMove::ToOffset(0),
+            LineStep::Up => LineMove::ToLine(line - 1),
+            LineStep::Down if line == last => LineMove::ToOffset(utf16_len(&self.text)),
+            LineStep::Down => LineMove::ToLine(line + 1),
+        }
     }
 
     /// Puts the caret at `offset`, moved onto a whole character inside the text, as Up and Down
@@ -277,7 +331,8 @@ fn line_breaks(text: &str) -> String {
 pub enum BoxPress {
     /// Inside the box: the caret goes where it was pressed.
     PlaceCaret,
-    /// Outside the box: the text becomes a shape and the box closes.
+    /// Outside the box: the text becomes a shape and the box closes, then the press does what it
+    /// would with no box open.
     Commit,
     /// An input method is composing: the press is its.
     Ignore,
@@ -301,7 +356,9 @@ pub enum TextOrigin {
 
 /// The one command that commits `edit` (F-34, F-38: one undo step per text edit), with
 /// `em_width` measured for its text, or `None` when committing changes nothing: an empty new
-/// box, or an existing shape whose text is unchanged. Emptying an existing shape removes it.
+/// box, or an existing shape whose text is unchanged. Emptying an existing shape removes it. A
+/// composition still in progress is committed as it stands, as Windows completes one when its
+/// field loses focus (D-52).
 ///
 /// # Errors
 ///
@@ -580,5 +637,57 @@ mod tests {
         assert_eq!(edit.press(false), BoxPress::Ignore);
         edit.unmark();
         assert_eq!(edit.press(false), BoxPress::Commit);
+    }
+
+    #[test]
+    fn f34_up_and_down_go_to_the_next_line_or_past_the_first_and_last_to_the_ends() {
+        let mut edit = TextEdit::new("ab\ncd\nef".into());
+        assert_eq!(edit.line_move(LineStep::Down), LineMove::ToOffset(8));
+        assert_eq!(edit.line_move(LineStep::Up), LineMove::ToLine(1));
+        edit.move_to(4, false);
+        edit.move_to(1, true);
+        assert_eq!(edit.caret(), 1);
+        assert_eq!(edit.line_move(LineStep::Up), LineMove::ToOffset(0));
+        assert_eq!(edit.line_move(LineStep::Down), LineMove::ToLine(1));
+    }
+
+    #[test]
+    fn f34_copy_and_cut_take_the_selection_and_leave_the_clipboard_alone_without_one() {
+        let mut edit = TextEdit::new("abc".into());
+        assert_eq!((edit.copied(), edit.cut()), (None, None));
+        assert_eq!(edit.text(), "abc");
+        edit.move_caret(CaretMove::Left, true);
+        assert_eq!(edit.copied().as_deref(), Some("c"));
+        assert_eq!(edit.cut().as_deref(), Some("c"));
+        assert_eq!((edit.text(), edit.selection()), ("ab", 2..2));
+    }
+
+    #[test]
+    fn f34_a_composition_makes_the_box_composing_until_it_is_committed() {
+        let mut edit = TextEdit::new(String::new());
+        assert_eq!(edit.activity(), Activity::EditingText);
+        edit.replace_and_mark(None, "ni", None);
+        assert_eq!(edit.activity(), Activity::Composing);
+        edit.unmark();
+        assert_eq!(edit.activity(), Activity::EditingText);
+    }
+
+    #[test]
+    fn f34_a_composition_in_progress_is_committed_as_it_stands() {
+        let new = TextOrigin::New {
+            at: AT,
+            size: 24.0,
+            style: STYLE,
+        };
+        let mut edit = TextEdit::new("a".into());
+        edit.replace_and_mark(None, "ni", None);
+        let committed = commit_text(&new, &edit, 2.5).unwrap();
+        assert_eq!(
+            committed,
+            Some(Command::Add {
+                shape: Shape::Text(TextBlock::new(AT, "ani".into(), 24.0, 2.5).unwrap()),
+                style: STYLE,
+            })
+        );
     }
 }

@@ -25,8 +25,8 @@ pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Command, CommandError, History};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key};
 pub use selection::{
-    BoxHandle, Handle, box_handle_at, box_handles, handle_at, handles, moved, resized, resized_box,
-    shape_at,
+    BoxHandle, Handle, box_handle_at, box_handles, handle_at, handles, hits, moved, resized,
+    resized_box, shape_at,
 };
 pub use settings::{
     AfterCapture, Hotkey, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers, SaveFormat, Settings,
@@ -36,5 +36,7 @@ pub use text::{
     DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,
     INTER_UNITS_PER_EM, LINE_HEIGHT, TextBlock, TextBlockError, TextMasks,
 };
-pub use text_edit::{BoxPress, CaretMove, LinePosition, TextEdit, TextOrigin, commit_text};
+pub use text_edit::{
+    BoxPress, CaretMove, LineMove, LinePosition, TextEdit, TextOrigin, commit_text,
+};
 pub use tool::Tool;
