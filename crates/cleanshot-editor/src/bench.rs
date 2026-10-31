@@ -9,13 +9,15 @@ use cleanshot_core::{
 use gpui::{App, Pixels, Point, Window, point, px};
 
 use crate::Error;
-use crate::editor_window::{open_with, show_at};
+use crate::editor_window::{drag_redaction, open_with, show_at};
 use crate::placement::Placement;
 
 const WIDTH: u32 = 3840;
 const HEIGHT: u32 = 2160;
 const SHAPES: u32 = 200;
 const COLUMNS: u32 = 20;
+/// Where the bench's redaction drag is pressed, in image pixels.
+const DRAG_FROM: PointF = PointF { x: 64.0, y: 64.0 };
 
 /// Editor timings from one [`bench`] run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,12 +32,18 @@ pub struct BenchReport {
     pub p95: Duration,
     /// P-08: longest interval.
     pub worst: Duration,
+    /// F-36, D-58: median frame interval while a redaction is dragged from near the top-left
+    /// corner to near the bottom-right one, its preview remade every step. Reported apart from
+    /// `p50`, which it is not part of.
+    pub redaction_drag_p50: Duration,
+    /// F-36, D-58: 95th-percentile interval of the same drag.
+    pub redaction_drag_p95: Duration,
 }
 
 type OnDone = Box<dyn FnOnce(&mut App, Result<BenchReport, Error>)>;
 
 /// Opens the editor on a synthetic 4K image with 200 shapes, forces `redraws` redraws while
-/// panning and zooming as F-39 does, closes
+/// panning and zooming as F-39 does, then drags a redaction for a third as many frames, closes
 /// the window and passes the timings to `on_done`, which is called exactly once.
 ///
 /// The window ignores close requests until the run ends.
@@ -65,6 +73,7 @@ pub fn bench(
                 first_frame: now - start,
                 last_frame: now,
                 intervals: Vec::with_capacity(redraws.get() as usize),
+                drag_intervals: Vec::new(),
                 redraws,
                 on_done,
             }
@@ -84,47 +93,75 @@ struct Run {
     first_frame: Duration,
     last_frame: Instant,
     intervals: Vec<Duration>,
+    drag_intervals: Vec<Duration>,
     redraws: NonZeroU32,
     on_done: OnDone,
 }
 
 impl Run {
     fn continue_after(self, window: &mut Window, cx: &mut App) {
-        if self.intervals.len() == self.redraws.get() as usize {
+        let drag_steps = self.redraws.get().div_ceil(3);
+        if self.drag_intervals.len() == drag_steps as usize {
             window.remove_window();
             let report = self.report();
             (self.on_done)(cx, Ok(report));
             return;
         }
-        let frame = u32::try_from(self.intervals.len())
-            .expect("the run stops after `redraws` frames, a u32");
-        show_at(
-            window,
-            cx,
-            placement(frame, self.redraws, self.fitted, self.centre),
-        );
+        if self.redrawing() {
+            let frame = u32::try_from(self.intervals.len())
+                .expect("the redraws stop after `redraws` frames, a u32");
+            show_at(
+                window,
+                cx,
+                placement(frame, self.redraws, self.fitted, self.centre),
+            );
+        } else {
+            let step = u32::try_from(self.drag_intervals.len())
+                .expect("the drag stops after a third of `redraws` steps, a u32");
+            if step == 0 {
+                show_at(window, cx, None);
+            }
+            let (from, to) = (DRAG_FROM, drag_corner(step + 1, drag_steps));
+            drag_redaction(window, cx, from, to, self.fitted);
+        }
         window.refresh();
         window.on_next_frame(move |window, cx| self.frame_drawn(window, cx));
     }
 
     fn frame_drawn(mut self, window: &mut Window, cx: &mut App) {
         let now = Instant::now();
-        self.intervals.push(now - self.last_frame);
+        let interval = now - self.last_frame;
+        if self.redrawing() {
+            self.intervals.push(interval);
+        } else {
+            self.drag_intervals.push(interval);
+        }
         self.last_frame = now;
         self.continue_after(window, cx);
     }
 
+    fn redrawing(&self) -> bool {
+        self.intervals.len() < self.redraws.get() as usize
+    }
+
     fn report(&self) -> BenchReport {
-        let mut sorted = self.intervals.clone();
-        sorted.sort_unstable();
-        let nearest_rank = |percent: usize| sorted[(sorted.len() * percent).div_ceil(100) - 1];
         BenchReport {
             first_frame: self.first_frame,
-            p50: nearest_rank(50),
-            p95: nearest_rank(95),
-            worst: nearest_rank(100),
+            p50: nearest_rank(&self.intervals, 50),
+            p95: nearest_rank(&self.intervals, 95),
+            worst: nearest_rank(&self.intervals, 100),
+            redaction_drag_p50: nearest_rank(&self.drag_intervals, 50),
+            redaction_drag_p95: nearest_rank(&self.drag_intervals, 95),
         }
     }
+}
+
+/// The interval `percent` of `intervals` are no longer than (nearest rank); `intervals` is not
+/// empty.
+fn nearest_rank(intervals: &[Duration], percent: usize) -> Duration {
+    let mut sorted = intervals.to_vec();
+    sorted.sort_unstable();
+    sorted[(sorted.len() * percent).div_ceil(100) - 1]
 }
 
 /// Where the image is for forced redraw `frame` of `frames`: fitted for the first third, then
@@ -155,6 +192,20 @@ fn placement(
             let factor = 1.0 + 3.0 * (1.0 - (2.0 * progress - 1.0).abs());
             Some(fitted.zoomed(factor, centre))
         }
+    }
+}
+
+/// Where the dragged redaction's far corner is at drag step `step` of `steps`: on a line from
+/// [`DRAG_FROM`] to as far from the bottom-right corner, reached at the last step.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "step counts and image sides stay far below 2^24, where f32 stops being exact"
+)]
+fn drag_corner(step: u32, steps: u32) -> PointF {
+    let progress = step as f32 / steps as f32;
+    PointF {
+        x: DRAG_FROM.x + (WIDTH as f32 - 2.0 * DRAG_FROM.x) * progress,
+        y: DRAG_FROM.y + (HEIGHT as f32 - 2.0 * DRAG_FROM.y) * progress,
     }
 }
 
@@ -293,5 +344,27 @@ mod tests {
         assert_eq!(at(200).unwrap(), fitted);
         assert_eq!(at(250).unwrap().scale, 2.0);
         assert!(at(299).unwrap().scale < 0.6);
+    }
+
+    #[test]
+    fn d58_the_bench_drags_a_redaction_from_corner_to_corner_of_the_4k_image() {
+        assert_eq!(drag_corner(0, 50), DRAG_FROM);
+        assert_eq!(
+            drag_corner(50, 50),
+            PointF {
+                x: 3776.0,
+                y: 2096.0
+            }
+        );
+        let halfway = drag_corner(25, 50);
+        assert_eq!((halfway.x, halfway.y), (1920.0, 1080.0));
+    }
+
+    #[test]
+    fn the_bench_reports_each_phase_by_nearest_rank() {
+        let intervals: Vec<_> = (1..=20).map(Duration::from_millis).collect();
+        assert_eq!(nearest_rank(&intervals, 50), Duration::from_millis(10));
+        assert_eq!(nearest_rank(&intervals, 95), Duration::from_millis(19));
+        assert_eq!(nearest_rank(&intervals, 100), Duration::from_millis(20));
     }
 }

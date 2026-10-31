@@ -5,15 +5,16 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
-    KeyAction, Looks, Modifiers, Output, Press, Property, PropertyError, RgbaImage, Setting,
-    ShapeId, Start, TextBlockError, TextEdit, TextKey, TextOrigin, Tool, action_for_key,
+    KeyAction, Looks, Modifiers, Output, PointF, Press, Property, PropertyError, RgbaImage,
+    Setting, ShapeId, Start, TextBlockError, TextEdit, TextKey, TextOrigin, Tool, action_for_key,
     delivery_notice, save_as_notice,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, FocusHandle, InputHandler, InteractiveElement, IntoElement,
-    KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
+    App, AppContext, Bounds, Context, Entity, FocusHandle, InputHandler, InteractiveElement,
+    IntoElement, KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions,
-    UTF16Selection, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
+    UTF16Selection, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px,
+    size,
 };
 
 use crate::Error;
@@ -637,14 +638,51 @@ pub(crate) fn open_with(
 /// P-08's bench: draws the editor in `window` at `placement`, where a pan or zoom (F-39) would
 /// leave it, or fitted for `None`.
 pub(crate) fn show_at(window: &Window, cx: &mut App, placement: Option<Placement>) {
-    let view = window
-        .root::<EditorView>()
-        .flatten()
-        .expect("the bench draws only in a window open_with opened on an editor");
-    view.update(cx, |view, cx| {
+    bench_view(window).update(cx, |view, cx| {
         view.placement = placement;
         cx.notify();
     });
+}
+
+/// P-08's bench: the redaction tool dragged in `window` as the pointer drives it, pressed at
+/// `from` the first time and moved to `to`, in image pixels, with the image at `placement`.
+pub(crate) fn drag_redaction(
+    window: &Window,
+    cx: &mut App,
+    from: PointF,
+    to: PointF,
+    placement: Placement,
+) {
+    let position = point(px(0.0), px(0.0));
+    bench_view(window).update(cx, |view, cx| {
+        if view.drag.is_none() {
+            view.tool = Tool::Redact;
+            let press = Pointer::Press {
+                at: from,
+                reach: 0.0,
+                position,
+                placement,
+            };
+            view.pointer(press, window, cx);
+        }
+        let shift = false;
+        view.pointer(
+            Pointer::Move {
+                at: to,
+                shift,
+                position,
+            },
+            window,
+            cx,
+        );
+    });
+}
+
+fn bench_view(window: &Window) -> Entity<EditorView> {
+    window
+        .root::<EditorView>()
+        .flatten()
+        .expect("the bench draws only in a window open_with opened on an editor")
 }
 
 impl EditorWindow {
