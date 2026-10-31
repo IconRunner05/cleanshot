@@ -35,6 +35,7 @@ use windows::core::{Interface, PCWSTR, w};
 use crate::Error;
 use crate::capture::MonitorImage;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
+use crate::size_pill;
 use crate::toolbar::automation::{self, Mirror, Request};
 use crate::toolbar::{self, Control, Layout, Paint};
 
@@ -188,6 +189,7 @@ struct Surface {
     white: ID2D1SolidColorBrush,
     /// Only the toolbar's monitor paints it.
     toolbar: Option<Paint>,
+    pill: size_pill::Paint,
     origin: POINT,
     shared: Rc<Shared>,
 }
@@ -216,6 +218,7 @@ impl Surface {
                 self.draw_toolbar()?;
                 return self.target.EndDraw(None, None);
             };
+            let on_desktop = selected;
             let selected = nudged(selected, -self.origin.x, -self.origin.y);
             #[expect(clippy::cast_precision_loss, reason = "screen coordinates fit in f32")]
             let (left, top, right, bottom) = (
@@ -258,6 +261,7 @@ impl Surface {
                 self.target
                     .DrawRectangle(&raw const square, &self.accent, 1.0, None);
             }
+            self.pill.draw(&self.target, on_desktop, self.origin)?;
             self.draw_toolbar()?;
             self.target.EndDraw(None, None)
         }
@@ -527,6 +531,7 @@ fn surface(
             (true | false, _) => None,
         };
         Ok(Surface {
+            pill: size_pill::Paint::new(&target, capture.bounds, dpi_scale(capture.bounds)?)?,
             toolbar,
             target,
             frozen,

@@ -15,9 +15,9 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_OUTLINE_THRESHOLD_ANTIALIASED, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
     DWRITE_RENDERING_MODE1, DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
     DWRITE_RENDERING_MODE1_OUTLINE, DWRITE_STRIKETHROUGH, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE, DWRITE_TEXTURE_ALIASED_1x1, DWRITE_UNDERLINE,
-    DWriteCreateFactory, IDWriteFactory2, IDWriteFactory3, IDWriteFactory5, IDWriteFontCollection,
-    IDWriteFontFace3, IDWriteInMemoryFontFileLoader, IDWriteInlineObject,
+    DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE, DWRITE_TEXT_METRICS, DWRITE_TEXTURE_ALIASED_1x1,
+    DWRITE_UNDERLINE, DWriteCreateFactory, IDWriteFactory2, IDWriteFactory3, IDWriteFactory5,
+    IDWriteFontCollection, IDWriteFontFace3, IDWriteInMemoryFontFileLoader, IDWriteInlineObject,
     IDWritePixelSnapping_Impl, IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextRenderer,
     IDWriteTextRenderer_Impl,
 };
@@ -92,7 +92,7 @@ impl Drop for InterLoader {
 /// format drawing Inter reads freed memory (F-05).
 pub(crate) struct Label {
     format: IDWriteTextFormat,
-    _fonts: Fonts,
+    fonts: Fonts,
 }
 
 impl Label {
@@ -105,6 +105,21 @@ impl Label {
                 .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         }
         Ok(self)
+    }
+
+    /// The width and height `text` takes on one line in this style, in pixels.
+    pub(crate) fn measure(&self, text: &str) -> windows::core::Result<(f32, f32)> {
+        let text: Vec<u16> = text.encode_utf16().collect();
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        // SAFETY: `text` and the format outlive the layout, which lives for this call, and
+        // `metrics` is writable.
+        unsafe {
+            self.fonts
+                .factory
+                .CreateTextLayout(&text, &self.format, f32::INFINITY, f32::INFINITY)?
+                .GetMetrics(&raw mut metrics)?;
+        }
+        Ok((metrics.width, metrics.height))
     }
 
     /// Draws `text` in this style into `area` of `target` with `brush`.
@@ -182,7 +197,7 @@ impl Fonts {
     pub(crate) fn label(self, size: f32) -> windows::core::Result<Label> {
         Ok(Label {
             format: self.format(size)?,
-            _fonts: self,
+            fonts: self,
         })
     }
 
