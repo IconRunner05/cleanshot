@@ -720,7 +720,7 @@ unsafe extern "system" fn window_procedure(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard, PoisonError};
     use std::time::{Duration, Instant};
 
     use cleanshot_core::RgbaImage;
@@ -738,6 +738,12 @@ mod tests {
     /// An overlay registers its keys as system-wide hotkeys and covers the same corner of the
     /// screen, so one test's overlay is up at a time.
     static SCREEN: Mutex<()> = Mutex::new(());
+
+    /// The screen, once no other overlay test holds it. A test that failed holding it leaves
+    /// nothing behind once its overlay is dropped, so the next test takes it as it is.
+    fn screen() -> MutexGuard<'static, ()> {
+        SCREEN.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 
     /// Red rises down the rows and green across the columns, so a pixel drawn from the wrong
     /// row or column shows a different colour.
@@ -781,9 +787,7 @@ mod tests {
 
     #[test]
     fn f02_the_overlay_draws_a_frozen_capture() {
-        let _screen = SCREEN
-            .lock()
-            .expect("no overlay test panicked holding the screen");
+        let _screen = screen();
         let events = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&events);
         let overlay = Overlay::show(&[monitor()], None, move |event| {
@@ -833,9 +837,7 @@ mod tests {
 
     #[test]
     fn f13_closing_fades_the_overlay_only_with_animation_effects_on() {
-        let _screen = SCREEN
-            .lock()
-            .expect("no overlay test panicked holding the screen");
+        let _screen = screen();
         let animations = fade::animations_on().expect("the setting is readable");
         let overlay = Overlay::show(&[monitor()], None, |_| {}).expect("the overlay opens");
         let closing = Instant::now();
@@ -851,9 +853,7 @@ mod tests {
 
     #[test]
     fn p01_show_returns_with_every_window_painted() {
-        let _screen = SCREEN
-            .lock()
-            .expect("no overlay test panicked holding the screen");
+        let _screen = screen();
         let overlay = Overlay::show(&[monitor()], None, |_| {}).expect("the overlay opens");
         let pending: Vec<bool> = overlay
             .windows
@@ -870,9 +870,7 @@ mod tests {
 
     #[test]
     fn f07_an_overlay_opened_with_a_selection_copies_it_on_enter() {
-        let _screen = SCREEN
-            .lock()
-            .expect("no overlay test panicked holding the screen");
+        let _screen = screen();
         let screen = monitor().bounds;
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
@@ -916,9 +914,7 @@ mod tests {
 
     #[test]
     fn f05_the_toolbar_keys_are_free_again_after_esc() {
-        let _screen = SCREEN
-            .lock()
-            .expect("no overlay test panicked holding the screen");
+        let _screen = screen();
         let cancelled = Rc::new(Cell::new(false));
         let sink = Rc::clone(&cancelled);
         let overlay = Overlay::show(&[monitor()], None, move |event| {
@@ -954,9 +950,7 @@ mod tests {
     #[test]
     fn f05_an_overlay_that_cannot_take_its_keys_frees_the_ones_it_took() {
         const TAKEN: i32 = 0xBFFE;
-        let _screen = SCREEN
-            .lock()
-            .expect("no overlay test panicked holding the screen");
+        let _screen = screen();
         let (modifiers, last, _) = KEYS[KEYS.len() - 1];
         // SAFETY: a thread hotkey needs no window; it is released below.
         unsafe { RegisterHotKey(None, TAKEN, modifiers, u32::from(last.0)) }
