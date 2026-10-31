@@ -1,0 +1,16 @@
+id: pointer-from-handle-value
+language: rust
+severity: error
+message: >-
+  A pointer made from a handle value (WPARAM, LPARAM, ...) is dereferenced. Another process can
+  send or post any value in a window message, so it must never be a pointer (C-14, C-16). Share
+  state another way; a callback Windows invokes with our own value may carry an ignore comment
+  saying why no other process can supply it.
+files:
+  - crates/cleanshot-win/src/**/*.rs
+rule:
+  any:
+    - pattern: $VALUE.0 as *mut $TYPE
+    - pattern: $VALUE.0 as *const $TYPE
+    - pattern: $VALUE.0 as usize as *mut $TYPE
+    - pattern: $VALUE.0 as usize as *const $TYPE

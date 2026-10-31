@@ -144,6 +144,9 @@ fn offset(row: i32, column: i32, row_bytes: usize) -> usize {
 pub(crate) fn monitor_handles() -> Result<Vec<HMONITOR>, Error> {
     unsafe extern "system" fn add(monitor: HMONITOR, _: HDC, _: *mut RECT, list: LPARAM) -> BOOL {
         // SAFETY: `list` is the &mut Vec that monitor_handles passed, alive for the whole call.
+        // EnumDisplayMonitors calls this only during our call, with our own LPARAM; no window
+        // message carries it, so no other process can supply it.
+        // ast-grep-ignore: pointer-from-handle-value
         let list = unsafe { &mut *(list.0 as *mut Vec<HMONITOR>) };
         list.push(monitor);
         true.into()
