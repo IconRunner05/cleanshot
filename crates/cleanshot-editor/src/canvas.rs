@@ -293,7 +293,7 @@ fn paint_shape(shape: &Shape, style: Style, fit: &Fit, window: &mut Window, cx: 
 }
 
 /// The embedded Inter at the one weight F-34 draws text in.
-pub(crate) fn inter() -> Font {
+fn inter() -> Font {
     Font {
         weight: FontWeight::SEMIBOLD,
         ..font("Inter")
