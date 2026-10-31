@@ -3,7 +3,7 @@ use crate::drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::selection::box_between;
 
-/// What a drag on the canvas does. Text is not here until its tool is designed (F-34).
+/// What a press or drag on the canvas does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Select,
@@ -15,6 +15,7 @@ pub enum Tool {
     Highlighter,
     Redact,
     Crop,
+    Text,
 }
 
 const ANNOTATION_RED: Color = Color {
@@ -32,7 +33,7 @@ const HIGHLIGHTER_YELLOW: Color = Color {
 };
 
 impl Tool {
-    /// The tool a single key picks, as in the CHARTER feature table: V, A, L, R, O, P, H, X, C.
+    /// The tool a single key picks, as in the CHARTER feature table: V, A, L, R, O, P, H, X, C, T.
     /// Case is ignored.
     #[must_use]
     pub fn for_key(key: char) -> Option<Self> {
@@ -46,6 +47,7 @@ impl Tool {
             'h' => Self::Highlighter,
             'x' => Self::Redact,
             'c' => Self::Crop,
+            't' => Self::Text,
             _ => return None,
         };
         Some(tool)
@@ -66,7 +68,8 @@ impl Tool {
             | Self::Ellipse
             | Self::Pen
             | Self::Redact
-            | Self::Crop => Style {
+            | Self::Crop
+            | Self::Text => Style {
                 color: ANNOTATION_RED,
                 stroke_width: 3.0,
             },
@@ -74,7 +77,8 @@ impl Tool {
     }
 
     /// The edit a finished drag through `path` makes, `constrained` while Shift is held.
-    /// `None` for the select tool, and for a drag too short to draw anything, such as a click.
+    /// `None` for the select and text tools, which do not draw by dragging, and for a drag too short
+    /// to draw anything, such as a click.
     #[must_use]
     pub fn command(self, path: &[PointF], constrained: bool) -> Option<Command> {
         let (&from, &last) = (path.first()?, path.last()?);
@@ -92,7 +96,7 @@ impl Tool {
             style: self.style(),
         };
         match self {
-            Self::Select => None,
+            Self::Select | Self::Text => None,
             Self::Arrow => (from != to).then(|| add(Shape::Arrow { from, to })),
             Self::Line => (from != to).then(|| add(Shape::Line { from, to })),
             Self::Pen => {
@@ -141,7 +145,7 @@ mod tests {
 
     #[test]
     fn f30_each_tool_has_its_key_from_the_charter_table() {
-        let tools: Vec<_> = "VALROPHXC".chars().map(Tool::for_key).collect();
+        let tools: Vec<_> = "VALROPHXCT".chars().map(Tool::for_key).collect();
         assert_eq!(
             tools,
             [
@@ -154,11 +158,13 @@ mod tests {
                 Tool::Highlighter,
                 Tool::Redact,
                 Tool::Crop,
+                Tool::Text,
             ]
             .map(Some)
         );
         assert_eq!(Tool::for_key('r'), Some(Tool::Rectangle));
-        assert_eq!(Tool::for_key('T'), None);
+        assert_eq!(Tool::for_key('t'), Some(Tool::Text));
+        assert_eq!(Tool::for_key('q'), None);
     }
 
     #[test]

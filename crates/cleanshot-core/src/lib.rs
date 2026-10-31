@@ -20,7 +20,7 @@ pub use document::{
     Color, Document, Fill, ImageError, PointF, RectF, RedactMode, RgbaImage, Shape, ShapeEntry,
     ShapeId, Style, arrow_head,
 };
-pub use drag::{Drag, Press};
+pub use drag::{Drag, Press, Start};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Command, CommandError, History};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key};
@@ -33,8 +33,8 @@ pub use settings::{
     SettingsProblem,
 };
 pub use text::{
-    GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT, INTER_UNITS_PER_EM, LINE_HEIGHT,
-    TextBlock, TextBlockError, TextMasks,
+    DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,
+    INTER_UNITS_PER_EM, LINE_HEIGHT, TextBlock, TextBlockError, TextMasks,
 };
 pub use text_edit::{CaretMove, TextEdit, TextOrigin, commit_text};
 pub use tool::Tool;

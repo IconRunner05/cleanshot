@@ -5,6 +5,9 @@ use crate::{Color, PointF, RectF, ShapeId};
 /// A line's height as a multiple of the font size.
 pub const LINE_HEIGHT: f32 = 1.25;
 
+/// The font size of a new text box, in image pixels.
+pub const DEFAULT_TEXT_SIZE: f32 = 24.0;
+
 /// Inter 4.1 in its semibold weight, the one font text shapes are drawn in, on screen and in the export.
 pub static INTER: &[u8] = include_bytes!("../fonts/Inter-SemiBold.ttf");
 

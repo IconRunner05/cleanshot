@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Activity, Command, CommandError, Delivered, DeliveryError, Document, Drag, History, KeyAction,
-    Modifiers, Output, Press, RgbaImage, ShapeId, Tool, action_for_key,
+    Modifiers, Output, Press, RgbaImage, ShapeId, Start, Tool, action_for_key,
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
@@ -100,9 +100,14 @@ impl EditorView {
                 });
             }
             Pointer::Press { at, reach, .. } => {
-                let Press { selected, drag } =
+                let Press { selected, start } =
                     Drag::press(&self.document, self.tool, self.selected, at, reach);
-                (self.selected, self.drag, self.notice) = (selected, drag, None);
+                (self.selected, self.notice) = (selected, None);
+                self.drag = match start {
+                    Some(Start::Drag(drag)) => Some(drag),
+                    // F-34: the text box opens with the editor's text input, the next step.
+                    Some(Start::Type(_)) | None => None,
+                };
             }
             Pointer::Move { position, .. } if self.pan.is_some() => {
                 self.placement = self

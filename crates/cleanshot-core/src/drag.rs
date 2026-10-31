@@ -2,6 +2,8 @@ use crate::document::{Document, PointF, Shape, ShapeEntry, ShapeId};
 use crate::drawing::{snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::selection::{BoxHandle, Handle, handle_at, handles, moved, resized, shape_at};
+use crate::text::DEFAULT_TEXT_SIZE;
+use crate::text_edit::TextOrigin;
 use crate::tool::Tool;
 
 /// A pointer drag on the canvas, from press to release. Its edit is one [`Command`], made on
@@ -24,18 +26,27 @@ pub enum Drag {
     },
 }
 
-/// What a press with the pointer does: the shape selected afterwards, and the drag it starts.
+/// What a press with the pointer does: the shape selected afterwards, and what it starts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Press {
     pub selected: Option<ShapeId>,
-    pub drag: Option<Drag>,
+    pub start: Option<Start>,
+}
+
+/// What a press starts: a drag, or typing in a text box (F-34).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Start {
+    Drag(Drag),
+    Type(TextOrigin),
 }
 
 impl Drag {
     /// A press at `at` with `tool`, while `selected` is selected (F-30). With the select tool, a
     /// handle of the selected shape resizes it, otherwise the topmost shape under the pointer is
     /// selected and moved, and empty canvas clears the selection. A drawing tool clears the
-    /// selection and starts drawing. `tolerance` is the reach of the pointer in image pixels.
+    /// selection and starts drawing. The text tool clears the selection and opens a text box: on
+    /// the topmost shape under the pointer if that is text, otherwise a new one at `at` (F-34).
+    /// `tolerance` is the reach of the pointer in image pixels.
     #[must_use]
     pub fn press(
         document: &Document,
@@ -44,41 +55,56 @@ impl Drag {
         at: PointF,
         tolerance: f32,
     ) -> Press {
-        if tool != Tool::Select {
+        let entry = |id| document.shapes().iter().find(|entry| entry.id == id);
+        let start = match tool {
+            Tool::Select => None,
+            Tool::Text => Some(Start::Type(text_origin(
+                shape_at(document, at, tolerance).and_then(entry),
+                at,
+            ))),
+            Tool::Arrow
+            | Tool::Line
+            | Tool::Rectangle
+            | Tool::Ellipse
+            | Tool::Pen
+            | Tool::Highlighter
+            | Tool::Redact
+            | Tool::Crop => Some(Start::Drag(Self::Draw {
+                tool,
+                path: vec![at],
+            })),
+        };
+        if start.is_some() {
             return Press {
                 selected: None,
-                drag: Some(Self::Draw {
-                    tool,
-                    path: vec![at],
-                }),
+                start,
             };
         }
-        let entry = |id| document.shapes().iter().find(|entry| entry.id == id);
         if let Some(original) = selected.and_then(entry)
             && let Some(handle) = handle_at(&original.shape, at, tolerance)
         {
             return Press {
                 selected,
-                drag: Some(Self::Resize {
+                start: Some(Start::Drag(Self::Resize {
                     original: original.clone(),
                     handle,
                     to: at,
-                }),
+                })),
             };
         }
         let Some(original) = shape_at(document, at, tolerance).and_then(entry) else {
             return Press {
                 selected: None,
-                drag: None,
+                start: None,
             };
         };
         Press {
             selected: Some(original.id),
-            drag: Some(Self::Move {
+            start: Some(Start::Drag(Self::Move {
                 original: original.clone(),
                 from: at,
                 to: at,
-            }),
+            })),
         }
     }
 
@@ -167,13 +193,35 @@ fn opposite_corner(shape: &Shape, corner: BoxHandle) -> Option<PointF> {
         .map(|(_, at)| at)
 }
 
+/// The text box a text-tool press at `at` opens, with `hit` the topmost shape under it.
+fn text_origin(hit: Option<&ShapeEntry>, at: PointF) -> TextOrigin {
+    match hit {
+        Some(ShapeEntry {
+            id,
+            shape: Shape::Text(block),
+            style,
+        }) => TextOrigin::Existing {
+            id: *id,
+            block: block.clone(),
+            style: *style,
+        },
+        Some(_) | None => TextOrigin::New {
+            at,
+            size: DEFAULT_TEXT_SIZE,
+            style: Tool::Text.style(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::document::Style;
     use crate::document::{Fill, RectF, RgbaImage};
     use crate::history::History;
+    use crate::text::TextBlock;
 
     fn point(x: f32, y: f32) -> PointF {
         PointF { x, y }
@@ -218,8 +266,15 @@ mod tests {
         (history.document().clone(), ids[0], ids[1])
     }
 
+    fn drag(press: Press) -> Option<Drag> {
+        match press.start? {
+            Start::Drag(drag) => Some(drag),
+            Start::Type(origin) => panic!("a drag, not a text box at {origin:?}"),
+        }
+    }
+
     fn dragged(press: Press, to: PointF, constrained: bool) -> Option<Command> {
-        let mut drag = press.drag?;
+        let mut drag = drag(press)?;
         drag.extend(to);
         drag.command(constrained)
     }
@@ -235,7 +290,7 @@ mod tests {
             4.0,
         );
         assert_eq!(on_box.selected, Some(box_id));
-        assert!(matches!(on_box.drag, Some(Drag::Move { .. })));
+        assert!(matches!(drag(on_box), Some(Drag::Move { .. })));
 
         let on_nothing = Drag::press(
             &document,
@@ -248,7 +303,7 @@ mod tests {
             on_nothing,
             Press {
                 selected: None,
-                drag: None
+                start: None
             }
         );
     }
@@ -275,7 +330,7 @@ mod tests {
             })
         );
         let unselected = Drag::press(&document, Tool::Select, None, point(51.0, 31.0), 4.0);
-        assert!(matches!(unselected.drag, Some(Drag::Move { .. })));
+        assert!(matches!(drag(unselected), Some(Drag::Move { .. })));
     }
 
     #[test]
@@ -283,7 +338,7 @@ mod tests {
         let (document, box_id, _) = document();
         let press = Drag::press(&document, Tool::Pen, Some(box_id), point(0.0, 0.0), 4.0);
         assert_eq!(press.selected, None);
-        let mut drag = press.drag.unwrap();
+        let mut drag = drag(press).unwrap();
         let rest = [point(16.0, 0.0), point(16.0, 16.0)];
         for at in rest {
             drag.extend(at);
@@ -354,5 +409,45 @@ mod tests {
                 to: point(190.0, 100.0)
             }
         );
+    }
+    #[test]
+    fn f34_the_text_tool_reopens_the_text_under_the_pointer_and_opens_a_new_box_anywhere_else() {
+        let (document, box_id, _) = document();
+        let mut history = History::new(document);
+        let block = TextBlock::new(point(100.0, 150.0), "hi".into(), 20.0, 2.0).unwrap();
+        let style = Style {
+            color: crate::Color {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 255,
+            },
+            stroke_width: 1.0,
+        };
+        let shape = Shape::Text(block.clone());
+        history.apply(Command::Add { shape, style }).unwrap();
+        let document = history.document();
+        let text_id = document.shapes().last().unwrap().id;
+        let press = |at| Drag::press(document, Tool::Text, Some(box_id), at, 4.0);
+
+        let on_text = press(point(130.0, 160.0));
+        assert_eq!(on_text.selected, None);
+        assert_eq!(
+            on_text.start,
+            Some(Start::Type(TextOrigin::Existing {
+                id: text_id,
+                block,
+                style
+            }))
+        );
+        let new_box = |at| {
+            Some(Start::Type(TextOrigin::New {
+                at,
+                size: DEFAULT_TEXT_SIZE,
+                style: Tool::Text.style(),
+            }))
+        };
+        assert_eq!(press(point(30.0, 20.0)).start, new_box(point(30.0, 20.0)));
+        assert_eq!(press(point(190.0, 10.0)).start, new_box(point(190.0, 10.0)));
     }
 }
