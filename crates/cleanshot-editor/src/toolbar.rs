@@ -12,7 +12,7 @@ use crate::theme::{ACCENT, ON_ACCENT, Theme};
 /// The Lucide icons the editor draws, embedded in the exe under their Lucide names.
 pub(crate) struct Icons;
 
-const ICONS: [(&str, &[u8]); 9] = [
+const ICONS: [(&str, &[u8]); 10] = [
     (
         "mouse-pointer-2",
         include_bytes!("../icons/mouse-pointer-2.svg"),
@@ -26,6 +26,7 @@ const ICONS: [(&str, &[u8]); 9] = [
     ("circle", include_bytes!("../icons/circle.svg")),
     ("pencil", include_bytes!("../icons/pencil.svg")),
     ("highlighter", include_bytes!("../icons/highlighter.svg")),
+    ("type", include_bytes!("../icons/type.svg")),
     (
         "square-dashed",
         include_bytes!("../icons/square-dashed.svg"),
@@ -54,7 +55,7 @@ impl AssetSource for Icons {
 }
 
 /// The tools in toolbar order, each with its Lucide icon, its accessible name and its key.
-pub(crate) const TOOLS: [(Tool, &str, &str, char); 9] = [
+pub(crate) const TOOLS: [(Tool, &str, &str, char); 10] = [
     (Tool::Select, "mouse-pointer-2", "Select", 'V'),
     (Tool::Arrow, "move-up-right", "Arrow", 'A'),
     (Tool::Line, "minus", "Line", 'L'),
@@ -62,6 +63,7 @@ pub(crate) const TOOLS: [(Tool, &str, &str, char); 9] = [
     (Tool::Ellipse, "circle", "Ellipse", 'O'),
     (Tool::Pen, "pencil", "Pen", 'P'),
     (Tool::Highlighter, "highlighter", "Highlighter", 'H'),
+    (Tool::Text, "type", "Text", 'T'),
     (Tool::Redact, "square-dashed", "Redact", 'X'),
     (Tool::Crop, "crop", "Crop", 'C'),
 ];
