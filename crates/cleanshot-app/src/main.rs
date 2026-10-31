@@ -283,6 +283,8 @@ fn capture(
     let frozen = Rc::clone(&captures);
     let finishing = Rc::clone(session);
     let shown = Overlay::show(&captures, selected, move |event| {
+        // F-13 (D-68): the editor takes over from the overlay with no fade between them.
+        let handoff = matches!(event, OverlayEvent::Edit(_));
         match event {
             OverlayEvent::Cancelled => {}
             OverlayEvent::Copy(selected) => {
@@ -306,7 +308,16 @@ fn capture(
         // The event arrives inside an overlay window's procedure, so the windows close
         // after it returns.
         let closing = Rc::clone(&finishing);
-        defer(Box::new(move || drop(closing.overlay.borrow_mut().take())));
+        defer(Box::new(move || {
+            let Some(overlay) = closing.overlay.borrow_mut().take() else {
+                return;
+            };
+            if handoff {
+                drop(overlay);
+            } else if let Err(error) = overlay.close() {
+                closing.warn(&format!("The overlay could not fade out: {error}."));
+            }
+        }));
     });
     match shown {
         Ok(shown) => {

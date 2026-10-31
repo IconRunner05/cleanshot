@@ -34,6 +34,7 @@ use windows::core::{Interface, PCWSTR, w};
 
 use crate::Error;
 use crate::capture::MonitorImage;
+use crate::fade;
 use crate::loupe;
 use crate::palette::Palette;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
@@ -355,16 +356,34 @@ impl Overlay {
         }
         Ok(overlay)
     }
-}
 
-impl Drop for Overlay {
-    fn drop(&mut self) {
+    /// Closes the overlay with F-13's 120 ms fade, or at once when Windows' Animation effects
+    /// is off. Dropping it instead closes it at once, as a handoff to the editor should.
+    ///
+    /// # Errors
+    ///
+    /// The Windows error that stopped the fade; the overlay is closed either way.
+    pub fn close(self) -> windows::core::Result<()> {
+        self.free_hotkeys();
+        if fade::animations_on()? {
+            fade::fade_out(&self.windows)?;
+        }
+        Ok(())
+    }
+
+    fn free_hotkeys(&self) {
         if let Some(&first) = self.windows.first() {
             for (id, _) in (0..).zip(KEYS) {
                 // SAFETY: unregistering an id this window may not hold only returns an error.
                 let _ = unsafe { UnregisterHotKey(Some(first), id) };
             }
         }
+    }
+}
+
+impl Drop for Overlay {
+    fn drop(&mut self) {
+        self.free_hotkeys();
         for &window in &self.windows {
             // SAFETY: each window belongs to this thread and is destroyed once, here.
             let destroyed = unsafe { DestroyWindow(window) };
@@ -795,6 +814,24 @@ mod tests {
             events.borrow().is_empty(),
             "overlay events: {:?}",
             events.borrow()
+        );
+    }
+
+    #[test]
+    fn f13_closing_fades_the_overlay_only_with_animation_effects_on() {
+        let _screen = SCREEN
+            .lock()
+            .expect("no overlay test panicked holding the screen");
+        let animations = fade::animations_on().expect("the setting is readable");
+        let overlay = Overlay::show(&[monitor()], None, |_| {}).expect("the overlay opens");
+        let closing = Instant::now();
+        overlay.close().expect("the overlay fades");
+        let closed = closing.elapsed();
+        assert_eq!(
+            closed >= Duration::from_millis(120),
+            animations,
+            "closing took {closed:?} with Animation effects {}",
+            if animations { "on" } else { "off" }
         );
     }
 
