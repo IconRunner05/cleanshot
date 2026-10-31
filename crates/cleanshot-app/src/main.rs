@@ -465,11 +465,15 @@ fn save_to(
                 folder: folder.to_owned(),
             })
         }
-        Err(
-            error @ (SaveError::UnsafeName(_)
-            | SaveError::UnknownField(_)
-            | SaveError::NoFreeName(_)),
-        ) => panic!("the save dialog returns a full file path: {error}"),
+        Err(error @ (SaveError::UnsafeName(_) | SaveError::NoFreeName(_))) => {
+            eprintln!("{} could not be written: {error}", path.display());
+            Err(DeliveryError::NotWritten {
+                folder: folder.to_owned(),
+            })
+        }
+        Err(error @ SaveError::UnknownField(_)) => {
+            panic!("save::replace expands no file-name template: {error}")
+        }
     }
 }
 
@@ -674,6 +678,16 @@ mod tests {
         assert!(
             saved[1].starts_with(b"BM"),
             "Shot is not the configured BMP"
+        );
+    }
+
+    #[test]
+    fn f22_a_save_as_path_with_no_file_name_is_reported_not_fatal() {
+        let folder = std::env::temp_dir();
+        let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
+        assert_eq!(
+            save_to(&folder.join(".."), &redacted_document(), &settings),
+            Err(DeliveryError::NotWritten { folder })
         );
     }
 
