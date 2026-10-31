@@ -181,7 +181,7 @@ impl TextEdit {
             return utf16_len(&self.text);
         };
         let rest = &self.text[line_start..];
-        let line = rest.split('\n').next().unwrap_or(rest);
+        let line = rest.split_once('\n').map_or(rest, |(line, _)| line);
         let byte = line.floor_char_boundary(position.byte);
         utf16_len(&self.text[..line_start + byte])
     }
