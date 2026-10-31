@@ -527,6 +527,7 @@ mod tests {
             Err(TextBlockError::WidthNotMeasured(width)) if width.is_nan()
         ));
     }
+
     #[test]
     fn f34_an_offset_maps_to_its_line_and_byte_and_back_on_whole_characters() {
         let edit = TextEdit::new("ab\n\u{1F600}c\n".into());
