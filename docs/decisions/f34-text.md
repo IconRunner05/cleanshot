@@ -1,8 +1,7 @@
 # F-34 Text: layout, display, export and tests
 
 Status: approved by the orchestrator after blind review (2026-10-30). Editor side (core, render,
-editor), the editor seat: built, except its half of the drift test. DirectWrite side (win,
-app), the capture seat.
+editor), the editor seat: built. DirectWrite side (win, app), the capture seat.
 
 F-34 asks for multi-line text where IME works and Ctrl+A and Backspace behave like a text box. The
 export must match what was on screen, and `cleanshot-render` stays pure Rust with no OS calls
@@ -157,7 +156,7 @@ commit says so, records the platform part as not yet proven, and does not tick t
   - the same Latin text laid out from the system font collection gives a different mask, which
     shows the embedded Inter was used;
   - an emoji gives at least one mask with `Some` colour.
-- Drift: for each sample text, the editor's `em_width` (GPUI, at size 1) and win's layout width at
+- Drift: for each sample text, the editor's `em_width` (GPUI, at size 1, through `em_widths`) and win's layout width at
   size 1 agree within 1/64 em. This compares layout box to layout box.
 
 ## Who does what

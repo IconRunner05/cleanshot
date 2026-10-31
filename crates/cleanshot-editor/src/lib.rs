@@ -19,6 +19,8 @@ use gpui_windows::WindowsPlatform;
 pub use crate::bench::{BenchReport, bench};
 pub use crate::editor_window::{EditorWindow, open};
 use crate::restricted_platform::RestrictedPlatform;
+#[cfg(feature = "drift-test")]
+pub use crate::text::em_widths;
 use crate::toolbar::Icons;
 
 /// Why the editor could not start, open a window or run the bench.

@@ -15,5 +15,9 @@ image = { version = "0.25.10", default-features = false }
 smallvec = "1.16.4"
 thiserror = "2.0.21"
 
+[features]
+# What the F-34 drift test measures with; never in cleanshot.exe.
+drift-test = []
+
 [lints]
 workspace = true

@@ -79,6 +79,35 @@ pub(crate) fn em_width(text: &str, window: &Window) -> f32 {
         / MEASURE_SIZE
 }
 
+/// Each of `texts` measured as a committed text block measures it, in ems, for F-34's drift
+/// test against DirectWrite. The hidden window it measures in is closed before it returns.
+///
+/// # Errors
+///
+/// [`Error::FontLoad`] if Inter cannot be registered, [`Error::WindowOpen`] if the window does
+/// not open.
+#[cfg(feature = "drift-test")]
+pub fn em_widths(texts: &[&str], cx: &mut App) -> Result<Vec<f32>, Error> {
+    use gpui::{AppContext as _, EmptyView, WindowOptions};
+
+    register_inter(cx)?;
+    let options = WindowOptions {
+        show: false,
+        focus: false,
+        ..WindowOptions::default()
+    };
+    let mut widths = Vec::new();
+    let window = cx
+        .open_window(options, |window, cx| {
+            widths = texts.iter().map(|text| em_width(text, window)).collect();
+            cx.new(|_| EmptyView)
+        })
+        .map_err(|error| Error::WindowOpen(error.into()))?;
+    // Err only means the window is already gone, which is the state this leaves it in.
+    let _ = window.update(cx, |_, window, _| window.remove_window());
+    Ok(widths)
+}
+
 fn shape(line: &str, font_size: Pixels, color: Rgba, window: &Window) -> ShapedLine {
     let run = TextRun {
         len: line.len(),
