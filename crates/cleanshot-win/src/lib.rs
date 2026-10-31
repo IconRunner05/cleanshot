@@ -6,6 +6,7 @@ pub mod clipboard;
 pub mod field_test;
 pub mod instance;
 pub mod log;
+mod loupe;
 pub mod overlay;
 mod palette;
 pub mod save;

@@ -34,6 +34,7 @@ use windows::core::{Interface, PCWSTR, w};
 
 use crate::Error;
 use crate::capture::MonitorImage;
+use crate::loupe;
 use crate::palette::Palette;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
@@ -100,6 +101,7 @@ struct Gesture {
     grip: Grip,
     original: Option<RECT>,
     start: POINT,
+    pointer: POINT,
 }
 
 /// What every monitor's window shares: one selection on the virtual desktop.
@@ -179,6 +181,7 @@ struct Surface {
     /// Only the toolbar's monitor paints it.
     toolbar: Option<Paint>,
     pill: size_pill::Paint,
+    loupe: loupe::Paint,
     origin: POINT,
     shared: Rc<Shared>,
 }
@@ -204,6 +207,7 @@ impl Surface {
             );
             let Some(selected) = self.shared.selected.get() else {
                 self.target.FillRectangle(&raw const whole, &self.dim);
+                self.draw_loupe();
                 self.draw_toolbar()?;
                 return self.target.EndDraw(None, None);
             };
@@ -251,8 +255,16 @@ impl Surface {
                     .DrawRectangle(&raw const square, &self.accent, 1.0, None);
             }
             self.pill.draw(&self.target, on_desktop, self.origin)?;
+            self.draw_loupe();
             self.draw_toolbar()?;
             self.target.EndDraw(None, None)
+        }
+    }
+
+    /// F-04: the loupe shows only while the pointer drags.
+    fn draw_loupe(&self) {
+        if let Some(gesture) = self.shared.gesture.get() {
+            self.loupe.draw(&self.target, &self.frozen, gesture.pointer);
         }
     }
 
@@ -515,13 +527,10 @@ fn surface(
             }
             (true | false, _) => None,
         };
+        let scale = dpi_scale(capture.bounds)?;
         Ok(Surface {
-            pill: size_pill::Paint::new(
-                &target,
-                capture.bounds,
-                dpi_scale(capture.bounds)?,
-                &palette,
-            )?,
+            pill: size_pill::Paint::new(&target, capture.bounds, scale, &palette)?,
+            loupe: loupe::Paint::new(&target, bgra, capture.bounds, scale, &palette)?,
             toolbar,
             target,
             frozen,
@@ -617,7 +626,9 @@ unsafe extern "system" fn window_procedure(
                 grip: grip_at(original, at),
                 original,
                 start: at,
+                pointer: at,
             }));
+            surface.shared.changed();
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
@@ -627,11 +638,16 @@ unsafe extern "system" fn window_procedure(
             let dragging = unsafe { GetCapture() } == window;
             if let (Some(gesture), true) = (surface.shared.gesture.get(), dragging) {
                 let now = surface.virtual_point(lparam);
+                surface.shared.gesture.set(Some(Gesture {
+                    pointer: now,
+                    ..gesture
+                }));
                 let selected = dragged(gesture.grip, gesture.original, gesture.start, now);
                 // F-01: a draw with no area clears the selection; a resize keeps its last shape.
                 match (selected, gesture.grip) {
                     (Some(_), _) | (None, Grip::Draw) => surface.shared.select(selected),
-                    (None, Grip::Move | Grip::Resize(_)) => {}
+                    // F-04: the loupe follows the pointer even when the selection cannot.
+                    (None, Grip::Move | Grip::Resize(_)) => surface.shared.changed(),
                 }
             }
             LRESULT(0)
@@ -642,6 +658,7 @@ unsafe extern "system" fn window_procedure(
             // SAFETY: releasing a capture this thread may not hold only returns an error.
             let _ = unsafe { ReleaseCapture() };
             surface.shared.gesture.set(None);
+            surface.shared.changed();
             LRESULT(0)
         }
         WM_HOTKEY => {
