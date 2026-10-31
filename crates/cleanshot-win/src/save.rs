@@ -121,27 +121,45 @@ fn write_new(
     extension: &str,
     bytes: &[u8],
 ) -> Result<PathBuf, SaveError> {
-    let partial = write_partial(folder, template, stamp, extension, bytes)?;
+    let name = format!("{}.{extension}", file_name(template, stamp, 1)?);
+    let partial = write_partial(folder, &name, bytes)?;
     let published = publish(folder, template, stamp, extension, &partial);
-    if let Err(error) = fs::remove_file(&partial) {
+    remove_partial(&partial);
+    published
+}
+
+/// F-22: writes `bytes` to `path`, replacing the file there, which the user has confirmed.
+/// The file appears whole or not at all: the bytes go to a partial file in the same folder,
+/// which `fs::rename` (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`) moves over `path`. No
+/// partial file is left behind, whether or not it works (C-21).
+///
+/// # Errors
+///
+/// [`SaveError::UnsafeName`] for a path with no folder or file name, or
+/// [`SaveError::Write`] if the file could not be written or moved into place.
+pub fn replace(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
+    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(SaveError::UnsafeName(path.display().to_string()));
+    };
+    let partial = write_partial(folder, &name.to_string_lossy(), bytes)?;
+    fs::rename(&partial, path).map_err(|error| {
+        remove_partial(&partial);
+        SaveError::Write(error)
+    })
+}
+
+fn remove_partial(partial: &Path) {
+    if let Err(error) = fs::remove_file(partial) {
         eprintln!(
             "the partial file {} could not be removed: {error}",
             partial.display()
         );
     }
-    published
 }
 
-fn write_partial(
-    folder: &Path,
-    template: &str,
-    stamp: Stamp,
-    extension: &str,
-    bytes: &[u8],
-) -> Result<PathBuf, SaveError> {
-    let stem = file_name(template, stamp, 1)?;
+fn write_partial(folder: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, SaveError> {
     for attempt in 1..=MOST_COLLISIONS {
-        let partial = folder.join(format!("{stem}.{extension}.partial{attempt}"));
+        let partial = folder.join(format!("{name}.partial{attempt}"));
         match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -152,9 +170,7 @@ fn write_partial(
                     Ok(()) => Ok(partial),
                     Err(error) => {
                         drop(file);
-                        if let Err(removing) = fs::remove_file(&partial) {
-                            eprintln!("{} could not be removed: {removing}", partial.display());
-                        }
+                        remove_partial(&partial);
                         Err(SaveError::Write(error))
                     }
                 };
@@ -163,7 +179,7 @@ fn write_partial(
             Err(error) => return Err(SaveError::Write(error)),
         }
     }
-    Err(SaveError::NoFreeName(stem))
+    Err(SaveError::NoFreeName(name.to_owned()))
 }
 
 /// Links the finished partial file under the first free name. A hard link fails if the name
@@ -237,6 +253,9 @@ fn is_safe(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// winnt.h's `FILE_SHARE_READ`: others may read the file, not delete or rename over it.
+    const FILE_SHARE_READ: u32 = 1;
+
     const STAMP: Stamp = Stamp {
         year: 2026,
         month: 10,
@@ -299,6 +318,44 @@ mod tests {
         assert_eq!(
             fs::read_dir(&folder).expect("listable").count(),
             3,
+            "a partial file remains"
+        );
+        fs::remove_dir_all(&folder).expect("the test folder is removable");
+    }
+
+    #[test]
+    fn f22_replacing_a_file_leaves_only_the_new_file() {
+        let folder = empty_folder("replace");
+        let path = folder.join("Shot.png");
+        fs::write(&path, b"old").expect("the original is written");
+        replace(&path, b"new").expect("the file is replaced");
+        assert_eq!(fs::read(&path).expect("readable"), b"new");
+        assert_eq!(
+            fs::read_dir(&folder).expect("listable").count(),
+            1,
+            "a partial file remains"
+        );
+        fs::remove_dir_all(&folder).expect("the test folder is removable");
+    }
+
+    #[test]
+    fn f22_a_replace_that_fails_keeps_the_original_and_leaves_no_partial() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let folder = empty_folder("replace-held");
+        let path = folder.join("Shot.png");
+        fs::write(&path, b"old").expect("the original is written");
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&path)
+            .expect("the original opens without delete sharing");
+        assert!(matches!(replace(&path, b"new"), Err(SaveError::Write(_))));
+        drop(held);
+        assert_eq!(fs::read(&path).expect("readable"), b"old");
+        assert_eq!(
+            fs::read_dir(&folder).expect("listable").count(),
+            1,
             "a partial file remains"
         );
         fs::remove_dir_all(&folder).expect("the test folder is removable");
