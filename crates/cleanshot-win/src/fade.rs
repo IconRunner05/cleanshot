@@ -13,7 +13,11 @@ const FADE: Duration = Duration::from_millis(120);
 const FRAME: Duration = Duration::from_millis(8);
 
 /// Whether Windows' Animation effects setting is on (F-13).
-pub(crate) fn animations_on() -> windows::core::Result<bool> {
+///
+/// # Errors
+///
+/// The error `SystemParametersInfoW` reports.
+pub fn animations_on() -> windows::core::Result<bool> {
     let mut on = BOOL::default();
     // SAFETY: `on` is a writable BOOL, the size this action writes.
     unsafe {

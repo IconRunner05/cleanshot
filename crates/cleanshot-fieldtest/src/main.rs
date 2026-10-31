@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use cleanshot_editor::{BenchReport, bench};
 use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::{
-    Driver, adapters, clipboard_round_trip, d3d11_feature_level, drive_tray, monitors,
-    open_and_cancel_overlays, rendering_params, windows_version,
+    Driver, adapters, animations_on, clipboard_round_trip, d3d11_feature_level, drive_tray,
+    monitors, open_and_cancel_overlays, rendering_params, windows_version,
 };
 
 const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -112,6 +112,12 @@ fn report_windows(report: &mut String) {
 
 fn report_display(report: &mut String) {
     report.push_str("\n## Display\n\n");
+    let animations = animations_on().map(|on| if on { "on" } else { "off" });
+    line(
+        report,
+        "Animation effects (F-13 fade)",
+        outcome(&animations),
+    );
     let monitors = match monitors() {
         Ok(monitors) => monitors,
         Err(error) => {

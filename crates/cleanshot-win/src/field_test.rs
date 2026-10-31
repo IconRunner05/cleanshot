@@ -37,6 +37,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, PCWSTR, w};
 
+pub use crate::fade::animations_on;
+
 use crate::Error;
 use crate::capture::monitor_handles;
 use cleanshot_core::Hotkey;
