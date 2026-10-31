@@ -375,11 +375,7 @@ fn deliver(
     document: &Document,
     settings: &Settings,
 ) -> Result<Delivered, DeliveryError> {
-    let masks = text::masks(document).map_err(|cause| {
-        eprintln!("DirectWrite could not draw the text: {cause}");
-        DeliveryError::TextNotDrawn
-    })?;
-    let image = flatten(document, &masks).map_err(|error| from_render(&error))?;
+    let image = flattened(document)?;
     match output {
         Output::Copy => {
             let bitmap =
@@ -392,11 +388,7 @@ fn deliver(
             Ok(Delivered::Copied)
         }
         Output::Save => {
-            let (format, extension) = match settings.save_format {
-                SaveFormat::Png => (Format::Png, "png"),
-                SaveFormat::Jpg => (Format::Jpeg, "jpg"),
-                SaveFormat::Bmp => (Format::Bmp, "bmp"),
-            };
+            let (format, extension) = encoding(settings.save_format);
             let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
             let folder = save::save_folder(settings.save_folder.as_deref()).map_err(from_folder)?;
             save::save(&folder, FILE_NAME_TEMPLATE, Stamp::now(), extension, &bytes)
@@ -414,15 +406,80 @@ fn editor_deliver(
     move |output, document| deliver(output, document, &session.settings)
 }
 
-// F-22: Save As is wired in its own commit.
-fn editor_save_as_start(_: &Rc<Session>) -> impl Fn() -> (PathBuf, String) + 'static {
-    || (PathBuf::new(), String::new())
+fn editor_save_as_start(session: &Rc<Session>) -> impl Fn() -> (PathBuf, String) + 'static {
+    let session = Rc::clone(session);
+    move || save_as_start(&session.settings)
 }
 
 fn editor_save_to(
-    _: &Rc<Session>,
+    session: &Rc<Session>,
 ) -> impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static {
-    |_, _| Err(DeliveryError::NoSaveFolder)
+    let session = Rc::clone(session);
+    move |path, document| save_to(path, document, &session.settings)
+}
+
+fn flattened(document: &Document) -> Result<RgbaImage, DeliveryError> {
+    let masks = text::masks(document).map_err(|cause| {
+        eprintln!("DirectWrite could not draw the text: {cause}");
+        DeliveryError::TextNotDrawn
+    })?;
+    flatten(document, &masks).map_err(|error| from_render(&error))
+}
+
+fn encoding(format: SaveFormat) -> (Format, &'static str) {
+    match format {
+        SaveFormat::Png => (Format::Png, "png"),
+        SaveFormat::Jpg => (Format::Jpeg, "jpg"),
+        SaveFormat::Bmp => (Format::Bmp, "bmp"),
+    }
+}
+
+/// F-22 (D-54): the folder Save As opens on and the name it offers, Save's own at this moment.
+fn save_as_start(settings: &Settings) -> (PathBuf, String) {
+    // A folder that cannot be named leaves the dialog on its own default; the user picks one
+    // there, and a save into it reports its own failure.
+    let folder = save::save_folder(settings.save_folder.as_deref()).unwrap_or_default();
+    let (_, extension) = encoding(settings.save_format);
+    let name = save::offered_name(FILE_NAME_TEMPLATE, Stamp::now(), extension)
+        .unwrap_or_else(|error| panic!("the file-name template is a safe constant: {error}"));
+    (folder, name)
+}
+
+/// F-22 (D-66): flattens `document` and writes it to `path`, the name the user confirmed in
+/// Save As, replacing a file there. The extension picks the format; any other name is written
+/// in the configured format, under exactly that name.
+fn save_to(
+    path: &Path,
+    document: &Document,
+    settings: &Settings,
+) -> Result<Delivered, DeliveryError> {
+    let image = flattened(document)?;
+    let (format, _) = encoding(typed_format(path).unwrap_or(settings.save_format));
+    let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
+    let folder = path.parent().unwrap_or(path);
+    match save::replace(path, &bytes) {
+        Ok(()) => Ok(Delivered::Saved(path.to_owned())),
+        Err(SaveError::Write(cause)) => {
+            eprintln!("{} could not be written: {cause}", folder.display());
+            Err(DeliveryError::NotWritten {
+                folder: folder.to_owned(),
+            })
+        }
+        Err(
+            error @ (SaveError::UnsafeName(_)
+            | SaveError::UnknownField(_)
+            | SaveError::NoFreeName(_)),
+        ) => panic!("the save dialog returns a full file path: {error}"),
+    }
+}
+
+fn typed_format(path: &Path) -> Option<SaveFormat> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some(SaveFormat::Png),
+        "jpg" | "jpeg" => Some(SaveFormat::Jpg),
+        "bmp" => Some(SaveFormat::Bmp),
+        _ => None,
+    }
 }
 
 fn from_render(error: &cleanshot_render::Error) -> DeliveryError {
@@ -590,6 +647,33 @@ mod tests {
             copies[2] < Duration::from_millis(150),
             "median copy of a 4K region {:?}, all {copies:?}",
             copies[2]
+        );
+    }
+
+    #[test]
+    fn f22_save_as_picks_the_format_from_the_typed_extension_and_replaces_the_file() {
+        let folder = std::env::temp_dir().join(format!("cleanshot-save-as-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("the test folder is created");
+        let document = redacted_document();
+        let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
+        let typed = folder.join("Shot.JPG");
+        std::fs::write(&typed, b"old").expect("the file to replace is written");
+        let bare = folder.join("Shot");
+        let saved = [&typed, &bare].map(|path| {
+            assert_eq!(
+                save_to(path, &document, &settings),
+                Ok(Delivered::Saved(path.clone()))
+            );
+            std::fs::read(path).expect("the saved file is readable")
+        });
+        std::fs::remove_dir_all(&folder).expect("the test folder is removable");
+        assert!(
+            saved[0].starts_with(&[0xFF, 0xD8]),
+            "Shot.JPG is not a JPEG"
+        );
+        assert!(
+            saved[1].starts_with(b"BM"),
+            "Shot is not the configured BMP"
         );
     }
 

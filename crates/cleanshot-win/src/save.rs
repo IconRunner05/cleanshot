@@ -121,11 +121,20 @@ fn write_new(
     extension: &str,
     bytes: &[u8],
 ) -> Result<PathBuf, SaveError> {
-    let name = format!("{}.{extension}", file_name(template, stamp, 1)?);
-    let partial = write_partial(folder, &name, bytes)?;
+    let partial = write_partial(folder, &offered_name(template, stamp, extension)?, bytes)?;
     let published = publish(folder, template, stamp, extension, &partial);
     remove_partial(&partial);
     published
+}
+
+/// The first file name `template` gives for `stamp` and `extension`, as Save offers it and
+/// Save As suggests it (F-22).
+///
+/// # Errors
+///
+/// [`SaveError::UnknownField`] or [`SaveError::UnsafeName`] for a template C-15 refuses.
+pub fn offered_name(template: &str, stamp: Stamp, extension: &str) -> Result<String, SaveError> {
+    Ok(format!("{}.{extension}", file_name(template, stamp, 1)?))
 }
 
 /// F-22: writes `bytes` to `path`, replacing the file there, which the user has confirmed.
