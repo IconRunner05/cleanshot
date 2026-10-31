@@ -1,8 +1,8 @@
 use crate::document::{Document, PointF, Shape, ShapeEntry, ShapeId};
 use crate::drawing::{snapped_to_45_degrees, squared};
 use crate::history::Command;
+use crate::look::Look;
 use crate::selection::{BoxHandle, Handle, handle_at, handles, moved, resized, shape_at};
-use crate::text::DEFAULT_TEXT_SIZE;
 use crate::text_edit::TextOrigin;
 use crate::tool::Tool;
 
@@ -10,8 +10,13 @@ use crate::tool::Tool;
 /// release, so a drag is one undo step (F-38).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Drag {
-    /// A drawing tool's drag, through every point the pointer passed.
-    Draw { tool: Tool, path: Vec<PointF> },
+    /// A drawing tool's drag, through every point the pointer passed, drawing in the look its
+    /// tool had at the press.
+    Draw {
+        tool: Tool,
+        look: Look,
+        path: Vec<PointF>,
+    },
     /// The select tool moving a shape, which keeps `original` until release.
     Move {
         original: ShapeEntry,
@@ -46,11 +51,12 @@ impl Drag {
     /// selected and moved, and empty canvas clears the selection. A drawing tool clears the
     /// selection and starts drawing. The text tool clears the selection and opens a text box: on
     /// the topmost shape under the pointer if that is text, otherwise a new one at `at` (F-34).
-    /// `tolerance` is the reach of the pointer in image pixels.
+    /// `look` is how `tool` draws, and `tolerance` is the reach of the pointer in image pixels.
     #[must_use]
     pub fn press(
         document: &Document,
         tool: Tool,
+        look: Look,
         selected: Option<ShapeId>,
         at: PointF,
         tolerance: f32,
@@ -61,6 +67,7 @@ impl Drag {
             Tool::Text => Some(Start::Type(text_origin(
                 shape_at(document, at, tolerance).and_then(entry),
                 at,
+                look,
             ))),
             Tool::Arrow
             | Tool::Line
@@ -71,6 +78,7 @@ impl Drag {
             | Tool::Redact
             | Tool::Crop => Some(Start::Drag(Self::Draw {
                 tool,
+                look,
                 path: vec![at],
             })),
         };
@@ -129,7 +137,7 @@ impl Drag {
             })
         };
         match self {
-            Self::Draw { tool, path } => tool.command(path, constrained),
+            Self::Draw { tool, look, path } => tool.command(path, constrained, look),
             Self::Move { original, from, to } => {
                 let (mut x, mut y) = (to.x - from.x, to.y - from.y);
                 if constrained {
@@ -194,7 +202,7 @@ fn opposite_corner(shape: &Shape, corner: BoxHandle) -> Option<PointF> {
 }
 
 /// The text box a text-tool press at `at` opens, with `hit` the topmost shape under it.
-fn text_origin(hit: Option<&ShapeEntry>, at: PointF) -> TextOrigin {
+fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look) -> TextOrigin {
     match hit {
         Some(ShapeEntry {
             id,
@@ -207,8 +215,8 @@ fn text_origin(hit: Option<&ShapeEntry>, at: PointF) -> TextOrigin {
         },
         Some(_) | None => TextOrigin::New {
             at,
-            size: DEFAULT_TEXT_SIZE,
-            style: Tool::Text.style(),
+            size: look.text_size(),
+            style: look.style(),
         },
     }
 }
@@ -220,7 +228,7 @@ mod tests {
     use super::*;
     use crate::document::{Fill, RectF, RgbaImage, Style};
     use crate::history::History;
-    use crate::text::TextBlock;
+    use crate::text::{DEFAULT_TEXT_SIZE, TextBlock};
 
     fn point(x: f32, y: f32) -> PointF {
         PointF { x, y }
@@ -252,7 +260,7 @@ mod tests {
     fn document() -> (Document, ShapeId, ShapeId) {
         let image = RgbaImage::new(200, 200, vec![0; 200 * 200 * 4]).unwrap();
         let mut history = History::new(Document::new(Arc::new(image)));
-        let style = Tool::Rectangle.style();
+        let style = Look::default_for(Tool::Rectangle).style();
         for shape in [box_shape(), line_shape()] {
             history.apply(Command::Add { shape, style }).unwrap();
         }
@@ -284,6 +292,7 @@ mod tests {
         let on_box = Drag::press(
             &document,
             Tool::Select,
+            Look::default_for(Tool::Select),
             Some(line_id),
             point(30.0, 20.0),
             4.0,
@@ -294,6 +303,7 @@ mod tests {
         let on_nothing = Drag::press(
             &document,
             Tool::Select,
+            Look::default_for(Tool::Select),
             Some(box_id),
             point(190.0, 190.0),
             4.0,
@@ -313,6 +323,7 @@ mod tests {
         let press = Drag::press(
             &document,
             Tool::Select,
+            Look::default_for(Tool::Select),
             Some(box_id),
             point(51.0, 31.0),
             4.0,
@@ -325,17 +336,31 @@ mod tests {
                     rect: rect(10.0, 10.0, 60.0, 30.0),
                     fill: Fill::Solid
                 },
-                style: Tool::Rectangle.style(),
+                style: Look::default_for(Tool::Rectangle).style(),
             })
         );
-        let unselected = Drag::press(&document, Tool::Select, None, point(51.0, 31.0), 4.0);
+        let unselected = Drag::press(
+            &document,
+            Tool::Select,
+            Look::default_for(Tool::Select),
+            None,
+            point(51.0, 31.0),
+            4.0,
+        );
         assert!(matches!(drag(unselected), Some(Drag::Move { .. })));
     }
 
     #[test]
     fn f30_a_drawing_tool_clears_the_selection_and_draws_through_the_whole_path() {
         let (document, box_id, _) = document();
-        let press = Drag::press(&document, Tool::Pen, Some(box_id), point(0.0, 0.0), 4.0);
+        let press = Drag::press(
+            &document,
+            Tool::Pen,
+            Look::default_for(Tool::Pen),
+            Some(box_id),
+            point(0.0, 0.0),
+            4.0,
+        );
         assert_eq!(press.selected, None);
         let mut drag = drag(press).unwrap();
         let rest = [point(16.0, 0.0), point(16.0, 16.0)];
@@ -344,14 +369,27 @@ mod tests {
         }
         assert_eq!(
             drag.command(false),
-            Tool::Pen.command(&[point(0.0, 0.0), rest[0], rest[1]], false)
+            Tool::Pen.command(
+                &[point(0.0, 0.0), rest[0], rest[1]],
+                false,
+                &Look::default_for(Tool::Pen)
+            )
         );
     }
 
     #[test]
     fn f38_a_move_is_one_replace_and_a_drag_back_to_the_start_changes_nothing() {
         let (document, box_id, _) = document();
-        let press = || Drag::press(&document, Tool::Select, None, point(30.0, 20.0), 4.0);
+        let press = || {
+            Drag::press(
+                &document,
+                Tool::Select,
+                Look::default_for(Tool::Select),
+                None,
+                point(30.0, 20.0),
+                4.0,
+            )
+        };
         let Some(Command::Replace { id, shape, .. }) = dragged(press(), point(35.0, 22.0), false)
         else {
             panic!("no replace");
@@ -363,7 +401,14 @@ mod tests {
     #[test]
     fn f30_shift_keeps_a_move_on_its_longer_axis() {
         let (document, _, _) = document();
-        let press = Drag::press(&document, Tool::Select, None, point(30.0, 20.0), 4.0);
+        let press = Drag::press(
+            &document,
+            Tool::Select,
+            Look::default_for(Tool::Select),
+            None,
+            point(30.0, 20.0),
+            4.0,
+        );
         let Some(Command::Replace { shape, .. }) = dragged(press, point(33.0, 29.0), true) else {
             panic!("no replace");
         };
@@ -376,6 +421,7 @@ mod tests {
         let corner = Drag::press(
             &document,
             Tool::Select,
+            Look::default_for(Tool::Select),
             Some(box_id),
             point(50.0, 30.0),
             4.0,
@@ -394,6 +440,7 @@ mod tests {
         let end = Drag::press(
             &document,
             Tool::Select,
+            Look::default_for(Tool::Select),
             Some(line_id),
             point(150.0, 100.0),
             4.0,
@@ -428,7 +475,16 @@ mod tests {
         history.apply(Command::Add { shape, style }).unwrap();
         let document = history.document();
         let text_id = document.shapes().last().unwrap().id;
-        let press = |at| Drag::press(document, Tool::Text, Some(box_id), at, 4.0);
+        let press = |at| {
+            Drag::press(
+                document,
+                Tool::Text,
+                Look::default_for(Tool::Text),
+                Some(box_id),
+                at,
+                4.0,
+            )
+        };
 
         let on_text = press(point(130.0, 160.0));
         assert_eq!(on_text.selected, None);
@@ -444,7 +500,7 @@ mod tests {
             Some(Start::Type(TextOrigin::New {
                 at,
                 size: DEFAULT_TEXT_SIZE,
-                style: Tool::Text.style(),
+                style: Look::default_for(Tool::Text).style(),
             }))
         };
         assert_eq!(press(point(30.0, 20.0)).start, new_box(point(30.0, 20.0)));

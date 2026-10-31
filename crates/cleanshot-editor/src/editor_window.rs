@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
-    KeyAction, Modifiers, Output, Press, RgbaImage, ShapeId, Start, TextBlockError, TextEdit,
-    TextKey, TextOrigin, Tool, action_for_key, delivery_notice, save_as_notice,
+    KeyAction, Looks, Modifiers, Output, Press, RgbaImage, ShapeId, Start, TextBlockError,
+    TextEdit, TextKey, TextOrigin, Tool, action_for_key, delivery_notice, save_as_notice,
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InputHandler, InteractiveElement, IntoElement,
@@ -49,6 +49,8 @@ struct EditorView {
     selected: Option<ShapeId>,
     drag: Option<Drag>,
     text_box: Option<TextBox>,
+    /// How each tool draws, as the property strip sets it; not part of the document.
+    looks: Looks,
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
     placement: Option<Placement>,
@@ -92,6 +94,7 @@ impl EditorView {
             selected: None,
             drag: None,
             text_box: None,
+            looks: Looks::default(),
             shift: false,
             placement: None,
             space_held: false,
@@ -128,8 +131,9 @@ impl EditorView {
                         BoxPress::Commit => self.close_text_box(window),
                     }
                 }
+                let look = self.looks.look(self.tool);
                 let Press { selected, start } =
-                    Drag::press(&self.document, self.tool, self.selected, at, reach);
+                    Drag::press(&self.document, self.tool, look, self.selected, at, reach);
                 self.selected = selected;
                 self.drag = None;
                 match start {

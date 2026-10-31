@@ -78,6 +78,15 @@ impl TextBlock {
         self.size
     }
 
+    /// This block at `size`, which the caller has checked is positive; its width in ems
+    /// holds at any size.
+    pub(crate) fn with_size(&self, size: f32) -> Self {
+        Self {
+            size,
+            ..self.clone()
+        }
+    }
+
     /// The layout box of every line, in image pixels.
     #[must_use]
     pub fn extent(&self) -> RectF {

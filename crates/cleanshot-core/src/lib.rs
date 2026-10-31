@@ -9,6 +9,7 @@ mod drag;
 mod drawing;
 mod history;
 mod keys;
+mod look;
 mod selection;
 mod settings;
 mod text;
@@ -24,6 +25,7 @@ pub use drag::{Drag, Press, Start};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Command, CommandError, History};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key};
+pub use look::{Look, Looks, Property, PropertyError};
 pub use selection::{
     BoxHandle, Handle, box_handle_at, box_handles, handle_at, handles, hits, moved, resized,
     resized_box, shape_at,

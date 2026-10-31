@@ -1,10 +1,11 @@
-use crate::document::{Color, Fill, PointF, RedactMode, Shape, Style};
+use crate::document::{Fill, PointF, RedactMode, Shape};
 use crate::drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 use crate::history::Command;
+use crate::look::Look;
 use crate::selection::box_between;
 
 /// What a press or drag on the canvas does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tool {
     Select,
     Arrow,
@@ -18,21 +19,22 @@ pub enum Tool {
     Text,
 }
 
-const ANNOTATION_RED: Color = Color {
-    r: 255,
-    g: 59,
-    b: 48,
-    a: 255,
-};
-
-const HIGHLIGHTER_YELLOW: Color = Color {
-    r: 255,
-    g: 230,
-    b: 0,
-    a: 255,
-};
-
 impl Tool {
+    /// The tool that draws shapes like `shape`.
+    #[must_use]
+    pub fn drawing(shape: &Shape) -> Self {
+        match shape {
+            Shape::Arrow { .. } => Self::Arrow,
+            Shape::Line { .. } => Self::Line,
+            Shape::Rect { .. } => Self::Rectangle,
+            Shape::Ellipse { .. } => Self::Ellipse,
+            Shape::Pen(_) => Self::Pen,
+            Shape::Text(_) => Self::Text,
+            Shape::Highlight(_) => Self::Highlighter,
+            Shape::Redact { .. } => Self::Redact,
+        }
+    }
+
     /// The tool a single key picks, as in the CHARTER feature table: V, A, L, R, O, P, H, X, C, T.
     /// Case is ignored.
     #[must_use]
@@ -53,34 +55,12 @@ impl Tool {
         Some(tool)
     }
 
-    /// The style a new shape from this tool gets (F-31, F-35, D-42).
-    #[must_use]
-    pub fn style(self) -> Style {
-        match self {
-            Self::Highlighter => Style {
-                color: HIGHLIGHTER_YELLOW,
-                stroke_width: 0.0,
-            },
-            Self::Select
-            | Self::Arrow
-            | Self::Line
-            | Self::Rectangle
-            | Self::Ellipse
-            | Self::Pen
-            | Self::Redact
-            | Self::Crop
-            | Self::Text => Style {
-                color: ANNOTATION_RED,
-                stroke_width: 3.0,
-            },
-        }
-    }
-
-    /// The edit a finished drag through `path` makes, `constrained` while Shift is held.
+    /// The edit a finished drag through `path` makes, drawn in `look`, `constrained` while Shift
+    /// is held.
     /// `None` for the select and text tools, which do not draw by dragging, and for a drag too short
     /// to draw anything, such as a click.
     #[must_use]
-    pub fn command(self, path: &[PointF], constrained: bool) -> Option<Command> {
+    pub fn command(self, path: &[PointF], constrained: bool, look: &Look) -> Option<Command> {
         let (&from, &last) = (path.first()?, path.last()?);
         let to = if !constrained {
             last
@@ -91,9 +71,9 @@ impl Tool {
         };
         let area = box_between(from, to);
         let has_area = area.width > 0.0 && area.height > 0.0;
-        let add = |shape| Command::Add {
-            shape,
-            style: self.style(),
+        let add = |shape| {
+            let (shape, style) = look.dress(shape);
+            Command::Add { shape, style }
         };
         match self {
             Self::Select | Self::Text => None,
@@ -137,7 +117,7 @@ mod tests {
     }
 
     fn added(tool: Tool, path: &[PointF], constrained: bool) -> Shape {
-        match tool.command(path, constrained) {
+        match tool.command(path, constrained, &Look::default_for(tool)) {
             Some(Command::Add { shape, .. }) => shape,
             other => panic!("{tool:?} made {other:?}"),
         }
@@ -165,20 +145,6 @@ mod tests {
         assert_eq!(Tool::for_key('r'), Some(Tool::Rectangle));
         assert_eq!(Tool::for_key('t'), Some(Tool::Text));
         assert_eq!(Tool::for_key('q'), None);
-    }
-
-    #[test]
-    fn f31_arrows_and_lines_default_to_red_3_px() {
-        let style = Tool::Arrow.style();
-        assert_eq!((style.color.r, style.color.g, style.color.b), (255, 59, 48));
-        assert_eq!(style.stroke_width, 3.0);
-        assert_eq!(Tool::Line.style(), style);
-    }
-
-    #[test]
-    fn f35_the_highlighter_defaults_to_yellow() {
-        let color = Tool::Highlighter.style().color;
-        assert_eq!((color.r, color.g, color.b), (255, 230, 0));
     }
 
     #[test]
@@ -244,7 +210,7 @@ mod tests {
             }
         );
         assert_eq!(
-            Tool::Crop.command(&path, false),
+            Tool::Crop.command(&path, false, &Look::default_for(Tool::Crop)),
             Some(Command::SetCrop(Some(area)))
         );
     }
@@ -254,10 +220,23 @@ mod tests {
         let click = [point(7.0, 7.0), point(7.0, 7.0)];
         let flat = [point(0.0, 5.0), point(40.0, 5.0)];
         for tool in [Tool::Arrow, Tool::Rectangle, Tool::Pen, Tool::Crop] {
-            assert_eq!(tool.command(&click, false), None, "{tool:?}");
+            assert_eq!(
+                tool.command(&click, false, &Look::default_for(tool)),
+                None,
+                "{tool:?}"
+            );
         }
-        assert_eq!(Tool::Redact.command(&flat, false), None);
-        assert_eq!(Tool::Select.command(&flat, false), None);
-        assert_eq!(Tool::Line.command(&[], false), None);
+        assert_eq!(
+            Tool::Redact.command(&flat, false, &Look::default_for(Tool::Redact)),
+            None
+        );
+        assert_eq!(
+            Tool::Select.command(&flat, false, &Look::default_for(Tool::Select)),
+            None
+        );
+        assert_eq!(
+            Tool::Line.command(&[], false, &Look::default_for(Tool::Line)),
+            None
+        );
     }
 }
