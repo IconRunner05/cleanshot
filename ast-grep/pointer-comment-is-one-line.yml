@@ -1,0 +1,11 @@
+id: pointer-comment-is-one-line
+language: rust
+severity: error
+message: A `// C-xx:`, `// D-xx:`, `// F-xx:` or `// P-xx:` comment is a one-line pointer; the why it points to lives in docs/CHARTER.md.
+rule:
+  kind: line_comment
+  regex: '^// [CDFP]-[0-9]+:'
+  precedes:
+    kind: line_comment
+    not:
+      regex: '^// (SAFETY|[CDFP]-[0-9]+):'

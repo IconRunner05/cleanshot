@@ -35,8 +35,7 @@ fn main() {
     let instance = match Launch::claim().expect("the single-instance mutex opens") {
         Launch::First(instance) => instance,
         Launch::AlreadyRunning => {
-            // C-14: a second launch asks the running one to capture, then exits. If that
-            // one is still starting it has no tray window yet, and this launch says so.
+            // C-14: a second launch asks the running one to capture, or says it is still starting.
             if let Err(error) = ask_running_instance_to_capture() {
                 let text = format!(
                     "Cleanshot is already running but did not answer ({error}). Wait a few seconds and start it again. If it still does not answer, end cleanshot.exe in Task Manager and start Cleanshot again."
@@ -579,8 +578,6 @@ fn from_save(error: SaveError, folder: &Path) -> DeliveryError {
     }
 }
 
-// F-54: reading never stops Cleanshot; whatever is wrong becomes one warning and the
-// defaults stand in.
 const IDLE_SAMPLE: Duration = Duration::from_secs(10);
 
 fn open_log() -> Result<Log, String> {
@@ -588,6 +585,7 @@ fn open_log() -> Result<Log, String> {
     Log::open(&settings).map_err(|error| error.to_string())
 }
 
+// F-54: reading never stops Cleanshot; what is wrong becomes one warning, and defaults stand in.
 fn load_settings() -> (Settings, Option<String>) {
     let read = settings_path().and_then(|path| read_settings(&path, MAX_SETTINGS_BYTES));
     let bytes = match read {

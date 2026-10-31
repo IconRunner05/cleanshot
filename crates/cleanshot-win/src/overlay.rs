@@ -234,8 +234,7 @@ impl Overlay {
         for &window in &overlay.windows {
             // SAFETY: `window` was created above; showing it without activation is F-02's rule.
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
-            // P-01: the first frame is painted before show returns, so a caller timing show
-            // times the overlay becoming visible.
+            // P-01: show paints the first frame before it returns, so timing show times visibility.
             // SAFETY: `window` was created above on this thread.
             unsafe { UpdateWindow(window) }
                 .ok()

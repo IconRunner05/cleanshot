@@ -96,8 +96,7 @@ impl Tray {
         };
         crate::register_window_class(&class)?;
 
-        // F-50: a top-level window, not HWND_MESSAGE, because message-only windows miss the
-        // TaskbarCreated broadcast that re-adds the icon after Explorer restarts.
+        // F-50: not HWND_MESSAGE, which misses TaskbarCreated when Explorer restarts.
         // SAFETY: the class was registered above and every string is 'static.
         let window = unsafe {
             CreateWindowExW(
@@ -346,8 +345,7 @@ fn fill(slots: &mut [u16], text: &str) {
     }
 }
 
-// F-50: the shell refuses the icon while the taskbar is not up, and then sends TaskbarCreated,
-// which calls this again. A system icon that fails to load counts as a refusal.
+// F-50: refused while the taskbar is down or the system icon fails to load; TaskbarCreated retries.
 fn add_icon(window: HWND) -> bool {
     let mut icon = icon_data(window);
     // SAFETY: IDI_APPLICATION is a system icon, so no module handle is needed.
