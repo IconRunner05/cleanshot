@@ -21,6 +21,7 @@
   "fold": {
     "bar": [
       "cargo fmt --all -- --check",
+      "ast-grep scan",
       "cargo clippy --workspace --all-targets -- -D warnings",
       "cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings",
       "cargo test --target host-tuple -p cleanshot-core -p cleanshot-render",
