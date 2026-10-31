@@ -84,6 +84,39 @@ jobs:
           fi
           taskkill //F //IM cleanshot.exe
 
+      - name: Release exe meets P-03, P-04 and P-05 from its own --log lines (D-62)
+        shell: bash
+        run: |
+          run="$RUNNER_TEMP/perf"
+          mkdir -p "$run"
+          cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
+          # An empty cleanshot.toml beside the exe is portable mode (C-05), so the log lands here.
+          : > "$run/cleanshot.toml"
+          # C-14: while the C-02 step's exe lives, this launch would only signal it and exit.
+          for _ in $(seq 20); do
+            tasklist //FI "IMAGENAME eq cleanshot.exe" | grep -qi cleanshot.exe || break
+            sleep 0.5
+          done
+          if tasklist //FI "IMAGENAME eq cleanshot.exe" | grep -qi cleanshot.exe; then
+            echo "FAIL D-62: the C-02 step's cleanshot.exe is still running after 10 s"
+            exit 1
+          fi
+          "$run/cleanshot.exe" --log &
+          sleep 15
+          taskkill //F //IM cleanshot.exe
+          cat "$run/cleanshot.log"
+          value() { sed -n "s/^[0-9]* perf $1 $2=\([0-9]*\).*/\1/p" "$run/cleanshot.log"; }
+          tray=$(value P-03 tray_ready_ms)
+          memory=$(value P-04 working_set_bytes)
+          cpu=$(value P-05 cpu_ms)
+          [[ -n $tray && -n $memory && -n $cpu ]] || { echo "FAIL D-62: a perf line is missing from cleanshot.log"; exit 1; }
+          echo "P-03 tray ready ${tray} ms (budget 300); P-04 working set ${memory} bytes (budget 26214400); P-05 ${cpu} ms of CPU over 10 s idle (budget 100)"
+          status=0
+          (( tray < 300 )) || { echo "FAIL P-03: the tray was ready after ${tray} ms"; status=1; }
+          (( memory < 26214400 )) || { echo "FAIL P-04: the idle working set is ${memory} bytes"; status=1; }
+          (( cpu < 100 )) || { echo "FAIL P-05: ${cpu} ms of CPU in 10 s idle"; status=1; }
+          exit "$status"
+
       - name: Upload cleanshot.exe
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
