@@ -9,7 +9,7 @@ section exists.
 
 ## [Unreleased]
 
-## [0.1.0]
+## [0.1.0] - 2026-10-31
 
 The first public build: a pre-release for trying Cleanshot day to day. It is not code-signed
 yet, so Windows SmartScreen may warn before it runs. `SHA256SUMS` and the build-provenance
