@@ -76,6 +76,16 @@ fn report_bench(report: &mut String, timings: BenchReport) {
     line(report, "Worst interval", format!("{:?}", timings.worst));
     line(
         report,
+        "Redaction drag p50 (D-58)",
+        format!("{:?}", timings.redaction_drag_p50),
+    );
+    line(
+        report,
+        "Redaction drag p95 (D-58)",
+        format!("{:?}", timings.redaction_drag_p95),
+    );
+    line(
+        report,
         "fps at p50",
         format!("{:.1}", 1.0 / timings.p50.as_secs_f64()),
     );
