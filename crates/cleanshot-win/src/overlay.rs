@@ -724,7 +724,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use cleanshot_core::RgbaImage;
-    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, GetUpdateRect, ReleaseDC};
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetPixel,
+        GetUpdateRect, ReleaseDC, SelectObject,
+    };
+    use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
     };
@@ -788,14 +792,24 @@ mod tests {
         .expect("the overlay opens");
         pump(Duration::from_millis(500));
         let points = [(5, 7), (40, 30), (63, 47)];
-        // SAFETY: the screen DC is read here on this thread and released once below.
+        // Another test process's window may cover the desktop's corner, so this reads the
+        // overlay window's own pixels rather than the screen's.
+        // SAFETY: every DC and the bitmap are made, used and freed here on this thread, and
+        // the window belongs to this thread.
         let shown = unsafe {
             let screen = GetDC(None);
+            let copy = CreateCompatibleDC(Some(screen));
+            let bitmap = CreateCompatibleBitmap(screen, 64, 48);
+            let previous = SelectObject(copy, bitmap.into());
+            let printed = PrintWindow(overlay.windows[0], copy, PRINT_WINDOW_FLAGS(0)).as_bool();
             let read = points.map(|(x, y)| {
-                let colour = GetPixel(screen, x, y).0.to_le_bytes();
+                let colour = GetPixel(copy, x, y).0.to_le_bytes();
                 [colour[0], colour[1], colour[2]]
             });
+            SelectObject(copy, previous);
+            let freed = DeleteObject(bitmap.into()).as_bool() && DeleteDC(copy).as_bool();
             ReleaseDC(None, screen);
+            assert!(printed && freed, "the overlay window prints into a bitmap");
             read
         };
         drop(overlay);

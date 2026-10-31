@@ -39,6 +39,10 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+# F-02's test reads the overlay window's own pixels with PrintWindow.
+windows = { version = "0.62.2", features = ["Win32_Storage_Xps"] }
+
 [features]
 # What the UI Automation tests read; never in cleanshot.exe.
 ui-automation-test = []
