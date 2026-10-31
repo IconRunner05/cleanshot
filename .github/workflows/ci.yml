@@ -191,3 +191,46 @@ jobs:
           name: probe-report
           path: probe.md
           if-no-files-found: error
+
+  dpi:
+    if: ${{ !endsWith(github.ref, '-red') }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Field-test probe builds
+        run: cargo build --release --locked -p cleanshot-fieldtest -p cleanshot-app
+
+      - name: Release exe copies the full screen pixel for pixel at 100, 125, 150 and 175% (F-01, D-71)
+        shell: bash
+        run: |
+          run="$RUNNER_TEMP/dpi"
+          mkdir -p "$run"
+          cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
+          # Portable mode (C-05). Ctrl+Shift+7 is the key the field test presses.
+          printf 'after_capture = "copy"\nshow_thumbnail = false\n[hotkeys]\nfull_screen = "Ctrl+Shift+7"\n' > "$run/cleanshot.toml"
+          start() {
+            "$run/cleanshot.exe" --log &
+            sleep 3
+          }
+          # C-14: a launch while the last exe lives would only signal it and exit.
+          stop() {
+            taskkill //F //IM cleanshot.exe
+            for _ in $(seq 20); do
+              tasklist //FI "IMAGENAME eq cleanshot.exe" | grep -qi cleanshot.exe || break
+              sleep 0.5
+            done
+            cat "$run/cleanshot.log"
+          }
+          status=0
+          # Scale steps from the recommended 100% at 1920x1080, and the dpi each gives (D-71).
+          # Each step sets its scale, then starts its own exe, as a user launching at that scale does (D-71).
+          for scale in "0 96" "1 120" "2 144" "4 168"; do
+            target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --set-scale 1920 1080 $scale || { status=1; continue; }
+            start
+            target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --copy-at-scale 1920 1080 ${scale#* } "$run/cleanshot.log" || status=1
+            stop
+          done
+          exit "$status"
+

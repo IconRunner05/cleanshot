@@ -46,6 +46,8 @@ use cleanshot_core::Hotkey;
 
 use crate::tray::{Request, Tray};
 
+pub mod dpi;
+
 /// The Windows release, read from the registry.
 #[derive(Debug)]
 pub struct WindowsVersion {

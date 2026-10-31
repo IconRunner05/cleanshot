@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use cleanshot_editor::{BenchReport, bench};
 use cleanshot_win::capture::{Method, capture_all};
+use cleanshot_win::field_test::dpi::{copy_at_scale, set_scale};
 use cleanshot_win::field_test::{
     Driver, adapters, animations_on, clipboard_round_trip, d3d11_feature_level, drive_tray,
     monitors, open_and_cancel_overlays, rendering_params, windows_version,
@@ -31,7 +32,7 @@ fn main() {
                 eprintln!("--overlays takes a count, not {times:?}");
                 std::process::exit(2);
             };
-            let shown = |press| p01_lines(Path::new(log)) >= press;
+            let shown = |press| perf_lines(Path::new(log), "P-01") >= press;
             if let Err(error) =
                 open_and_cancel_overlays(times, OVERLAY_TIMEOUT, OVERLAY_SETTLE, shown)
             {
@@ -40,8 +41,41 @@ fn main() {
             }
             return;
         }
+        [_, flag, width, height, step, dpi] if flag == "--set-scale" => {
+            let (Ok(width), Ok(height), Ok(step), Ok(dpi)) =
+                (width.parse(), height.parse(), step.parse(), dpi.parse())
+            else {
+                eprintln!("--set-scale takes WIDTH HEIGHT STEP DPI as numbers");
+                std::process::exit(2);
+            };
+            if let Err(error) = set_scale(width, height, step, dpi) {
+                eprintln!("FAIL F-01 at {dpi} dpi: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        [_, flag, width, height, dpi, log] if flag == "--copy-at-scale" => {
+            let (Ok(width), Ok(height), Ok(dpi)) = (width.parse(), height.parse(), dpi.parse())
+            else {
+                eprintln!("--copy-at-scale takes WIDTH HEIGHT DPI as numbers, then LOG");
+                std::process::exit(2);
+            };
+            if let Err(error) =
+                copy_at_scale(width, height, dpi, || perf_lines(Path::new(log), "P-02"))
+            {
+                eprintln!("FAIL F-01 at {dpi} dpi: {error}");
+                std::process::exit(1);
+            }
+            println!(
+                "F-01 at {dpi} dpi: the {width}x{height} copy holds the pattern pixel for pixel"
+            );
+            return;
+        }
         _ => {
-            eprintln!("usage: cleanshot-fieldtest --report PATH | --overlays COUNT LOG");
+            eprintln!(
+                "usage: cleanshot-fieldtest --report PATH | --overlays COUNT LOG \
+                 | --set-scale WIDTH HEIGHT STEP DPI | --copy-at-scale WIDTH HEIGHT DPI LOG"
+            );
             std::process::exit(2);
         }
     };
@@ -71,14 +105,15 @@ fn main() {
     std::fs::write(&report_path, report).expect("the report path is writable");
 }
 
-/// How many overlays cleanshot.exe has logged as visible (P-01) in its `--log` file so far.
-fn p01_lines(log: &Path) -> u32 {
+/// How many `budget` perf lines (P-01 for an overlay shown, P-02 for a copy) cleanshot.exe
+/// has logged in its `--log` file so far.
+fn perf_lines(log: &Path, budget: &str) -> u32 {
     let log = std::fs::read_to_string(log).expect("cleanshot.exe was started with --log here");
     let shown = log
         .lines()
-        .filter(|line| line.contains(" perf P-01 "))
+        .filter(|line| line.contains(&format!(" perf {budget} ")))
         .count();
-    u32::try_from(shown).expect("fewer than 4 billion overlays")
+    u32::try_from(shown).expect("fewer than 4 billion lines")
 }
 
 fn report_bench(report: &mut String, timings: BenchReport) {
