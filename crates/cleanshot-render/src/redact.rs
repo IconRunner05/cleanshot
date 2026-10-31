@@ -229,7 +229,10 @@ mod tests {
         for (shape, style) in shapes {
             history.apply(Command::Add { shape, style }).unwrap();
         }
-        flatten(history.document(), &TextMasks::default()).unwrap()
+        flatten(history.document(), &TextMasks::default())
+            .unwrap()
+            .image()
+            .clone()
     }
 
     fn redaction(mode: RedactMode) -> (Shape, Style) {
@@ -323,7 +326,10 @@ mod tests {
                     style: style(MAGENTA),
                 })
                 .unwrap();
-            let flat = flatten(history.document(), &TextMasks::default()).unwrap();
+            let flat = flatten(history.document(), &TextMasks::default())
+                .unwrap()
+                .image()
+                .clone();
             pixels(&flat)
                 .filter(|&(x, y, _)| x < 32 && y < 16)
                 .map(|(_, _, pixel)| pixel)
@@ -376,7 +382,7 @@ mod tests {
                 (3, 2, (33, 17)),
                 "{mode:?}"
             );
-            for (x, y, pixel) in pixels(&export) {
+            for (x, y, pixel) in pixels(export.image()) {
                 if (3..36).contains(&x) && (2..19).contains(&y) {
                     let at = ((y - 2) * 33 + (x - 3)) as usize * 4;
                     assert_eq!(

@@ -4,7 +4,7 @@ use image::ImageEncoder;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 
-use crate::Error;
+use crate::{Error, Flattened};
 
 /// The encodings an export can take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,13 +17,15 @@ pub enum Format {
     ClipboardBitmap,
 }
 
-/// `image` encoded as `format`. Copy and save encode through here (F-24).
+/// `flattened` encoded as `format`. Copy and save encode through here, so they export only
+/// what [`crate::flatten`] made (F-24).
 ///
 /// # Errors
 ///
 /// [`Error::Encode`] if the encoder fails, and [`Error::TooLarge`] if the image is too large
 /// for a bitmap header.
-pub fn encode(image: &RgbaImage, format: Format) -> Result<Vec<u8>, Error> {
+pub fn encode(flattened: &Flattened, format: Format) -> Result<Vec<u8>, Error> {
+    let image = flattened.image();
     let mut bytes = Vec::new();
     let (width, height, pixels) = (image.width(), image.height(), image.pixels());
     match format {
@@ -126,15 +128,15 @@ mod tests {
     #[test]
     fn f21_png_keeps_every_pixel() {
         let image = sample();
-        let png = encode(&image, Format::Png).unwrap();
+        let png = encode(&Flattened::fixture(image.clone()), Format::Png).unwrap();
         assert_eq!(decoded(&png, ImageFormat::Png).as_raw(), image.pixels());
     }
 
     #[test]
     fn f20_the_clipboard_bitmap_is_a_bmp_file_less_its_file_header() {
         let image = sample();
-        let bitmap = encode(&image, Format::ClipboardBitmap).unwrap();
-        let file = encode(&image, Format::Bmp).unwrap();
+        let bitmap = encode(&Flattened::fixture(image.clone()), Format::ClipboardBitmap).unwrap();
+        let file = encode(&Flattened::fixture(image.clone()), Format::Bmp).unwrap();
         assert_eq!(&file[..2], b"BM");
         assert_eq!(file[2..6], u32::try_from(file.len()).unwrap().to_le_bytes());
         assert_eq!(file[10..14], (14_u32 + 124).to_le_bytes());
@@ -146,7 +148,7 @@ mod tests {
         let top = [200, 10, 20, 128];
         let bottom = [1, 2, 3, 255];
         let image = RgbaImage::new(1, 2, [top, bottom].concat()).unwrap();
-        let bitmap = encode(&image, Format::ClipboardBitmap).unwrap();
+        let bitmap = encode(&Flattened::fixture(image.clone()), Format::ClipboardBitmap).unwrap();
 
         let field =
             |offset: usize| u32::from_le_bytes(bitmap[offset..offset + 4].try_into().unwrap());
@@ -173,13 +175,13 @@ mod tests {
     #[test]
     fn f21_bmp_keeps_every_pixel_and_its_alpha() {
         let image = sample();
-        let file = encode(&image, Format::Bmp).unwrap();
+        let file = encode(&Flattened::fixture(image.clone()), Format::Bmp).unwrap();
         assert_eq!(decoded(&file, ImageFormat::Bmp).as_raw(), image.pixels());
     }
 
     #[test]
     fn f21_jpeg_keeps_the_size() {
-        let jpeg = encode(&sample(), Format::Jpeg).unwrap();
+        let jpeg = encode(&Flattened::fixture(sample()), Format::Jpeg).unwrap();
         assert_eq!(decoded(&jpeg, ImageFormat::Jpeg).dimensions(), (3, 2));
     }
 }

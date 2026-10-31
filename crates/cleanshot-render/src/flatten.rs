@@ -13,6 +13,32 @@ use crate::Error;
 use crate::gamma::coverage_table;
 use crate::redact::redact;
 
+/// A document's final pixels, which only [`flatten`] makes, so [`crate::encode`] can export
+/// nothing else (F-24, C-22). Nothing outside this crate can make one:
+///
+/// ```compile_fail
+/// # use cleanshot_render::Flattened;
+/// # let capture = cleanshot_core::RgbaImage::new(1, 1, vec![0; 4]).unwrap();
+/// let raw = Flattened(capture);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Flattened(RgbaImage);
+
+impl Flattened {
+    #[must_use]
+    pub fn image(&self) -> &RgbaImage {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Flattened {
+    /// Encode's tests: `image` as if flatten had made it, alpha and all.
+    pub(crate) fn fixture(image: RgbaImage) -> Self {
+        Self(image)
+    }
+}
+
 /// The document's final pixels: the base image with every shape drawn on it in order, cut to
 /// the crop (F-37). Copy and save both export these pixels (F-24). Text shapes are painted
 /// from `masks`, their glyph coverage as DirectWrite rasterised it (F-34).
@@ -22,7 +48,7 @@ use crate::redact::redact;
 /// [`Error::TooLarge`] if the image exceeds the renderer's size limit;
 /// [`Error::MissingTextMask`] if `masks` has no entry for one of the document's text shapes.
 /// The other variants mean the document broke one of core's guarantees.
-pub fn flatten(document: &Document, masks: &TextMasks) -> Result<RgbaImage, Error> {
+pub fn flatten(document: &Document, masks: &TextMasks) -> Result<Flattened, Error> {
     let base = document.base();
     let too_large = || Error::TooLarge {
         width: base.width(),
@@ -47,7 +73,9 @@ pub fn flatten(document: &Document, masks: &TextMasks) -> Result<RgbaImage, Erro
             .and_then(|bounds| pixmap.clone_rect(bounds))
             .ok_or(Error::CropOutsideImage(crop))?;
     }
-    RgbaImage::new(pixmap.width(), pixmap.height(), straight(&pixmap)).map_err(Error::Output)
+    RgbaImage::new(pixmap.width(), pixmap.height(), straight(&pixmap))
+        .map(Flattened)
+        .map_err(Error::Output)
 }
 
 /// Straight RGBA bytes as the premultiplied ones tiny-skia draws on.
@@ -296,7 +324,10 @@ mod tests {
     fn a_document_with_no_shapes_flattens_to_its_base() {
         let history = history(numbered());
         assert_eq!(
-            &flatten(history.document(), &TextMasks::default()).unwrap(),
+            &flatten(history.document(), &TextMasks::default())
+                .unwrap()
+                .image()
+                .clone(),
             &**history.document().base()
         );
     }
@@ -319,7 +350,10 @@ mod tests {
             })
             .unwrap();
 
-        let flat = flatten(history.document(), &TextMasks::default()).unwrap();
+        let flat = flatten(history.document(), &TextMasks::default())
+            .unwrap()
+            .image()
+            .clone();
         assert_eq!(pixel(&flat, 1, 1), [200, 100, 0, 255]);
     }
 
@@ -334,7 +368,10 @@ mod tests {
         };
         history.apply(Command::SetCrop(Some(crop))).unwrap();
 
-        let flat = flatten(history.document(), &TextMasks::default()).unwrap();
+        let flat = flatten(history.document(), &TextMasks::default())
+            .unwrap()
+            .image()
+            .clone();
         assert_eq!((flat.width(), flat.height()), (2, 2));
         assert_eq!(pixel(&flat, 0, 0), pixel(&numbered(), 1, 1));
         assert_eq!(pixel(&flat, 1, 1), pixel(&numbered(), 2, 2));
@@ -351,7 +388,10 @@ mod tests {
         };
         history.apply(Command::SetCrop(Some(crop))).unwrap();
 
-        let flat = flatten(history.document(), &TextMasks::default()).unwrap();
+        let flat = flatten(history.document(), &TextMasks::default())
+            .unwrap()
+            .image()
+            .clone();
         assert_eq!((flat.width(), flat.height()), (2, 2));
         assert_eq!(pixel(&flat, 0, 0), pixel(&numbered(), 0, 0));
     }
@@ -400,7 +440,7 @@ mod tests {
         let mut masks = TextMasks::default();
         masks.insert(id, vec![mask(0, 0, 1, &[], None)]);
         assert_eq!(
-            &flatten(history.document(), &masks).unwrap(),
+            &flatten(history.document(), &masks).unwrap().image().clone(),
             &**history.document().base()
         );
     }
@@ -410,7 +450,7 @@ mod tests {
         let (history, id) = with_text(uniform([200, 100, 50, 255]));
         let mut masks = TextMasks::default();
         masks.insert(id, vec![mask(1, 2, 3, &[255, 128, 0], None)]);
-        let flat = flatten(history.document(), &masks).unwrap();
+        let flat = flatten(history.document(), &masks).unwrap().image().clone();
         assert_eq!(pixel(&flat, 1, 2), [0, 0, 255, 255]);
         assert_eq!(pixel(&flat, 2, 2), [100, 50, 153, 255]);
         assert_eq!(pixel(&flat, 3, 2), [200, 100, 50, 255]);
@@ -434,7 +474,7 @@ mod tests {
                 mask(1, 0, 1, &[255], Some(white)),
             ],
         );
-        let flat = flatten(history.document(), &masks).unwrap();
+        let flat = flatten(history.document(), &masks).unwrap().image().clone();
         assert_eq!(pixel(&flat, 0, 0), [0, 0, 255, 255]);
         assert_eq!(pixel(&flat, 1, 0), [255, 255, 255, 255]);
     }
@@ -444,7 +484,7 @@ mod tests {
         let (history, id) = with_text(uniform([200, 100, 50, 255]));
         let mut masks = TextMasks::default();
         masks.insert(id, vec![mask(-1, 2, 2, &[255, 255, 255, 255], None)]);
-        let flat = flatten(history.document(), &masks).unwrap();
+        let flat = flatten(history.document(), &masks).unwrap().image().clone();
         assert_eq!(pixel(&flat, 0, 2), [0, 0, 255, 255]);
         assert_eq!(pixel(&flat, 1, 2), [200, 100, 50, 255]);
         assert_eq!(pixel(&flat, 3, 2), [200, 100, 50, 255]);

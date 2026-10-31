@@ -40,7 +40,7 @@ fn main() -> ExitCode {
             println!("blessed {name}");
             continue;
         }
-        match compare(&flat, &png, &path) {
+        match compare(flat.image(), &png, &path) {
             Ok(()) => println!("golden {name} ... ok"),
             Err(reason) => {
                 println!("golden {name} ... FAILED: {reason}");

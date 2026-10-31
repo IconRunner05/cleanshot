@@ -13,7 +13,7 @@ use cleanshot_core::{
     AfterCapture, Delivered, DeliveryError, Document, Hotkey, MAX_SETTINGS_BYTES, Output,
     RgbaImage, SaveFormat, Settings, SettingsProblem, delivery_notice,
 };
-use cleanshot_render::{Format, encode, flatten};
+use cleanshot_render::{Flattened, Format, encode, flatten};
 use cleanshot_win::capture::{
     Desktop, MonitorImage, RECT, capture_desktop, monitor_under_cursor, region,
 };
@@ -418,7 +418,7 @@ fn editor_save_to(
     move |path, document| save_to(path, document, &session.settings)
 }
 
-fn flattened(document: &Document) -> Result<RgbaImage, DeliveryError> {
+fn flattened(document: &Document) -> Result<Flattened, DeliveryError> {
     let masks = text::masks(document).map_err(|cause| {
         eprintln!("DirectWrite could not draw the text: {cause}");
         DeliveryError::TextNotDrawn
@@ -705,10 +705,7 @@ mod tests {
         let masks = text::masks(&document).expect("the document has no text to draw");
         let flattened = flatten(&document, &masks).expect("the document flattens");
         assert_eq!(written, encode(&flattened, Format::Bmp).expect("encodes"));
-        assert_ne!(
-            written,
-            encode(document.base(), Format::Bmp).expect("encodes")
-        );
+        assert_ne!(flattened.image(), document.base().as_ref());
     }
 
     #[test]
@@ -749,8 +746,8 @@ mod tests {
             "{saved:?}"
         );
         assert_ne!(
-            flattened,
-            *document.base().as_ref(),
+            flattened.image(),
+            document.base().as_ref(),
             "the text left the image white"
         );
     }
