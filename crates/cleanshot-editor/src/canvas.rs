@@ -408,4 +408,12 @@ mod tests {
         assert_eq!(gpui_baseline, baseline.y);
         assert_eq!(origin.y, px(78.5));
     }
+
+    #[test]
+    fn f34_the_exports_gamma_correction_is_gpuis_for_the_runners_gamma() {
+        assert_eq!(
+            cleanshot_render::TEXT_GAMMA_RATIOS,
+            gpui::get_gamma_correction_ratios(1.8)
+        );
+    }
 }

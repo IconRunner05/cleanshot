@@ -5,12 +5,14 @@
 
 mod encode;
 mod flatten;
+mod gamma;
 mod redact;
 
 use cleanshot_core::{ImageError, RectF, ShapeId};
 
 pub use encode::{Format, encode};
 pub use flatten::flatten;
+pub use gamma::TEXT_GAMMA_RATIOS;
 
 /// Why an export failed.
 #[derive(Debug, thiserror::Error)]

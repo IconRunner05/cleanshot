@@ -10,6 +10,7 @@ use tiny_skia::{
 };
 
 use crate::Error;
+use crate::gamma::coverage_table;
 use crate::redact::redact;
 
 /// The document's final pixels: the base image with every shape drawn on it in order, cut to
@@ -152,11 +153,13 @@ fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry, masks: &TextMasks) -> Result<()
     Ok(())
 }
 
-/// Paints `color` through one glyph layer's coverage, source over, clipped to the image.
+/// Paints `color` through one glyph layer's coverage, gamma corrected as GPUI draws it on
+/// screen, source over, clipped to the image.
 fn glyphs(pixmap: &mut Pixmap, mask: &GlyphMask, color: Color) {
     if mask.width() == 0 || mask.height() == 0 {
         return;
     }
+    let corrected = coverage_table(color);
     let (width, height) = (pixmap.width(), pixmap.height());
     let pixels = pixmap.pixels_mut();
     let rows = mask.coverage().chunks_exact(mask.width() as usize);
@@ -169,7 +172,7 @@ fn glyphs(pixmap: &mut Pixmap, mask: &GlyphMask, color: Color) {
                 continue;
             };
             let pixel = &mut pixels[y * width as usize + x];
-            *pixel = source_over(*pixel, color, coverage);
+            *pixel = source_over(*pixel, color, corrected[usize::from(coverage)]);
         }
     }
 }

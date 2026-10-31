@@ -101,9 +101,9 @@ same commit.
 3. Raw coverage carries no gamma, so no user setting reaches it: ClearType Tuner and the system
    gamma reach DirectWrite only through rendering params; win, like GPUI, passes none to
    `GetRecommendedRenderingMode` and never calls `CreateRenderingParams`. Render applies a fixed gamma
-   correction (the D-row below), using a port of `gpui::get_gamma_correction_ratios`. A Windows
-   editor test checks the port against GPUI's function for every gamma from 1.0 to 2.2, so the port
-   cannot drift.
+   correction (D-51) with GPUI's shader formula: contrast enhanced for dark text, then alpha
+   corrected by `gpui::get_gamma_correction_ratios` for the one fixed gamma. A Windows editor test
+   checks render's ratios against GPUI's function, so they cannot drift.
 4. `GlyphMask { left: i32, top: i32, width: u32, height: u32, coverage: Vec<u8>, color:
    Option<Color> }` and `TextMasks` (by `ShapeId`) are plain data in core. A `None` colour means the
    shape's colour, and `Some` is a colour-glyph layer.
