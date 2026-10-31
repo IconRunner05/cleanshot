@@ -4,13 +4,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::cell::{Cell, RefCell};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
     AfterCapture, Delivered, DeliveryError, Document, Hotkey, MAX_SETTINGS_BYTES, Output,
-    SaveFormat, Settings, SettingsProblem, delivery_notice,
+    RgbaImage, SaveFormat, Settings, SettingsProblem, delivery_notice,
 };
 use cleanshot_render::{Format, encode, flatten};
 use cleanshot_win::capture::{
@@ -66,13 +66,35 @@ fn main() {
             let session = Rc::clone(&session);
             let closer = app.clone();
             let defer = move |job: Box<dyn FnOnce()>| closer.spawn(async move |_| job()).detach();
+            let opener = app.clone();
+            let editing = Rc::clone(&session);
+            // F-05: Edit opens the selection in the editor, whose Copy and Save deliver as the
+            // overlay does (D-48).
+            let edit = move |image: RgbaImage| {
+                let session = Rc::clone(&editing);
+                opener
+                    .spawn(async move |cx| {
+                        cx.update(|cx| {
+                            if let Err(error) = cleanshot_editor::open(
+                                cx,
+                                image,
+                                editor_deliver(&session),
+                                editor_save_as_start(&session),
+                                editor_save_to(&session),
+                            ) {
+                                session.warn(&format!("The editor could not open: {error}."));
+                            }
+                        });
+                    })
+                    .detach();
+            };
             // The tray's window procedure can run while GPUI holds the app, so the request
             // waits for GPUI's executor instead of borrowing the app here.
             app.spawn(async move |cx| {
                 cx.update(|cx| match request {
-                    Request::CaptureRegion => capture(&session, Capture::Region, defer),
-                    Request::CaptureScreen => capture(&session, Capture::Screen, defer),
-                    Request::CaptureLastRegion => capture(&session, Capture::LastRegion, defer),
+                    Request::CaptureRegion => capture(&session, Capture::Region, defer, edit),
+                    Request::CaptureScreen => capture(&session, Capture::Screen, defer, edit),
+                    Request::CaptureLastRegion => capture(&session, Capture::LastRegion, defer, edit),
                     Request::Exit => cx.quit(),
                 });
             })
@@ -159,7 +181,12 @@ fn plan(
 // monitor until Esc. F-07: a screen capture selects the pointer's monitor, then runs the
 // after-capture action. F-06: the last region is copied with no overlay; with none yet, the
 // overlay opens as for a region.
-fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()>) + 'static) {
+fn capture(
+    session: &Rc<Session>,
+    kind: Capture,
+    defer: impl Fn(Box<dyn FnOnce()>) + 'static,
+    edit: impl Fn(RgbaImage) + 'static,
+) {
     if session.overlay.borrow().is_some() {
         return;
     }
@@ -202,6 +229,12 @@ fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()
                 finishing.last_selection.set(Some(selected));
                 finish(&finishing, &frozen, selected, Output::Save);
             }
+            OverlayEvent::Edit(selected) => match region(&frozen, selected) {
+                Ok(image) => edit(image),
+                Err(error) => {
+                    finishing.warn(&format!("The capture could not be edited: {error}."));
+                }
+            },
             OverlayEvent::DrawFailed(error) => {
                 finishing.warn(&format!("The overlay could not draw: {error}."));
             }
@@ -288,6 +321,25 @@ fn deliver(
                 .map_err(|error| from_save(error, &folder))
         }
     }
+}
+
+/// F-05: the editor's Copy and Save deliver as the overlay does (D-48).
+fn editor_deliver(
+    session: &Rc<Session>,
+) -> impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static {
+    let session = Rc::clone(session);
+    move |output, document| deliver(output, document, &session.settings)
+}
+
+// F-22: Save As is wired in its own commit.
+fn editor_save_as_start(_: &Rc<Session>) -> impl Fn() -> (PathBuf, String) + 'static {
+    || (PathBuf::new(), String::new())
+}
+
+fn editor_save_to(
+    _: &Rc<Session>,
+) -> impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static {
+    |_, _| Err(DeliveryError::NoSaveFolder)
 }
 
 fn from_render(error: &cleanshot_render::Error) -> DeliveryError {

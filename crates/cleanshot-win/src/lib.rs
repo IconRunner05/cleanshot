@@ -10,6 +10,7 @@ pub mod save;
 mod selection;
 pub mod settings_file;
 pub mod text;
+mod toolbar;
 pub mod tray;
 
 use windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS;

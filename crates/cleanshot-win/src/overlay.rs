@@ -14,23 +14,26 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey,
-    ReleaseCapture, SetCapture, UnregisterHotKey, VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_LEFT,
-    VK_RETURN, VK_RIGHT, VK_S, VK_UP,
+    ReleaseCapture, SetCapture, UnregisterHotKey, VIRTUAL_KEY, VK_DOWN, VK_E, VK_ESCAPE, VK_LEFT,
+    VK_RETURN, VK_RIGHT, VK_S, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW,
     SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST, WS_POPUP,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{Interface, PCWSTR, w};
 
 use crate::Error;
 use crate::capture::MonitorImage;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
+use crate::toolbar::{self, Control, Layout, Paint};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
 const DIM_OPACITY: f32 = 0.4;
@@ -56,10 +59,12 @@ const ACCENT: D2D1_COLOR_F = D2D1_COLOR_F {
 pub enum OverlayEvent {
     /// Esc was pressed (F-01: nothing is written).
     Cancelled,
-    /// Enter was pressed on this selection, in physical virtual-desktop pixels (F-03, F-05).
+    /// Copy was chosen for this selection, in physical virtual-desktop pixels (F-03, F-05).
     Copy(RECT),
-    /// Ctrl+S was pressed on this selection, in physical virtual-desktop pixels (F-05).
+    /// Save was chosen for this selection, in physical virtual-desktop pixels (F-05).
     Save(RECT),
+    /// Edit was chosen for this selection, in physical virtual-desktop pixels (F-05).
+    Edit(RECT),
     /// Direct2D could not draw a monitor's frozen image.
     DrawFailed(windows::core::Error),
 }
@@ -67,20 +72,27 @@ pub enum OverlayEvent {
 /// A key the overlay holds as a hotkey while it is up (D-23).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Key {
-    Cancel,
-    Copy,
-    Save,
+    /// Chooses this toolbar control, wherever the focus is.
+    Choose(Control),
+    /// Chooses the focused toolbar control.
+    Press,
+    /// Moves the toolbar's focus this many controls along.
+    Focus(i32),
     Nudge(i32, i32),
 }
 
-const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 11] = [
-    (MOD_NOREPEAT, VK_ESCAPE, Key::Cancel),
-    (MOD_NOREPEAT, VK_RETURN, Key::Copy),
+const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 15] = [
+    (MOD_NOREPEAT, VK_ESCAPE, Key::Choose(Control::Cancel)),
+    (MOD_NOREPEAT, VK_RETURN, Key::Press),
+    (MOD_NOREPEAT, VK_SPACE, Key::Press),
     (
         HOT_KEY_MODIFIERS(MOD_NOREPEAT.0 | MOD_CONTROL.0),
         VK_S,
-        Key::Save,
+        Key::Choose(Control::Save),
     ),
+    (MOD_NOREPEAT, VK_E, Key::Choose(Control::Edit)),
+    (HOT_KEY_MODIFIERS(0), VK_TAB, Key::Focus(1)),
+    (MOD_SHIFT, VK_TAB, Key::Focus(-1)),
     (HOT_KEY_MODIFIERS(0), VK_LEFT, Key::Nudge(-1, 0)),
     (HOT_KEY_MODIFIERS(0), VK_RIGHT, Key::Nudge(1, 0)),
     (HOT_KEY_MODIFIERS(0), VK_UP, Key::Nudge(0, -1)),
@@ -104,6 +116,9 @@ struct Shared {
     selected: Cell<Option<RECT>>,
     gesture: Cell<Option<Gesture>>,
     windows: RefCell<Vec<HWND>>,
+    /// The toolbar's monitor and its physical pixels per DIP (F-05).
+    toolbar: Option<(RECT, f32)>,
+    focus: Cell<Control>,
 }
 
 impl Shared {
@@ -115,20 +130,43 @@ impl Shared {
 
     fn select(&self, selected: Option<RECT>) {
         self.selected.set(selected);
+        self.repaint();
+    }
+
+    fn repaint(&self) {
         for &window in self.windows.borrow().iter() {
             // SAFETY: invalidating this thread's own window; a failure only skips one repaint.
             let _ = unsafe { InvalidateRect(Some(window), None, false) };
         }
     }
 
+    /// Where the toolbar sits for the current selection, if its monitor can hold it.
+    fn toolbar(&self) -> Option<Layout> {
+        let (monitor, scale) = self.toolbar?;
+        toolbar::layout(monitor, self.selected.get(), scale)
+    }
+
     fn press(&self, key: Key) {
-        let selected = self.selected.get();
-        match (key, selected) {
-            (Key::Cancel, _) => self.send(OverlayEvent::Cancelled),
-            (Key::Copy, Some(selected)) => self.send(OverlayEvent::Copy(selected)),
-            (Key::Save, Some(selected)) => self.send(OverlayEvent::Save(selected)),
+        match (key, self.selected.get()) {
+            (Key::Choose(control), _) => self.choose(control),
+            (Key::Press, _) => self.choose(self.focus.get()),
+            (Key::Focus(step), _) => {
+                self.focus.set(self.focus.get().step(step));
+                self.repaint();
+            }
             (Key::Nudge(dx, dy), Some(selected)) => self.select(Some(nudged(selected, dx, dy))),
-            (Key::Copy | Key::Save | Key::Nudge(..), None) => {}
+            (Key::Nudge(..), None) => {}
+        }
+    }
+
+    /// F-05: Cancel always closes; the others need a selection to act on.
+    fn choose(&self, control: Control) {
+        match (control, self.selected.get()) {
+            (Control::Cancel, _) => self.send(OverlayEvent::Cancelled),
+            (Control::Copy, Some(selected)) => self.send(OverlayEvent::Copy(selected)),
+            (Control::Save, Some(selected)) => self.send(OverlayEvent::Save(selected)),
+            (Control::Edit, Some(selected)) => self.send(OverlayEvent::Edit(selected)),
+            (Control::Copy | Control::Save | Control::Edit, None) => {}
         }
     }
 }
@@ -139,6 +177,8 @@ struct Surface {
     dim: ID2D1SolidColorBrush,
     accent: ID2D1SolidColorBrush,
     white: ID2D1SolidColorBrush,
+    /// Only the toolbar's monitor paints it.
+    toolbar: Option<Paint>,
     origin: POINT,
     shared: Rc<Shared>,
 }
@@ -164,6 +204,7 @@ impl Surface {
             );
             let Some(selected) = self.shared.selected.get() else {
                 self.target.FillRectangle(&raw const whole, &self.dim);
+                self.draw_toolbar()?;
                 return self.target.EndDraw(None, None);
             };
             let selected = nudged(selected, -self.origin.x, -self.origin.y);
@@ -208,7 +249,17 @@ impl Surface {
                 self.target
                     .DrawRectangle(&raw const square, &self.accent, 1.0, None);
             }
+            self.draw_toolbar()?;
             self.target.EndDraw(None, None)
+        }
+    }
+
+    fn draw_toolbar(&self) -> windows::core::Result<()> {
+        match (&self.toolbar, self.shared.toolbar()) {
+            (Some(paint), Some(placed)) => {
+                paint.draw(&placed, self.origin, self.shared.focus.get())
+            }
+            (Some(_) | None, _) => Ok(()),
         }
     }
 }
@@ -228,7 +279,8 @@ impl Overlay {
     ///
     /// # Errors
     ///
-    /// [`Error::Window`] if a window or its Direct2D surface cannot be made;
+    /// [`Error::Window`] if a window or its Direct2D surface cannot be made, or the pointer's
+    /// position or its monitor's DPI cannot be read;
     /// [`Error::HotkeyTaken`] if another program holds one of its keys as a hotkey.
     pub fn show(
         captures: &[MonitorImage],
@@ -240,17 +292,28 @@ impl Overlay {
         let factory: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
                 .map_err(Error::Window)?;
+        let host = toolbar_monitor(captures).map_err(Error::Window)?;
+        let toolbar = match host {
+            Some(capture) => Some((
+                capture.bounds,
+                dpi_scale(capture.bounds).map_err(Error::Window)?,
+            )),
+            None => None,
+        };
         let shared = Rc::new(Shared {
             listener: RefCell::new(Box::new(on_event)),
             selected: Cell::new(selected),
             gesture: Cell::new(None),
             windows: RefCell::new(Vec::with_capacity(captures.len())),
+            toolbar,
+            focus: Cell::new(Control::Copy),
         });
         let mut overlay = Self {
             windows: Vec::with_capacity(captures.len()),
         };
         for capture in captures {
-            let window = open_window(&factory, capture, &shared)?;
+            let hosts_toolbar = host.is_some_and(|host| std::ptr::eq(host, capture));
+            let window = open_window(&factory, capture, &shared, hosts_toolbar)?;
             overlay.windows.push(window);
             shared.windows.borrow_mut().push(window);
         }
@@ -300,10 +363,40 @@ fn register_class() -> Result<(), Error> {
     crate::register_window_class(&class)
 }
 
+/// F-05: the capture under the pointer, or the first when the pointer is on none.
+fn toolbar_monitor(captures: &[MonitorImage]) -> windows::core::Result<Option<&MonitorImage>> {
+    let mut pointer = POINT::default();
+    // SAFETY: `pointer` is writable.
+    unsafe { GetCursorPos(&raw mut pointer) }?;
+    let found = captures.iter().find(|capture| {
+        let bounds = capture.bounds;
+        (bounds.left..bounds.right).contains(&pointer.x)
+            && (bounds.top..bounds.bottom).contains(&pointer.y)
+    });
+    Ok(found.or(captures.first()))
+}
+
+/// Physical pixels per DIP on the monitor holding `bounds`.
+#[expect(clippy::cast_precision_loss, reason = "a DPI is a few hundred")]
+fn dpi_scale(bounds: RECT) -> windows::core::Result<f32> {
+    let (mut x, mut y) = (0, 0);
+    // SAFETY: both outputs are writable locals; MonitorFromRect always returns a monitor here.
+    unsafe {
+        GetDpiForMonitor(
+            MonitorFromRect(&raw const bounds, MONITOR_DEFAULTTONEAREST),
+            MDT_EFFECTIVE_DPI,
+            &raw mut x,
+            &raw mut y,
+        )
+    }?;
+    Ok(x as f32 / DESKTOP_DPI)
+}
+
 fn open_window(
     factory: &ID2D1Factory,
     capture: &MonitorImage,
     shared: &Rc<Shared>,
+    hosts_toolbar: bool,
 ) -> Result<HWND, Error> {
     let bounds = capture.bounds;
     let (width, height) = (capture.image.width(), capture.image.height());
@@ -326,7 +419,15 @@ fn open_window(
         )
     }
     .map_err(Error::Window)?;
-    match surface(factory, window, capture, width, height, shared) {
+    match surface(
+        factory,
+        window,
+        capture,
+        width,
+        height,
+        shared,
+        hosts_toolbar,
+    ) {
         Ok(surface) => {
             // SAFETY: `window` exists, so WM_NCDESTROY will free this Box once.
             unsafe {
@@ -354,6 +455,7 @@ fn surface(
     width: u32,
     height: u32,
     shared: &Rc<Shared>,
+    hosts_toolbar: bool,
 ) -> windows::core::Result<Surface> {
     let format = D2D1_PIXEL_FORMAT {
         format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -403,7 +505,12 @@ fn surface(
         let accent = target.CreateSolidColorBrush(&raw const accent_colour, None)?;
         let white_colour = WHITE;
         let white = target.CreateSolidColorBrush(&raw const white_colour, None)?;
+        let toolbar = match (hosts_toolbar, shared.toolbar) {
+            (true, Some((_, scale))) => Some(Paint::new(&target.cast()?, &frozen, scale)?),
+            (true | false, _) => None,
+        };
         Ok(Surface {
+            toolbar,
             target,
             frozen,
             dim,
@@ -481,10 +588,18 @@ unsafe extern "system" fn window_procedure(
         WM_LBUTTONDOWN => {
             // SAFETY: a non-null pointer is live until WM_NCDESTROY.
             let surface = unsafe { &*surface };
+            let at = surface.virtual_point(lparam);
+            if let Some(control) = surface
+                .shared
+                .toolbar()
+                .and_then(|placed| placed.control_at(at))
+            {
+                surface.shared.choose(control);
+                return LRESULT(0);
+            }
             // SAFETY: the window belongs to this thread; capture keeps the drag going past
             // its edge.
             unsafe { SetCapture(window) };
-            let at = surface.virtual_point(lparam);
             let original = surface.shared.selected.get();
             surface.shared.gesture.set(Some(Gesture {
                 grip: grip_at(original, at),
@@ -645,7 +760,7 @@ mod tests {
         .expect("the overlay opens");
         let enter = KEYS
             .iter()
-            .position(|&(_, _, key)| matches!(key, Key::Copy))
+            .position(|&(_, _, key)| matches!(key, Key::Press))
             .expect("Enter is one of the overlay's keys");
         // SAFETY: posting copies no memory, and the window belongs to this thread.
         unsafe {
@@ -660,5 +775,80 @@ mod tests {
         pump(Duration::from_millis(200));
         drop(overlay);
         assert_eq!(copied.get(), Some(screen));
+    }
+
+    /// Whether another registration holds `key`: a thread hotkey for it is refused.
+    fn held(modifiers: HOT_KEY_MODIFIERS, key: VIRTUAL_KEY) -> bool {
+        const PROBE: i32 = 0xBFFF;
+        // SAFETY: a thread hotkey needs no window; a granted one is released at once.
+        unsafe {
+            if RegisterHotKey(None, PROBE, modifiers, u32::from(key.0)).is_err() {
+                return true;
+            }
+            UnregisterHotKey(None, PROBE).expect("the probe hotkey was just registered");
+        }
+        false
+    }
+
+    #[test]
+    fn f05_the_toolbar_keys_are_free_again_after_esc() {
+        let _screen = SCREEN
+            .lock()
+            .expect("no overlay test panicked holding the screen");
+        let cancelled = Rc::new(Cell::new(false));
+        let sink = Rc::clone(&cancelled);
+        let overlay = Overlay::show(&[monitor()], None, move |event| {
+            sink.set(matches!(event, OverlayEvent::Cancelled));
+        })
+        .expect("the overlay opens");
+        assert!(
+            held(HOT_KEY_MODIFIERS(0), VK_TAB),
+            "Tab is the overlay's while it is up"
+        );
+        let escape = KEYS
+            .iter()
+            .position(|&(_, _, key)| matches!(key, Key::Choose(Control::Cancel)))
+            .expect("Esc is one of the overlay's keys");
+        // SAFETY: posting copies no memory, and the window belongs to this thread.
+        unsafe {
+            PostMessageW(
+                Some(overlay.windows[0]),
+                WM_HOTKEY,
+                WPARAM(escape),
+                LPARAM(0),
+            )
+        }
+        .expect("the overlay window takes the message");
+        pump(Duration::from_millis(200));
+        assert!(cancelled.get(), "Esc cancels");
+        drop(overlay);
+        for (modifiers, key, _) in KEYS {
+            assert!(!held(modifiers, key), "{key:?} is still held after Esc");
+        }
+    }
+
+    #[test]
+    fn f05_an_overlay_that_cannot_take_its_keys_frees_the_ones_it_took() {
+        const TAKEN: i32 = 0xBFFE;
+        let _screen = SCREEN
+            .lock()
+            .expect("no overlay test panicked holding the screen");
+        let (modifiers, last, _) = KEYS[KEYS.len() - 1];
+        // SAFETY: a thread hotkey needs no window; it is released below.
+        unsafe { RegisterHotKey(None, TAKEN, modifiers, u32::from(last.0)) }
+            .expect("no other program holds the overlay's last key");
+        let shown = Overlay::show(&[monitor()], None, |_| {});
+        // SAFETY: TAKEN was registered above on this thread.
+        unsafe { UnregisterHotKey(None, TAKEN) }.expect("the taken key was registered");
+        assert!(
+            matches!(shown, Err(Error::HotkeyTaken(_))),
+            "the overlay reports the taken key"
+        );
+        for (modifiers, key, _) in KEYS {
+            assert!(
+                !held(modifiers, key),
+                "{key:?} is still held after the failed open"
+            );
+        }
     }
 }

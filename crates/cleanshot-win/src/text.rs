@@ -3,17 +3,23 @@ use std::cell::RefCell;
 use cleanshot_core::{Color, Document, GlyphMask, INTER, PointF, Shape, TextBlock, TextMasks};
 use windows::Win32::Foundation::{DWRITE_E_NOCOLOR, E_INVALIDARG, RECT};
 use windows::Win32::Globalization::GetUserDefaultLocaleName;
+use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
+use windows::Win32::Graphics::Direct2D::{
+    D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1Brush, ID2D1RenderTarget,
+};
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_COLOR_GLYPH_RUN, DWRITE_FACTORY_TYPE_ISOLATED, DWRITE_FONT_STRETCH_NORMAL,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_GLYPH_RUN,
     DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_GRID_FIT_MODE, DWRITE_GRID_FIT_MODE_DEFAULT,
     DWRITE_MATRIX, DWRITE_MEASURING_MODE, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_OUTLINE_THRESHOLD_ANTIALIASED, DWRITE_RENDERING_MODE1,
-    DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC, DWRITE_RENDERING_MODE1_OUTLINE, DWRITE_STRIKETHROUGH,
+    DWRITE_OUTLINE_THRESHOLD_ANTIALIASED, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_RENDERING_MODE1, DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
+    DWRITE_RENDERING_MODE1_OUTLINE, DWRITE_STRIKETHROUGH, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE, DWRITE_TEXTURE_ALIASED_1x1, DWRITE_UNDERLINE,
     DWriteCreateFactory, IDWriteFactory2, IDWriteFactory3, IDWriteFactory5, IDWriteFontCollection,
-    IDWriteFontFace3, IDWriteInlineObject, IDWritePixelSnapping_Impl, IDWriteRenderingParams,
-    IDWriteTextRenderer, IDWriteTextRenderer_Impl,
+    IDWriteFontFace3, IDWriteInMemoryFontFileLoader, IDWriteInlineObject,
+    IDWritePixelSnapping_Impl, IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextRenderer,
+    IDWriteTextRenderer_Impl,
 };
 use windows::Win32::System::SystemServices::LOCALE_NAME_MAX_LENGTH;
 use windows::core::{BOOL, ComObject, HSTRING, IUnknown, Ref, implement};
@@ -57,27 +63,95 @@ pub fn masks(document: &Document) -> Result<TextMasks, Error> {
 
 /// The fonts one text shape is laid out with: a family from a collection, with DirectWrite's
 /// system fallback for characters the family lacks.
-struct Fonts {
+pub(crate) struct Fonts {
     factory: IDWriteFactory5,
     collection: IDWriteFontCollection,
     family: HSTRING,
     locale: HSTRING,
+    _loader: InterLoader,
+}
+
+/// Inter's in-memory loader, registered on its isolated factory until this drops. Inter's
+/// font file is valid only while the loader is registered.
+struct InterLoader {
+    factory: IDWriteFactory5,
+    loader: IDWriteInMemoryFontFileLoader,
+}
+
+impl Drop for InterLoader {
+    fn drop(&mut self) {
+        // SAFETY: the loader was registered on this factory in Fonts::inter, and is
+        // unregistered once, here.
+        let unregistered = unsafe { self.factory.UnregisterFontFileLoader(&self.loader) };
+        debug_assert!(unregistered.is_ok(), "Inter's loader unregisters once");
+    }
+}
+
+/// A text style the overlay draws with, sealed with the Fonts it reads Inter through, so no
+/// DirectWrite object leaves it: the Fonts' Drop unregisters Inter's loader, after which a
+/// format drawing Inter reads freed memory (F-05).
+pub(crate) struct Label {
+    format: IDWriteTextFormat,
+    _fonts: Fonts,
+}
+
+impl Label {
+    /// The same style with its text centred both ways in the box it is drawn into.
+    pub(crate) fn centred(self) -> windows::core::Result<Self> {
+        // SAFETY: the format is owned by `self`.
+        unsafe {
+            self.format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            self.format
+                .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        }
+        Ok(self)
+    }
+
+    /// Draws `text` in this style into `area` of `target` with `brush`.
+    pub(crate) fn draw(
+        &self,
+        target: &ID2D1RenderTarget,
+        text: &str,
+        area: &D2D_RECT_F,
+        brush: &ID2D1Brush,
+    ) {
+        let text: Vec<u16> = text.encode_utf16().collect();
+        // SAFETY: every argument is borrowed for the call, and the format's Fonts live in
+        // `self`.
+        unsafe {
+            target.DrawText(
+                &text,
+                &self.format,
+                area,
+                brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+        }
+    }
 }
 
 impl Fonts {
-    /// C-21: Inter is read from core's bytes in memory, never from a file. The factory is
-    /// isolated, so the loader registered here goes when it does.
-    fn inter() -> windows::core::Result<Self> {
+    /// C-21: Inter is read from core's bytes in memory, never from a file, through a loader
+    /// registered on an isolated factory until this value drops.
+    pub(crate) fn inter() -> windows::core::Result<Self> {
         // SAFETY: creating a factory takes no memory of ours.
         let factory: IDWriteFactory5 =
             unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED) }?;
         let length =
             u32::try_from(INTER.len()).map_err(|_| windows::core::Error::from(E_INVALIDARG))?;
-        // SAFETY: INTER is 'static, so the in-memory file reference never outlives its bytes.
-        let collection = unsafe {
+        // SAFETY: creating and registering a loader takes no memory of ours.
+        let loader = unsafe {
             let loader = factory.CreateInMemoryFontFileLoader()?;
             factory.RegisterFontFileLoader(&loader)?;
-            let file = loader.CreateInMemoryFontFileReference(
+            InterLoader {
+                factory: factory.clone(),
+                loader,
+            }
+        };
+        // SAFETY: INTER is 'static, so the in-memory file reference never outlives its bytes.
+        let collection = unsafe {
+            let file = loader.loader.CreateInMemoryFontFileReference(
                 &factory,
                 INTER.as_ptr().cast(),
                 length,
@@ -100,23 +174,37 @@ impl Fonts {
             collection: collection.into(),
             family,
             locale: user_locale()?,
+            _loader: loader,
         })
     }
 
-    /// Every glyph layer of `block`, in painting order.
-    fn layers(&self, block: &TextBlock) -> windows::core::Result<Vec<Layer>> {
+    /// The family in its semibold weight at `size` pixels, sealed with these fonts.
+    pub(crate) fn label(self, size: f32) -> windows::core::Result<Label> {
+        Ok(Label {
+            format: self.format(size)?,
+            _fonts: self,
+        })
+    }
+
+    /// The family in its semibold weight at `size` pixels, the one text style Cleanshot draws.
+    fn format(&self, size: f32) -> windows::core::Result<IDWriteTextFormat> {
         // SAFETY: every argument is owned by this call or by `self`.
-        let format = unsafe {
+        unsafe {
             self.factory.CreateTextFormat(
                 &self.family,
                 &self.collection,
                 DWRITE_FONT_WEIGHT_SEMI_BOLD,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                block.size(),
+                size,
                 &self.locale,
             )
-        }?;
+        }
+    }
+
+    /// Every glyph layer of `block`, in painting order.
+    fn layers(&self, block: &TextBlock) -> windows::core::Result<Vec<Layer>> {
+        let format = self.format(block.size())?;
         let mut layers = Vec::new();
         for (line, baseline) in block.lines() {
             let text: Vec<u16> = line.encode_utf16().collect();
@@ -566,10 +654,8 @@ mod tests {
         }
         .expect("the system font collection");
         let system = Fonts {
-            factory: inter.factory.clone(),
             collection: system.expect("a system font collection").into(),
-            family: inter.family.clone(),
-            locale: inter.locale.clone(),
+            ..Fonts::inter().expect("Inter loads")
         };
         let block = block("Hg");
         assert_ne!(
