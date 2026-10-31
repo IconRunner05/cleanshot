@@ -24,6 +24,8 @@ use crate::toolbar::Icons;
 pub enum Error {
     #[error("the Windows platform did not start")]
     PlatformStart(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("the Inter font could not be loaded")]
+    FontLoad(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the editor window did not open")]
     WindowOpen(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the bench image could not be built")]

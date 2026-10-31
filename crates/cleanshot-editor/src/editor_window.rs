@@ -13,7 +13,7 @@ use gpui::{
 };
 
 use crate::Error;
-use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
+use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, register_inter, render_image};
 use crate::placement::Placement;
 use crate::theme::Theme;
 use crate::toolbar::toolbar;
@@ -341,6 +341,7 @@ pub(crate) fn open_with(
     deliver: Option<Deliver>,
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
+    register_inter(cx)?;
     let options = window_options(cx);
     cx.open_window(options, |window, cx| {
         on_open(window, cx);
