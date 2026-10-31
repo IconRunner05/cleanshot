@@ -13,7 +13,9 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT, UpdateWindow,
+};
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -338,6 +340,12 @@ impl Overlay {
         for &window in &overlay.windows {
             // SAFETY: `window` was created above; showing it without activation is F-02's rule.
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+            // P-01: the first frame is painted before show returns, so a caller timing show
+            // times the overlay becoming visible.
+            // SAFETY: `window` was created above on this thread.
+            unsafe { UpdateWindow(window) }
+                .ok()
+                .map_err(Error::Window)?;
         }
         Ok(overlay)
     }
@@ -685,7 +693,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use cleanshot_core::RgbaImage;
-    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
+    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, GetUpdateRect, ReleaseDC};
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
     };
@@ -775,6 +783,25 @@ mod tests {
             events.borrow().is_empty(),
             "overlay events: {:?}",
             events.borrow()
+        );
+    }
+
+    #[test]
+    fn p01_show_returns_with_every_window_painted() {
+        let _screen = SCREEN
+            .lock()
+            .expect("no overlay test panicked holding the screen");
+        let overlay = Overlay::show(&[monitor()], None, |_| {}).expect("the overlay opens");
+        let pending: Vec<bool> = overlay
+            .windows
+            .iter()
+            // SAFETY: a read of this thread's own window's update region.
+            .map(|&window| unsafe { GetUpdateRect(window, None, false) }.as_bool())
+            .collect();
+        drop(overlay);
+        assert!(
+            pending.iter().all(|&waiting| !waiting),
+            "windows still waiting for their first paint: {pending:?}"
         );
     }
 

@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cleanshot_core::{
     AfterCapture, Delivered, DeliveryError, Document, Hotkey, MAX_SETTINGS_BYTES, Output,
@@ -72,6 +72,8 @@ fn main() {
     cleanshot_editor::run(move |cx| {
         let app = cx.to_async();
         let created = Tray::create(&hotkeys, move |request| {
+            // P-01 counts from here, inside the tray's handling of the hotkey message.
+            let asked = Instant::now();
             let session = Rc::clone(&session);
             let closer = app.clone();
             let defer = move |job: Box<dyn FnOnce()>| closer.spawn(async move |_| job()).detach();
@@ -101,9 +103,9 @@ fn main() {
             // waits for GPUI's executor instead of borrowing the app here.
             app.spawn(async move |cx| {
                 cx.update(|cx| match request {
-                    Request::CaptureRegion => capture(&session, Capture::Region, defer, edit),
-                    Request::CaptureScreen => capture(&session, Capture::Screen, defer, edit),
-                    Request::CaptureLastRegion => capture(&session, Capture::LastRegion, defer, edit),
+                    Request::CaptureRegion => capture(&session, Capture::Region, asked, defer, edit),
+                    Request::CaptureScreen => capture(&session, Capture::Screen, asked, defer, edit),
+                    Request::CaptureLastRegion => capture(&session, Capture::LastRegion, asked, defer, edit),
                     Request::Exit => cx.quit(),
                 });
             })
@@ -245,6 +247,7 @@ fn plan(
 fn capture(
     session: &Rc<Session>,
     kind: Capture,
+    asked: Instant,
     defer: impl Fn(Box<dyn FnOnce()>) + 'static,
     edit: impl Fn(RgbaImage) + 'static,
 ) {
@@ -306,7 +309,10 @@ fn capture(
         defer(Box::new(move || drop(closing.overlay.borrow_mut().take())));
     });
     match shown {
-        Ok(shown) => *session.overlay.borrow_mut() = Some(shown),
+        Ok(shown) => {
+            *session.overlay.borrow_mut() = Some(shown);
+            session.perf(|_| format!("P-01 overlay_visible_ms={}", asked.elapsed().as_millis()));
+        }
         Err(error) => session.warn(&format!("The overlay could not open: {error}.")),
     }
 }
