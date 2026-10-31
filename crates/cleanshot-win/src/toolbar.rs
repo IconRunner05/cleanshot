@@ -9,6 +9,7 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::core::Interface;
 
+use crate::palette::Palette;
 use crate::text::{Fonts, Label};
 
 pub(crate) mod automation;
@@ -150,20 +151,6 @@ impl Layout {
     }
 }
 
-const MATERIAL: D2D1_COLOR_F = colour(28, 28, 30, 0.72);
-const HAIRLINE: D2D1_COLOR_F = colour(255, 255, 255, 0.12);
-const LABEL: D2D1_COLOR_F = colour(245, 245, 247, 1.0);
-const ACCENT: D2D1_COLOR_F = colour(10, 132, 255, 1.0);
-
-const fn colour(r: u8, g: u8, b: u8, a: f32) -> D2D1_COLOR_F {
-    D2D1_COLOR_F {
-        r: r as f32 / 255.0,
-        g: g as f32 / 255.0,
-        b: b as f32 / 255.0,
-        a,
-    }
-}
-
 /// What one monitor's surface keeps to paint the toolbar: the frozen capture blurred through
 /// a crop to the pill, so each paint blurs only what the pill shows (CHARTER 4, "Live blur").
 pub(crate) struct Paint {
@@ -174,16 +161,19 @@ pub(crate) struct Paint {
     hairline: ID2D1SolidColorBrush,
     label: ID2D1SolidColorBrush,
     accent: ID2D1SolidColorBrush,
+    on_accent: ID2D1SolidColorBrush,
     text: Label,
     scale: f32,
 }
 
 impl Paint {
-    /// The toolbar's paint for a surface drawn by `context`, whose image is `frozen`.
+    /// The toolbar's paint for a surface drawn by `context`, whose image is `frozen`, in
+    /// `palette`.
     pub(crate) fn new(
         context: &ID2D1DeviceContext,
         frozen: &ID2D1Bitmap,
         scale: f32,
+        palette: &Palette,
     ) -> windows::core::Result<Self> {
         // SAFETY: reading a bitmap's size touches no memory of ours.
         let size = unsafe { frozen.GetSize() };
@@ -215,10 +205,11 @@ impl Paint {
             let backdrop = context.CreateImageBrush(&blur.GetOutput()?, &raw const whole, None)?;
             Ok(Self {
                 backdrop,
-                material: brush(MATERIAL)?,
-                hairline: brush(HAIRLINE)?,
-                label: brush(LABEL)?,
-                accent: brush(ACCENT)?,
+                material: brush(palette.material)?,
+                hairline: brush(palette.hairline)?,
+                label: brush(palette.label)?,
+                accent: brush(palette.accent)?,
+                on_accent: brush(palette.on_accent)?,
                 context: context.clone(),
                 crop,
                 text,
@@ -296,8 +287,13 @@ impl Paint {
                         None,
                     );
                 }
+                let brush = if control == Control::Copy {
+                    &self.on_accent
+                } else {
+                    &self.label
+                };
                 self.text
-                    .draw(&self.context, control.label(), &button.rect, &self.label);
+                    .draw(&self.context, control.label(), &button.rect, brush);
             }
         }
         Ok(())

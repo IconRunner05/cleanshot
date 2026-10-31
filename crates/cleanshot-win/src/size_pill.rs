@@ -1,9 +1,10 @@
 use windows::Win32::Foundation::{POINT, RECT};
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
+use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ROUNDED_RECT, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 
+use crate::palette::Palette;
 use crate::text::{Fonts, Label};
 
 // CHARTER 4 tokens, in device-independent pixels.
@@ -11,19 +12,6 @@ const TEXT_SIZE: f32 = 12.0;
 const PADDING_X: f32 = 8.0;
 const PADDING_Y: f32 = 4.0;
 const GAP: f32 = 8.0;
-
-const MATERIAL: D2D1_COLOR_F = D2D1_COLOR_F {
-    r: 28.0 / 255.0,
-    g: 28.0 / 255.0,
-    b: 30.0 / 255.0,
-    a: 0.85,
-};
-const LABEL: D2D1_COLOR_F = D2D1_COLOR_F {
-    r: 245.0 / 255.0,
-    g: 245.0 / 255.0,
-    b: 247.0 / 255.0,
-    a: 1.0,
-};
 
 /// F-02: the selection's size in physical pixels, as the pill shows it.
 pub(crate) fn label(selected: RECT) -> String {
@@ -76,18 +64,18 @@ pub(crate) struct Paint {
 
 impl Paint {
     /// The pill's paint for a surface drawn by `target` over `monitor`, at `scale` physical
-    /// pixels per DIP.
+    /// pixels per DIP, in `palette`.
     pub(crate) fn new(
         target: &ID2D1RenderTarget,
         monitor: RECT,
         scale: f32,
+        palette: &Palette,
     ) -> windows::core::Result<Self> {
-        let (material, label) = (MATERIAL, LABEL);
-        // SAFETY: each colour is a local that outlives its call.
+        // SAFETY: each colour lives in `palette`, which outlives its call.
         let (material, label) = unsafe {
             (
-                target.CreateSolidColorBrush(&raw const material, None)?,
-                target.CreateSolidColorBrush(&raw const label, None)?,
+                target.CreateSolidColorBrush(&raw const palette.material, None)?,
+                target.CreateSolidColorBrush(&raw const palette.label, None)?,
             )
         };
         Ok(Self {

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use cleanshot_core::box_handles;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_BITMAP_PROPERTIES,
@@ -34,29 +34,17 @@ use windows::core::{Interface, PCWSTR, w};
 
 use crate::Error;
 use crate::capture::MonitorImage;
+use crate::palette::Palette;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
 use crate::toolbar::automation::{self, Mirror, Request};
 use crate::toolbar::{self, Control, Layout, Paint};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
-const DIM_OPACITY: f32 = 0.4;
 const DESKTOP_DPI: f32 = 96.0;
 const BORDER_WIDTH: f32 = 1.5;
 const HANDLE_SIZE: f32 = 8.0;
 const SHIFT_NUDGE: i32 = 10;
-const WHITE: D2D1_COLOR_F = D2D1_COLOR_F {
-    r: 1.0,
-    g: 1.0,
-    b: 1.0,
-    a: 1.0,
-};
-const ACCENT: D2D1_COLOR_F = D2D1_COLOR_F {
-    r: 0.039,
-    g: 0.518,
-    b: 1.0,
-    a: 1.0,
-};
 
 /// What happened on the overlay, delivered on its thread's message loop.
 #[derive(Debug)]
@@ -124,6 +112,7 @@ struct Shared {
     toolbar: Option<(RECT, f32)>,
     focus: Cell<Control>,
     mirror: Mirror,
+    palette: Palette,
 }
 
 impl Shared {
@@ -186,7 +175,7 @@ struct Surface {
     frozen: ID2D1Bitmap,
     dim: ID2D1SolidColorBrush,
     accent: ID2D1SolidColorBrush,
-    white: ID2D1SolidColorBrush,
+    handle: ID2D1SolidColorBrush,
     /// Only the toolbar's monitor paints it.
     toolbar: Option<Paint>,
     pill: size_pill::Paint,
@@ -257,7 +246,7 @@ impl Surface {
                     right: x + HANDLE_SIZE / 2.0,
                     bottom: y + HANDLE_SIZE / 2.0,
                 };
-                self.target.FillRectangle(&raw const square, &self.white);
+                self.target.FillRectangle(&raw const square, &self.handle);
                 self.target
                     .DrawRectangle(&raw const square, &self.accent, 1.0, None);
             }
@@ -321,6 +310,7 @@ impl Overlay {
             toolbar,
             focus: Cell::new(Control::Copy),
             mirror: Mirror::default(),
+            palette: Palette::current().map_err(Error::Window)?,
         });
         shared.changed();
         let mut overlay = Self {
@@ -515,29 +505,29 @@ fn surface(
             width * 4,
             &raw const bitmap_properties,
         )?;
-        let black = D2D1_COLOR_F {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: DIM_OPACITY,
-        };
-        let dim = target.CreateSolidColorBrush(&raw const black, None)?;
-        let accent_colour = ACCENT;
-        let accent = target.CreateSolidColorBrush(&raw const accent_colour, None)?;
-        let white_colour = WHITE;
-        let white = target.CreateSolidColorBrush(&raw const white_colour, None)?;
+        let palette = shared.palette;
+        let dim = target.CreateSolidColorBrush(&raw const palette.dim, None)?;
+        let accent = target.CreateSolidColorBrush(&raw const palette.accent, None)?;
+        let handle = target.CreateSolidColorBrush(&raw const palette.handle, None)?;
         let toolbar = match (hosts_toolbar, shared.toolbar) {
-            (true, Some((_, scale))) => Some(Paint::new(&target.cast()?, &frozen, scale)?),
+            (true, Some((_, scale))) => {
+                Some(Paint::new(&target.cast()?, &frozen, scale, &palette)?)
+            }
             (true | false, _) => None,
         };
         Ok(Surface {
-            pill: size_pill::Paint::new(&target, capture.bounds, dpi_scale(capture.bounds)?)?,
+            pill: size_pill::Paint::new(
+                &target,
+                capture.bounds,
+                dpi_scale(capture.bounds)?,
+                &palette,
+            )?,
             toolbar,
             target,
             frozen,
             dim,
             accent,
-            white,
+            handle,
             origin: POINT {
                 x: capture.bounds.left,
                 y: capture.bounds.top,

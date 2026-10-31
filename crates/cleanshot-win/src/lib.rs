@@ -7,6 +7,7 @@ pub mod field_test;
 pub mod instance;
 pub mod log;
 pub mod overlay;
+mod palette;
 pub mod save;
 mod selection;
 pub mod settings_file;
