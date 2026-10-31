@@ -127,12 +127,15 @@ jobs:
   probe:
     if: ${{ !endsWith(github.ref, '-red') }}
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Field-test probe builds
         run: cargo build --release --locked -p cleanshot-fieldtest -p cleanshot-app
+
+      - name: Release build copies a 4K region within P-02
+        run: cargo test --release --locked -p cleanshot-app --bin cleanshot p02_ -- --nocapture
 
       - name: Probe reports what this runner can do (D-25)
         shell: bash

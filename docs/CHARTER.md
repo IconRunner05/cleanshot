@@ -330,6 +330,7 @@ Gates 3–5 are `charter-gates.sh`. CI runs it on the release exe it builds and 
 5. Size check of the release exe: fail at 15 MB or above (section 8).
 6. Idle budgets: the release exe runs with `--log` for 15 s, and the job prints its `perf` lines and fails if P-03, P-04 or P-05 is over budget (D-62). A hosted runner is not the reference machine, so a pass here is a floor, not the release measurement.
 7. Hotkey latency: the probe job runs the release exe with `--log` and Ctrl+Shift+4 as the region hotkey, `cleanshot-fieldtest --overlays 20` opens and cancels the overlay 20 times, and the job fails unless all 20 `P-01` lines are there and their p95 (the 19th fastest) is under 100 ms (D-62). The same floor rule applies.
+8. Copy latency: the probe job runs `cargo test --release -p cleanshot-app p02_`, which copies a synthetic 3840 x 2160 capture to the clipboard five times through the same `deliver` the overlay uses, and fails if the median is 150 ms or more (P-02). The same floor rule applies. With `--log`, every copy from the overlay or the last-region hotkey also logs `perf P-02 copied_ms=N`, timed from the press that asked for it.
 
 ### Definition of Done (every task)
 

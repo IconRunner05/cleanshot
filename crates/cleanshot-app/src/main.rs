@@ -331,12 +331,17 @@ fn capture(
 // The selection becomes a document with nothing drawn on it, so the overlay delivers through
 // the same path as the editor.
 fn finish(session: &Session, captures: &[MonitorImage], selected: RECT, output: Output) {
+    let started = Instant::now();
     let image = match region(captures, selected) {
         Ok(image) => image,
         Err(error) => return session.warn(&format!("The capture did not finish: {error}.")),
     };
-    if let Err(error) = deliver(output, &Document::new(Arc::new(image)), &session.settings) {
-        session.warn(&delivery_notice(&Err(error)));
+    match deliver(output, &Document::new(Arc::new(image)), &session.settings) {
+        Ok(Delivered::Copied) => {
+            session.perf(|_| format!("P-02 copied_ms={}", started.elapsed().as_millis()));
+        }
+        Ok(Delivered::Saved(_)) => {}
+        Err(error) => session.warn(&delivery_notice(&Err(error))),
     }
 }
 
@@ -549,6 +554,43 @@ mod tests {
             save_format: SaveFormat::Bmp,
             ..Settings::default()
         }
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "P-02 budgets the release build: cargo test --release -p cleanshot-app p02_"
+    )]
+    fn p02_a_4k_region_reaches_the_clipboard_within_150_ms() {
+        let (width, height) = (3840, 2160);
+        let pixels = (0..height)
+            .flat_map(|y: u32| {
+                (0..width).flat_map(move |x: u32| {
+                    let [x0, y0] = [x.to_le_bytes()[0], y.to_le_bytes()[0]];
+                    [x0, y0, x0 ^ y0, 255]
+                })
+            })
+            .collect();
+        let image = RgbaImage::new(width, height, pixels).expect("3840x2160 RGBA");
+        let document = Document::new(Arc::new(image));
+        let mut copies: Vec<Duration> = (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                let copied = deliver(Output::Copy, &document, &Settings::default());
+                assert_eq!(copied, Ok(Delivered::Copied));
+                started.elapsed()
+            })
+            .collect();
+        copies.sort();
+        println!(
+            "P-02 median copy of a 4K region {:?}, all {copies:?}",
+            copies[2]
+        );
+        assert!(
+            copies[2] < Duration::from_millis(150),
+            "median copy of a 4K region {:?}, all {copies:?}",
+            copies[2]
+        );
     }
 
     #[test]
