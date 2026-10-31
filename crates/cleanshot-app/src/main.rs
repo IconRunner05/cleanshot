@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)]
+// A console exe opens a console window beside the tray. Debug builds keep theirs, so
+// eprintln stays readable while developing.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -42,6 +45,7 @@ fn main() {
     let launched_tray = Rc::clone(&tray);
     let session = Rc::new(Session {
         settings,
+        tray: Rc::clone(&tray),
         overlay: RefCell::new(None),
         last_selection: Cell::new(None),
     });
@@ -81,16 +85,33 @@ fn main() {
         launched_tray.replace(Some(created));
     })
     .expect("the Windows platform starts");
-    drop(tray);
+    // The tray's callback holds the session, which holds the tray, so the tray is taken
+    // out to remove its icon.
+    drop(tray.take());
     drop(instance);
 }
 
 /// What lives as long as the tray: read once at start, or held between captures.
 struct Session {
     settings: Settings,
+    tray: Rc<RefCell<Option<Tray>>>,
     overlay: RefCell<Option<Overlay>>,
     /// F-06: the last selection copied or saved, kept in memory only (C-20).
     last_selection: Cell<Option<RECT>>,
+}
+
+impl Session {
+    /// Shows `text` from the tray icon. The release exe has no console, so stderr is only
+    /// the last resort, for when the tray cannot show it.
+    fn warn(&self, text: &str) {
+        let shown = match &*self.tray.borrow() {
+            Some(tray) => tray.warn("Cleanshot", text),
+            None => return eprintln!("{text} (the tray icon is not created yet)"),
+        };
+        if let Err(error) = shown {
+            eprintln!("{text} ({error})");
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,12 +158,14 @@ fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()
             eprintln!("Desktop Duplication was refused, so GDI copied the screen: {because}");
             monitors
         }
-        Err(error) => return eprintln!("the screen could not be captured: {error}"),
+        Err(error) => return session.warn(&format!("The screen could not be captured: {error}.")),
     };
     let pointer_monitor = || match monitor_under_cursor(&captures) {
         Ok(monitor) => Some(monitor),
         Err(error) => {
-            eprintln!("the screen to capture is unknown: {error}");
+            session.warn(&format!(
+                "Cleanshot could not tell which screen the pointer is on: {error}."
+            ));
             None
         }
     };
@@ -155,7 +178,7 @@ fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()
                 .map_err(Box::from)
                 .and_then(|image| copy(&image));
             if let Err(error) = copied {
-                eprintln!("the capture did not finish: {error}");
+                session.warn(&format!("The capture did not finish: {error}."));
             }
             return;
         }
@@ -181,7 +204,7 @@ fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()
             OverlayEvent::DrawFailed(error) => Err(error.into()),
         };
         if let Err(error) = finished {
-            eprintln!("the capture did not finish: {error}");
+            finishing.warn(&format!("The capture did not finish: {error}."));
         }
         // The event arrives inside an overlay window's procedure, so the windows close
         // after it returns.
@@ -190,7 +213,7 @@ fn capture(session: &Rc<Session>, kind: Capture, defer: impl Fn(Box<dyn FnOnce()
     });
     match shown {
         Ok(shown) => *session.overlay.borrow_mut() = Some(shown),
-        Err(error) => eprintln!("the overlay could not open: {error}"),
+        Err(error) => session.warn(&format!("The overlay could not open: {error}.")),
     }
 }
 

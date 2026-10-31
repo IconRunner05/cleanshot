@@ -102,6 +102,8 @@ for mitigation in "ASLR:DYNAMIC_BASE" "DEP:NX_COMPAT" "Control Flow Guard:GUARD_
     grep -q "IMAGE_DLL_CHARACTERISTICS_$flag " <<<"$headers" ||
         fail "C-17: the $kind is built without $name (no $flag characteristic)."
 done
+grep -q "Subsystem: IMAGE_SUBSYSTEM_WINDOWS_GUI " <<<"$headers" ||
+    fail "CHARTER 7 gate 3: the $kind is not a Windows GUI exe, so a console window opens beside the tray."
 
 if [[ $kind == "release exe" ]]; then
     strings=$("$llvm_bin/llvm-strings" "$exe")
