@@ -17,6 +17,8 @@ pub enum KeyAction {
     FocusPrevious,
     /// Ctrl+C copies and Ctrl+S saves the edited screenshot (F-40, D-48).
     Deliver(Output),
+    /// Ctrl+Shift+S: the user picks where to save the edited screenshot (F-22).
+    SaveAs,
     /// A key for the text box being typed into (F-34).
     Text(TextKey),
 }
@@ -61,6 +63,8 @@ pub enum Activity {
     EditingText,
     /// An input method holds an uncommitted composition in the text box.
     Composing,
+    /// The Save As dialog is open, and its answer is still to come (F-22).
+    SavingAs,
 }
 
 /// The editor's key map. `key` is the key's name as the editor's toolkit gives it: one
@@ -75,7 +79,8 @@ pub fn action_for_key(key: &str, modifiers: Modifiers, activity: Activity) -> Op
         Activity::Idle => idle_action(key, modifiers),
         Activity::EditingText => text_key(key, modifiers).map(KeyAction::Text),
         // D-44: one drag stays one edit. F-34: every key during a composition is the IME's.
-        Activity::Dragging | Activity::Composing => None,
+        // F-22: a second Save As would drop the first one's answer.
+        Activity::Dragging | Activity::Composing | Activity::SavingAs => None,
     }
 }
 
@@ -115,6 +120,7 @@ fn idle_action(key: &str, modifiers: Modifiers) -> Option<KeyAction> {
             "y" => Some(KeyAction::Redo),
             "0" => Some(KeyAction::FitView),
             "c" => Some(KeyAction::Deliver(Output::Copy)),
+            "s" if modifiers.shift => Some(KeyAction::SaveAs),
             "s" => Some(KeyAction::Deliver(Output::Save)),
             _ => None,
         };
@@ -241,10 +247,41 @@ mod tests {
     }
 
     #[test]
+    fn f22_ctrl_shift_s_saves_as_and_ctrl_s_saves() {
+        let ctrl_shift = Modifiers {
+            shift: true,
+            ..CTRL
+        };
+        assert_eq!(
+            action_for_key("s", ctrl_shift, Activity::Idle),
+            Some(KeyAction::SaveAs)
+        );
+        assert_eq!(
+            action_for_key("s", CTRL, Activity::Idle),
+            Some(KeyAction::Deliver(Output::Save))
+        );
+    }
+
+    #[test]
     fn d44_every_key_is_ignored_while_a_drag_is_in_progress() {
         for (key, modifiers) in [("z", CTRL), ("delete", NONE), ("escape", NONE), ("r", NONE)] {
             assert_eq!(
                 action_for_key(key, modifiers, Activity::Dragging),
+                None,
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn f22_every_key_is_ignored_while_the_save_as_dialog_is_open() {
+        let ctrl_shift = Modifiers {
+            shift: true,
+            ..CTRL
+        };
+        for (key, modifiers) in [("s", ctrl_shift), ("s", CTRL), ("z", CTRL), ("r", NONE)] {
+            assert_eq!(
+                action_for_key(key, modifiers, Activity::SavingAs),
                 None,
                 "{key}"
             );

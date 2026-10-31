@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Where a finished screenshot goes, from the overlay or the editor (F-20, F-21, F-40).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,9 +31,11 @@ pub enum DeliveryError {
     NotWritten { folder: PathBuf },
     #[error("the text could not be drawn")]
     TextNotDrawn,
+    #[error("the Save As dialog did not open")]
+    NoSaveDialog,
 }
 
-/// The sentence the user sees after a Copy or Save, from the overlay or the editor (D-48): what
+/// The sentence the user sees after a Copy, Save or Save As, from the overlay or the editor (D-48): what
 /// happened, naming the file, folder or name it is about.
 #[must_use]
 pub fn delivery_notice(outcome: &Result<Delivered, DeliveryError>) -> String {
@@ -61,7 +63,19 @@ pub fn delivery_notice(outcome: &Result<Delivered, DeliveryError>) -> String {
         Err(DeliveryError::TextNotDrawn) => {
             "The text could not be drawn, so nothing was copied or saved".to_owned()
         }
+        Err(DeliveryError::NoSaveDialog) => "The Save As dialog did not open".to_owned(),
     }
+}
+
+/// F-22: the notice once the Save As dialog closes. `chosen` is the confirmed path, or why the
+/// dialog failed; `None` is a cancel, which saves nothing and shows nothing.
+#[must_use]
+pub fn save_as_notice(
+    chosen: Option<Result<PathBuf, DeliveryError>>,
+    save_to: impl FnOnce(&Path) -> Result<Delivered, DeliveryError>,
+) -> Option<String> {
+    let saved = chosen?.and_then(|path| save_to(&path));
+    Some(delivery_notice(&saved))
 }
 
 #[cfg(test)]
@@ -97,5 +111,21 @@ mod tests {
             height: 9,
         };
         assert!(notice(Err(large)).contains("70000x9"));
+    }
+
+    #[test]
+    fn f22_save_as_saves_to_the_confirmed_path_and_a_cancel_shows_nothing() {
+        let path = PathBuf::from(r"C:\Shots\Mine.png");
+        let saved = save_as_notice(Some(Ok(path.clone())), |to| {
+            Ok(Delivered::Saved(to.with_extension("jpg")))
+        });
+        let as_saved = path.with_extension("jpg");
+        assert_eq!(saved, Some(format!("Saved to {}", as_saved.display())));
+        let refuse = |_: &Path| -> Result<Delivered, DeliveryError> { panic!("nothing to save") };
+        assert_eq!(save_as_notice(None, refuse), None);
+        assert_eq!(
+            save_as_notice(Some(Err(DeliveryError::NoSaveDialog)), refuse),
+            Some("The Save As dialog did not open".to_owned())
+        );
     }
 }

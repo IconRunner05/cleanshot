@@ -1,16 +1,17 @@
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
     KeyAction, Modifiers, Output, Press, RgbaImage, ShapeId, Start, TextBlockError, TextEdit,
-    TextKey, TextOrigin, Tool, action_for_key, delivery_notice,
+    TextKey, TextOrigin, Tool, action_for_key, delivery_notice, save_as_notice,
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InputHandler, InteractiveElement, IntoElement,
     KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, TitlebarOptions,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions,
     UTF16Selection, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 
@@ -22,7 +23,15 @@ use crate::text_box::TextBox;
 use crate::theme::Theme;
 use crate::toolbar::toolbar;
 
-type Deliver = Rc<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
+type Deliver = Box<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
+type SaveTo = Box<dyn Fn(&Path, &Document) -> Result<Delivered, DeliveryError>>;
+
+/// Where Copy, Save and Save As send the edited screenshot (F-20 to F-22, F-40), from the app.
+pub(crate) struct Outputs {
+    deliver: Deliver,
+    save_as_start: Box<dyn Fn() -> (PathBuf, String)>,
+    save_to: SaveTo,
+}
 
 /// A Space-drag in progress: where it started and where the image was then.
 #[derive(Clone, Copy)]
@@ -47,8 +56,10 @@ struct EditorView {
     pan: Option<Pan>,
     /// Why the last edit was refused, until the next press.
     notice: Option<SharedString>,
-    /// Copy and Save (F-40, D-48); absent in the bench window, which has nowhere to send them.
-    deliver: Option<Deliver>,
+    /// Absent in the bench window, which has nowhere to send the screenshot.
+    outputs: Option<Outputs>,
+    /// The Save As dialog while it is open (F-22).
+    save_as: Option<Task<()>>,
     focus: FocusHandle,
     _appearance: Subscription,
     _activation: Subscription,
@@ -57,7 +68,7 @@ struct EditorView {
 impl EditorView {
     fn new(
         document: Document,
-        deliver: Option<Deliver>,
+        outputs: Option<Outputs>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -86,7 +97,8 @@ impl EditorView {
             space_held: false,
             pan: None,
             notice: None,
-            deliver,
+            outputs,
+            save_as: None,
             focus,
             _appearance: appearance,
             _activation: activation,
@@ -173,10 +185,11 @@ impl EditorView {
             shift: gpui.shift,
             win: gpui.platform,
         };
-        let activity = match (&self.text_box, &self.drag) {
-            (Some(text_box), _) => text_box.edit().activity(),
-            (None, Some(_)) => Activity::Dragging,
-            (None, None) => Activity::Idle,
+        let activity = match (&self.save_as, &self.text_box, &self.drag) {
+            (Some(_), _, _) => Activity::SavingAs,
+            (None, Some(text_box), _) => text_box.edit().activity(),
+            (None, None, Some(_)) => Activity::Dragging,
+            (None, None, None) => Activity::Idle,
         };
         let Some(action) = action_for_key(&event.keystroke.key, modifiers, activity) else {
             return;
@@ -196,6 +209,7 @@ impl EditorView {
             KeyAction::FocusNext => window.focus_next(cx),
             KeyAction::FocusPrevious => window.focus_prev(cx),
             KeyAction::Deliver(output) => self.deliver(output),
+            KeyAction::SaveAs => self.save_as(window, cx),
             KeyAction::Text(TextKey::Commit) => self.close_text_box(window),
             KeyAction::Text(key) => {
                 if let Some(text_box) = &mut self.text_box {
@@ -233,8 +247,46 @@ impl EditorView {
     }
 
     fn deliver(&mut self, output: Output) {
-        if let Some(deliver) = &self.deliver {
-            self.notice = Some(delivery_notice(&deliver(output, self.history.document())).into());
+        if let Some(outputs) = &self.outputs {
+            let delivered = (outputs.deliver)(output, self.history.document());
+            self.notice = Some(delivery_notice(&delivered).into());
+        }
+    }
+
+    /// F-22: the dialog runs after this key's dispatch, as GPUI's own task, so it never
+    /// re-enters GPUI from inside an event.
+    fn save_as(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(outputs) = &self.outputs else {
+            return;
+        };
+        let (folder, name) = (outputs.save_as_start)();
+        let dialog = cx.prompt_for_new_path(&folder, Some(&name));
+        self.save_as = Some(cx.spawn_in(window, async move |view, cx| {
+            let chosen = match dialog.await {
+                Ok(Ok(chosen)) => chosen.map(Ok),
+                Ok(Err(error)) => {
+                    eprintln!("the Save As dialog did not open: {error:#}");
+                    Some(Err(DeliveryError::NoSaveDialog))
+                }
+                Err(dropped) => {
+                    eprintln!("the Save As dialog closed with no answer: {dropped}");
+                    Some(Err(DeliveryError::NoSaveDialog))
+                }
+            };
+            // Err only means the window closed while the dialog was open, with nothing to save.
+            let _ = view.update(cx, |view, cx| view.save_to(chosen, cx));
+        }));
+    }
+
+    fn save_to(&mut self, chosen: Option<Result<PathBuf, DeliveryError>>, cx: &mut Context<Self>) {
+        self.save_as = None;
+        let Some(outputs) = &self.outputs else {
+            return;
+        };
+        let document = self.history.document();
+        if let Some(notice) = save_as_notice(chosen, |path| (outputs.save_to)(path, document)) {
+            self.notice = Some(notice.into());
+            cx.notify();
         }
     }
 
@@ -473,7 +525,9 @@ impl InputHandler for BoxInput {
 pub struct EditorWindow(WindowHandle<EditorView>);
 
 /// Opens an editor window on `capture`, with no shapes yet (F-23). Ctrl+C and Ctrl+S hand the
-/// document to `deliver` and show what it reports (F-40, D-48).
+/// document to `deliver` and show what it reports (F-40, D-48). Ctrl+Shift+S opens the save
+/// dialog on the folder and file name `save_as_start` gives at that moment, and hands the
+/// document and the confirmed path to `save_to` (F-22).
 ///
 /// # Errors
 ///
@@ -482,9 +536,16 @@ pub fn open(
     cx: &mut App,
     capture: RgbaImage,
     deliver: impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static,
+    save_as_start: impl Fn() -> (PathBuf, String) + 'static,
+    save_to: impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static,
 ) -> Result<EditorWindow, Error> {
     let document = Document::new(Arc::new(capture));
-    open_with(cx, document, Some(Rc::new(deliver)), |_, _| {})
+    let outputs = Outputs {
+        deliver: Box::new(deliver),
+        save_as_start: Box::new(save_as_start),
+        save_to: Box::new(save_to),
+    };
+    open_with(cx, document, Some(outputs), |_, _| {})
 }
 
 /// [`open`], running `on_open` on the new window before its first frame. `on_open` runs only
@@ -492,14 +553,14 @@ pub fn open(
 pub(crate) fn open_with(
     cx: &mut App,
     document: Document,
-    deliver: Option<Deliver>,
+    outputs: Option<Outputs>,
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
     register_inter(cx)?;
     let options = window_options(cx);
     cx.open_window(options, |window, cx| {
         on_open(window, cx);
-        cx.new(|cx| EditorView::new(document, deliver, window, cx))
+        cx.new(|cx| EditorView::new(document, outputs, window, cx))
     })
     .map(EditorWindow)
     .map_err(|error| Error::WindowOpen(error.into()))

@@ -15,7 +15,7 @@ mod text;
 mod text_edit;
 mod tool;
 
-pub use delivery::{Delivered, DeliveryError, Output, delivery_notice};
+pub use delivery::{Delivered, DeliveryError, Output, delivery_notice, save_as_notice};
 pub use document::{
     Color, Document, Fill, ImageError, PointF, RectF, RedactMode, RgbaImage, Shape, ShapeEntry,
     ShapeId, Style, arrow_head,
