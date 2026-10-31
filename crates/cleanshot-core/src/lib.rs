@@ -36,5 +36,5 @@ pub use text::{
     DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,
     INTER_UNITS_PER_EM, LINE_HEIGHT, TextBlock, TextBlockError, TextMasks,
 };
-pub use text_edit::{CaretMove, LinePosition, TextEdit, TextOrigin, commit_text};
+pub use text_edit::{BoxPress, CaretMove, LinePosition, TextEdit, TextOrigin, commit_text};
 pub use tool::Tool;

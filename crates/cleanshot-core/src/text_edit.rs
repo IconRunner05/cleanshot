@@ -68,6 +68,17 @@ impl TextEdit {
         self.marked.clone()
     }
 
+    /// What a press on the canvas does while this box is open, `inside` its layout box. During a
+    /// composition every press belongs to the input method.
+    #[must_use]
+    pub fn press(&self, inside: bool) -> BoxPress {
+        match (self.marked.is_some(), inside) {
+            (true, _) => BoxPress::Ignore,
+            (false, true) => BoxPress::PlaceCaret,
+            (false, false) => BoxPress::Commit,
+        }
+    }
+
     /// The text in `range`, and the range it actually covers once moved inside the text and
     /// onto whole characters.
     #[must_use]
@@ -259,6 +270,17 @@ fn utf16_len(text: &str) -> usize {
 /// Windows' Enter and pasted text carry `\r\n` or `\r`; a text shape breaks lines at `\n` only.
 fn line_breaks(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// What a press on the canvas does while a text box is open (F-34).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxPress {
+    /// Inside the box: the caret goes where it was pressed.
+    PlaceCaret,
+    /// Outside the box: the text becomes a shape and the box closes.
+    Commit,
+    /// An input method is composing: the press is its.
+    Ignore,
 }
 
 /// Where a text box came from: opened on empty canvas with the current tool's style, or on a
@@ -545,5 +567,18 @@ mod tests {
         assert_eq!(edit.offset(at(0, 9)), 2);
         assert_eq!(edit.offset(at(2, 3)), 7);
         assert_eq!(edit.offset(at(7, 0)), 7);
+    }
+
+    #[test]
+    fn f34_a_press_places_the_caret_inside_the_box_commits_it_outside_and_belongs_to_a_composition()
+    {
+        let mut edit = TextEdit::new("ab".into());
+        assert_eq!(edit.press(true), BoxPress::PlaceCaret);
+        assert_eq!(edit.press(false), BoxPress::Commit);
+        edit.replace_and_mark(None, "k", None);
+        assert_eq!(edit.press(true), BoxPress::Ignore);
+        assert_eq!(edit.press(false), BoxPress::Ignore);
+        edit.unmark();
+        assert_eq!(edit.press(false), BoxPress::Commit);
     }
 }
