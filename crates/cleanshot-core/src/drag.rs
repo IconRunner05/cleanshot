@@ -218,8 +218,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::document::Style;
-    use crate::document::{Fill, RectF, RgbaImage};
+    use crate::document::{Fill, RectF, RgbaImage, Style};
     use crate::history::History;
     use crate::text::TextBlock;
 
@@ -410,6 +409,7 @@ mod tests {
             }
         );
     }
+
     #[test]
     fn f34_the_text_tool_reopens_the_text_under_the_pointer_and_opens_a_new_box_anywhere_else() {
         let (document, box_id, _) = document();
