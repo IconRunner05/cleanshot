@@ -5,6 +5,7 @@ pub mod clipboard;
 #[cfg(feature = "field-test")]
 pub mod field_test;
 pub mod instance;
+pub mod log;
 pub mod overlay;
 pub mod save;
 mod selection;

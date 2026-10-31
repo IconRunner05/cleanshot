@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cleanshot_core::{
     AfterCapture, Delivered, DeliveryError, Document, Hotkey, MAX_SETTINGS_BYTES, Output,
@@ -18,6 +19,7 @@ use cleanshot_win::capture::{
 };
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::instance::Launch;
+use cleanshot_win::log::{Log, since_start};
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
 use cleanshot_win::settings_file::{read_settings, settings_path};
@@ -45,6 +47,11 @@ fn main() {
             return;
         }
     };
+    let log = std::env::args().skip(1).any(|argument| argument == "--log");
+    let (log, log_warning) = match log.then(open_log).transpose() {
+        Ok(log) => (log, None),
+        Err(error) => (None, Some(format!("The log could not be opened: {error}."))),
+    };
     let (settings, warning) = load_settings();
     let (region, fallback) = region_hotkey(settings.hotkeys.region);
     let hotkeys = [
@@ -59,7 +66,9 @@ fn main() {
         tray: Rc::clone(&tray),
         overlay: RefCell::new(None),
         last_selection: Cell::new(None),
+        log: RefCell::new(log),
     });
+    let launched = Rc::clone(&session);
     cleanshot_editor::run(move |cx| {
         let app = cx.to_async();
         let created = Tray::create(&hotkeys, move |request| {
@@ -108,7 +117,12 @@ fn main() {
             .map(|(_, hotkey, _)| {
                 format!("{hotkey} is taken by another program, so it does not capture. Choose another in cleanshot.toml.")
             });
-        let warnings: Vec<String> = warning.into_iter().chain(fallback).chain(taken).collect();
+        let warnings: Vec<String> = warning
+            .into_iter()
+            .chain(log_warning)
+            .chain(fallback)
+            .chain(taken)
+            .collect();
         if !warnings.is_empty() {
             let text = warnings.join(" ");
             if let Err(error) = created.warn("Cleanshot", &text) {
@@ -116,6 +130,7 @@ fn main() {
             }
         }
         launched_tray.replace(Some(created));
+        launched.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
     })
     .expect("the Windows platform starts");
     // The tray's callback holds the session, which holds the tray, so the tray is taken
@@ -131,9 +146,26 @@ struct Session {
     overlay: RefCell<Option<Overlay>>,
     /// F-06: the last selection copied or saved, kept in memory only (C-20).
     last_selection: Cell<Option<RECT>>,
+    /// C-23: open only under `--log`.
+    log: RefCell<Option<Log>>,
 }
 
 impl Session {
+    /// Logs a `perf` line under `--log`, made from the time since the process started. A log
+    /// that fails is closed, and the tray says so once.
+    fn perf(&self, line: impl FnOnce(Duration) -> String) {
+        let written = match &*self.log.borrow() {
+            Some(log) => {
+                since_start().and_then(|since| log.write(&format!("perf {}", line(since))))
+            }
+            None => return,
+        };
+        if let Err(error) = written {
+            drop(self.log.borrow_mut().take());
+            self.warn(&format!("Logging stopped: {error}."));
+        }
+    }
+
     /// Shows `text` from the tray icon. The release exe has no console, so stderr is only
     /// the last resort, for when the tray cannot show it.
     fn warn(&self, text: &str) {
@@ -383,6 +415,11 @@ fn from_save(error: SaveError, folder: &Path) -> DeliveryError {
 
 // F-54: reading never stops Cleanshot; whatever is wrong becomes one warning and the
 // defaults stand in.
+fn open_log() -> Result<Log, String> {
+    let settings = settings_path().map_err(|error| error.to_string())?;
+    Log::open(&settings).map_err(|error| error.to_string())
+}
+
 fn load_settings() -> (Settings, Option<String>) {
     let read = settings_path().and_then(|path| read_settings(&path, MAX_SETTINGS_BYTES));
     let bytes = match read {
