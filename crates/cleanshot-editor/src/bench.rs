@@ -19,7 +19,7 @@ const COLUMNS: u32 = 20;
 /// Where the bench's redaction drag is pressed, in image pixels.
 const DRAG_FROM: PointF = PointF { x: 64.0, y: 64.0 };
 
-/// Editor timings from one [`bench`] run.
+/// Editor timings from one [`bench()`] run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BenchReport {
     /// P-07: from opening the window, image upload included, to the frame after its first draw,
