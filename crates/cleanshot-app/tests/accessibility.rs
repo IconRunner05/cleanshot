@@ -50,6 +50,7 @@ fn main() {
             |_, _| Err(DeliveryError::ClipboardBusy),
             || (PathBuf::new(), String::new()),
             |_, _| Err(DeliveryError::ClipboardBusy),
+            |_| {},
         );
         if let Err(error) = opened {
             println!("the editor did not open: {error}");

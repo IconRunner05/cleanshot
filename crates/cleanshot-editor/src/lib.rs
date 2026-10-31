@@ -14,7 +14,8 @@ mod toolbar;
 use std::rc::Rc;
 
 use cleanshot_core::{CommandError, ImageError};
-use gpui::{App, Application};
+pub use gpui::App;
+use gpui::Application;
 use gpui_windows::WindowsPlatform;
 
 pub use crate::bench::{BenchReport, bench};

@@ -2,6 +2,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
@@ -604,7 +605,8 @@ pub struct EditorWindow(WindowHandle<EditorView>);
 /// Opens an editor window on `capture`, with no shapes yet (F-23). Ctrl+C and Ctrl+S hand the
 /// document to `deliver` and show what it reports (F-40, D-48). Ctrl+Shift+S opens the save
 /// dialog on the folder and file name `save_as_start` gives at that moment, and hands the
-/// document and the confirmed path to `save_to` (F-22).
+/// document and the confirmed path to `save_to` (F-22). `on_first_frame` gets the moment the
+/// frame after the window's first draw begins (P-07), as the bench times it.
 ///
 /// # Errors
 ///
@@ -615,6 +617,7 @@ pub fn open(
     deliver: impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static,
     save_as_start: impl Fn() -> (PathBuf, String) + 'static,
     save_to: impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static,
+    on_first_frame: impl FnOnce(Instant) + 'static,
 ) -> Result<EditorWindow, Error> {
     let document = Document::new(Arc::new(capture));
     let outputs = Outputs {
@@ -622,7 +625,9 @@ pub fn open(
         save_as_start: Box::new(save_as_start),
         save_to: Box::new(save_to),
     };
-    open_with(cx, document, Some(outputs), |_, _| {})
+    open_with(cx, document, Some(outputs), move |window, _| {
+        window.on_next_frame(move |_, _| on_first_frame(Instant::now()));
+    })
 }
 
 /// [`open`], running `on_open` on the new window before its first frame. `on_open` runs only

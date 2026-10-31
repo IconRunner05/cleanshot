@@ -83,17 +83,7 @@ fn main() {
                 let session = Rc::clone(&editing);
                 opener
                     .spawn(async move |cx| match to {
-                        Handoff::Editor => cx.update(|cx| {
-                            if let Err(error) = cleanshot_editor::open(
-                                cx,
-                                image,
-                                editor_deliver(&session),
-                                editor_save_as_start(&session),
-                                editor_save_to(&session),
-                            ) {
-                                session.warn(&format!("The editor could not open: {error}."));
-                            }
-                        }),
+                        Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
                         Handoff::SaveAs => {
                             let (folder, name) = save_as_start(&session.settings);
                             let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
@@ -435,6 +425,20 @@ fn deliver(
     }
 }
 
+/// F-05: opens `image` in the editor, or says in the tray why it could not.
+fn open_editor(cx: &mut cleanshot_editor::App, image: RgbaImage, session: &Rc<Session>) {
+    if let Err(error) = cleanshot_editor::open(
+        cx,
+        image,
+        editor_deliver(session),
+        editor_save_as_start(session),
+        editor_save_to(session),
+        editor_first_frame(session),
+    ) {
+        session.warn(&format!("The editor could not open: {error}."));
+    }
+}
+
 /// F-05: the editor's Copy and Save deliver as the overlay does (D-48).
 fn editor_deliver(
     session: &Rc<Session>,
@@ -453,6 +457,15 @@ fn editor_save_to(
 ) -> impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static {
     let session = Rc::clone(session);
     move |path, document| save_to(path, document, &session.settings)
+}
+
+/// P-07: logs the time from now, as the editor opens, to the frame after its first draw.
+fn editor_first_frame(session: &Rc<Session>) -> impl FnOnce(Instant) + 'static {
+    let session = Rc::clone(session);
+    let opened = Instant::now();
+    move |shown| {
+        session.perf(|_| format!("P-07 first_frame_ms={}", (shown - opened).as_millis()));
+    }
 }
 
 fn flattened(document: &Document) -> Result<Flattened, DeliveryError> {
