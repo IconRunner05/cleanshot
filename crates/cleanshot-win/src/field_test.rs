@@ -29,7 +29,7 @@ use windows::Win32::System::Registry::{
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
-    VIRTUAL_KEY, VK_CONTROL, VK_SHIFT,
+    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetForegroundWindow, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW,
@@ -341,6 +341,20 @@ pub fn drive_tray(timeout: Duration) -> Result<TrayRun, Error> {
         foreground_window,
         inputs_sent,
         hotkey_delivered_after: delivered.get().then(|| start.elapsed()),
+    })
+}
+
+/// Presses Ctrl+Shift+4 and then Esc `times` times, `gap` apart, for another process's
+/// overlay to open and close (P-01). Returns whether Windows took every key event.
+#[must_use]
+pub fn open_and_cancel_overlays(times: u32, gap: Duration) -> bool {
+    let region = [VK_CONTROL, VK_SHIFT, VIRTUAL_KEY(u16::from(b'4'))];
+    (0..times).all(|_| {
+        let opened = press(&region) == 6;
+        std::thread::sleep(gap);
+        let cancelled = press(&[VK_ESCAPE]) == 2;
+        std::thread::sleep(gap);
+        opened && cancelled
     })
 }
 

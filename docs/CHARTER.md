@@ -329,6 +329,7 @@ Gates 3–5 are `charter-gates.sh`. CI runs it on the release exe it builds and 
 4. `unsafe` scan: fail if a crate root other than `cleanshot-win`'s lacks `#![forbid(unsafe_code)]`, or `unsafe` appears outside `crates/cleanshot-win` (C-16).
 5. Size check of the release exe: fail at 15 MB or above (section 8).
 6. Idle budgets: the release exe runs with `--log` for 15 s, and the job prints its `perf` lines and fails if P-03, P-04 or P-05 is over budget (D-62). A hosted runner is not the reference machine, so a pass here is a floor, not the release measurement.
+7. Hotkey latency: the probe job runs the release exe with `--log` and Ctrl+Shift+4 as the region hotkey, `cleanshot-fieldtest --overlays 20` opens and cancels the overlay 20 times, and the job fails unless all 20 `P-01` lines are there and their p95 (the 19th fastest) is under 100 ms (D-62). The same floor rule applies.
 
 ### Definition of Done (every task)
 

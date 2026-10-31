@@ -132,13 +132,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Field-test probe builds
-        run: cargo build --release --locked -p cleanshot-fieldtest
+        run: cargo build --release --locked -p cleanshot-fieldtest -p cleanshot-app
 
       - name: Probe reports what this runner can do (D-25)
         shell: bash
         run: |
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --report probe.md
           cat probe.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Release exe meets P-01 over 20 hotkeys from its own --log lines (D-62)
+        shell: bash
+        run: |
+          run="$RUNNER_TEMP/p01"
+          mkdir -p "$run"
+          cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
+          # Portable mode (C-05). Ctrl+Shift+4, because the Snipping Tool may hold PrtSc (F-52).
+          printf '[hotkeys]\nregion = "Ctrl+Shift+4"\n' > "$run/cleanshot.toml"
+          "$run/cleanshot.exe" --log &
+          sleep 3
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --overlays 20
+          sleep 1
+          taskkill //F //IM cleanshot.exe
+          cat "$run/cleanshot.log"
+          times=$(sed -n 's/^[0-9]* perf P-01 overlay_visible_ms=\([0-9]*\).*/\1/p' "$run/cleanshot.log" | sort -n)
+          count=$(printf '%s\n' "$times" | grep -c .)
+          (( count == 20 )) || { echo "FAIL D-62: ${count} of 20 hotkeys logged a P-01 line"; exit 1; }
+          p95=$(printf '%s\n' "$times" | sed -n 19p)
+          echo "P-01 overlay visible p95 ${p95} ms over 20 hotkeys (budget 100): $(echo $times)"
+          (( p95 < 100 )) || { echo "FAIL P-01: p95 ${p95} ms"; exit 1; }
 
       - name: Upload the probe report
         if: always()

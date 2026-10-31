@@ -10,19 +10,31 @@ use cleanshot_editor::{BenchReport, bench};
 use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::{
     Driver, adapters, clipboard_round_trip, d3d11_feature_level, drive_tray, monitors,
-    rendering_params, windows_version,
+    open_and_cancel_overlays, rendering_params, windows_version,
 };
 
 const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIPBOARD_MARKER: &str = "cleanshot field test";
 const CAPTURE_ATTEMPTS: u32 = 3;
 const BENCH_REDRAWS: NonZeroU32 = NonZeroU32::new(600).expect("600 is not zero");
+const OVERLAY_GAP: Duration = Duration::from_millis(500);
 
 fn main() {
     let report_path = match std::env::args().collect::<Vec<_>>().as_slice() {
         [_, flag, path] if flag == "--report" => path.clone(),
+        [_, flag, times] if flag == "--overlays" => {
+            let Ok(times) = times.parse() else {
+                eprintln!("--overlays takes a count, not {times:?}");
+                std::process::exit(2);
+            };
+            if open_and_cancel_overlays(times, OVERLAY_GAP) {
+                return;
+            }
+            eprintln!("Windows refused a key event");
+            std::process::exit(1);
+        }
         _ => {
-            eprintln!("usage: cleanshot-fieldtest --report PATH");
+            eprintln!("usage: cleanshot-fieldtest --report PATH | --overlays COUNT");
             std::process::exit(2);
         }
     };
