@@ -407,7 +407,7 @@ flowchart TD
 - [ ] Scaffold the workspace (section 5), licences, `deny.toml`, and CI gates 1–5 running on an empty app. (Gates 1-5 written; first CI run pending a GitHub remote.)
 - [ ] Tray-only GPUI app: idle < 1% CPU, opens and closes an editor window on demand.
 - [ ] Overlay prototype: frozen capture on 2 monitors at mixed DPI in < 100 ms; pick GDI `BitBlt` vs DXGI Desktop Duplication (latency, HDR correctness) and log the decision.
-- [ ] GPUI canvas: 4K image + 200 shapes at 60 fps; text input and IME work in a custom element.
+- [ ] GPUI canvas: 4K image + 200 shapes at 60 fps; text input and IME work in a custom element. (IME proven by `f34_an_ime_composition_stays_marked_until_it_is_committed`, `f34_every_key_belongs_to_the_input_method_during_a_composition` and `f34_a_composition_in_progress_is_committed_as_it_stands`; the bench now pans and zooms, and its p95 against P-08 is pending a probe run.)
 - [x] GPUI dependency audit: the release binary passes the C-10/C-11 import scan and `cargo deny`. GPUI ships an HTTP-client abstraction, so confirm nothing network-capable is linked.
 - [ ] Release size < 15 MB; pinned GPUI rev builds reproducibly in CI.
 - [x] **Gate:** record "GPUI" or "egui" in the Decisions log (D-29).
@@ -422,8 +422,8 @@ flowchart TD
 
 ### M2 · Editor MVP
 
-- [ ] Core document model and command/undo stack (section 5) with unit tests.
-- [ ] Render crate: flatten, redaction, encode, golden tests.
+- [x] Core document model and command/undo stack (section 5) with unit tests. (`history::tests`, from `f38_undo_is_unlimited` to `f38_undoing_a_removal_puts_the_shape_back_at_its_stacking_position`)
+- [x] Render crate: flatten, redaction, encode, golden tests. (`cleanshot-render` `tests/golden.rs`; `c22_pixelate_leaves_no_original_pixel_in_the_area`, `c22_blur_leaves_no_original_pixel_in_the_area`; `f21_png_keeps_every_pixel`)
 - [ ] F-23, F-24, F-30–F-40, F-58.
 - [ ] **Gate:** the maintainer replaces Greenshot for two weeks without missing an M1/M2 feature.
 
