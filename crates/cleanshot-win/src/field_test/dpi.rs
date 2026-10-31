@@ -15,7 +15,6 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
     SetThreadDpiAwarenessContext,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, SPI_SETLOGICALDPIOVERRIDE, SPIF_SENDCHANGE,
     SPIF_UPDATEINIFILE, SW_SHOWNOACTIVATE, ShowWindow, SystemParametersInfoW, WM_PAINT,
@@ -23,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use super::{press, pump_messages, within};
+use super::{FULL_SCREEN, press, pump_messages, within};
 use crate::Error;
 
 const PATTERN_CLASS: PCWSTR = w!("CleanshotFieldTestPattern");
@@ -303,7 +302,7 @@ impl CopiedImage {
 fn copy_screen(mut copies: impl FnMut() -> u32) -> Result<CopiedImage, DpiRunError> {
     crate::clipboard::replace_with(&[]).map_err(DpiRunError::ClipboardHeld)?;
     let before = copies();
-    if press(&[VK_CONTROL, VK_SHIFT, VIRTUAL_KEY(u16::from(b'7'))]) != 6 {
+    if press(&FULL_SCREEN) != 6 {
         return Err(DpiRunError::KeysRefused);
     }
     // The clipboard is read only once cleanshot.exe has logged the copy, so this process never

@@ -204,7 +204,7 @@ jobs:
           cargo build --release --locked -p cleanshot-fieldtest -p cleanshot-app
           cargo test --release --locked -p cleanshot-win --lib --no-run
 
-      - name: Release exe copies the full screen pixel for pixel, and the toolbar takes the scale, at 100, 125, 150 and 175% (F-01, D-71)
+      - name: Release exe copies the full screen pixel for pixel, and the toolbar takes the scale, at 100, 125, 150 and 175% (F-01, D-71); copies survive clipboard history (F-20)
         shell: bash
         run: |
           run="$RUNNER_TEMP/dpi"
@@ -235,5 +235,9 @@ jobs:
             CLEANSHOT_DPI=${scale#* } cargo test --release --locked -p cleanshot-win --lib -- --ignored --exact overlay::tests::d71_the_toolbar_takes_the_scale_windows_gives_the_monitor || status=1
             stop
           done
+          start
+          # A thread reads the clipboard on every change, as Win+V clipboard history does.
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --copies-while-watched 20 "$run/cleanshot.log" || status=1
+          stop
           exit "$status"
 

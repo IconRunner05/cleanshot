@@ -1,5 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HMODULE, RECT};
@@ -20,7 +22,8 @@ use windows::Win32::Graphics::Gdi::{
     DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR, MONITORINFO,
     MONITORINFOEXW,
 };
-use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+use windows::Win32::System::Ole::{CF_DIBV5, CF_UNICODETEXT};
 use windows::Win32::System::Registry::{
     HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
 };
@@ -442,6 +445,51 @@ fn pump_messages(wait: Duration) {
             DispatchMessageW(&raw const message);
         }
     }
+}
+
+/// Ctrl+Shift+7, the full-screen hotkey the CI copy steps give cleanshot.exe with
+/// `after_capture = "copy"` (F-07).
+const FULL_SCREEN: [VIRTUAL_KEY; 3] = [VK_CONTROL, VK_SHIFT, VIRTUAL_KEY(0x37)];
+
+/// F-20 beside clipboard history: presses [`FULL_SCREEN`] `times` for the running
+/// cleanshot.exe to copy the screen while another thread reads the clipboard on every change,
+/// as Win+V clipboard history and clipboard managers do. Returns how many presses ended in a
+/// copy that `copies` counted within `timeout`.
+///
+/// # Panics
+///
+/// If the watching thread panicked.
+pub fn copies_while_watched(times: u32, timeout: Duration, mut copies: impl FnMut() -> u32) -> u32 {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = Arc::clone(&stop);
+    let watcher = std::thread::spawn(move || {
+        let mut seen = clipboard_sequence();
+        while !stopped.load(Ordering::Relaxed) {
+            let now = clipboard_sequence();
+            if now != seen {
+                seen = now;
+                // Like a clipboard manager, a read this change refuses is not retried; the next
+                // change is read instead. Only cleanshot.exe's copies are counted.
+                let _ = crate::clipboard::read(u32::from(CF_DIBV5.0));
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let mut delivered = 0;
+    for _ in 0..times {
+        let before = copies();
+        if press(&FULL_SCREEN) == 6 && within(timeout, || copies() > before) {
+            delivered += 1;
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    watcher.join().expect("the watching thread does not panic");
+    delivered
+}
+
+fn clipboard_sequence() -> u32 {
+    // SAFETY: GetClipboardSequenceNumber has no preconditions.
+    unsafe { GetClipboardSequenceNumber() }
 }
 
 /// Puts `text` on the clipboard as Unicode text, then reads the clipboard's text back.

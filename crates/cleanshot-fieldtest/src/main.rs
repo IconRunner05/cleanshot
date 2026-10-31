@@ -11,8 +11,9 @@ use cleanshot_editor::{BenchReport, bench};
 use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::dpi::{copy_at_scale, set_scale};
 use cleanshot_win::field_test::{
-    Driver, adapters, animations_on, clipboard_round_trip, d3d11_feature_level, drive_tray,
-    monitors, open_and_cancel_overlays, rendering_params, windows_version,
+    Driver, adapters, animations_on, clipboard_round_trip, copies_while_watched,
+    d3d11_feature_level, drive_tray, monitors, open_and_cancel_overlays, rendering_params,
+    windows_version,
 };
 
 const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -23,6 +24,8 @@ const BENCH_REDRAWS: NonZeroU32 = NonZeroU32::new(600).expect("600 is not zero")
 const OVERLAY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The pause after an overlay closes before the next press, as between a user's captures.
 const OVERLAY_SETTLE: Duration = Duration::from_millis(500);
+/// How long one copy may take to be logged (P-02) before it counts as failed.
+const COPY_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn main() {
     let report_path = match std::env::args().collect::<Vec<_>>().as_slice() {
@@ -37,6 +40,19 @@ fn main() {
                 open_and_cancel_overlays(times, OVERLAY_TIMEOUT, OVERLAY_SETTLE, shown)
             {
                 eprintln!("{error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        [_, flag, times, log] if flag == "--copies-while-watched" => {
+            let Ok(times) = times.parse() else {
+                eprintln!("--copies-while-watched takes a count, not {times:?}");
+                std::process::exit(2);
+            };
+            let copied =
+                copies_while_watched(times, COPY_TIMEOUT, || perf_lines(Path::new(log), "P-02"));
+            println!("F-20: {copied} of {times} copies reached the clipboard while it was watched");
+            if copied < times {
                 std::process::exit(1);
             }
             return;
@@ -74,7 +90,8 @@ fn main() {
         _ => {
             eprintln!(
                 "usage: cleanshot-fieldtest --report PATH | --overlays COUNT LOG \
-                 | --set-scale WIDTH HEIGHT STEP DPI | --copy-at-scale WIDTH HEIGHT DPI LOG"
+                 | --set-scale WIDTH HEIGHT STEP DPI | --copy-at-scale WIDTH HEIGHT DPI LOG \
+                 | --copies-while-watched COUNT LOG"
             );
             std::process::exit(2);
         }

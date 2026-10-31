@@ -1,4 +1,6 @@
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+use std::time::Duration;
+
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 #[cfg(any(test, feature = "field-test"))]
 use windows::Win32::System::DataExchange::GetClipboardData;
 use windows::Win32::System::DataExchange::{
@@ -8,7 +10,15 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::GlobalSize;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_DIBV5;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+};
 use windows::core::w;
+
+/// How many times a copy tries to open the clipboard while another program holds it, and the
+/// wait between tries: 10 tries over 90 ms, inside P-02's 150 ms.
+const OPEN_ATTEMPTS: u32 = 10;
+const OPEN_RETRY: Duration = Duration::from_millis(10);
 
 /// Replaces the clipboard's contents with one image in two formats (F-20): `bitmap`, a
 /// packed `CF_DIBV5`, and `png`, a PNG file under the registered "PNG" format.
@@ -31,16 +41,61 @@ fn png_format() -> windows::core::Result<u32> {
 /// Empties the clipboard and puts each `(format, bytes)` on it. A format that fails leaves
 /// the ones before it on the clipboard.
 pub(crate) fn replace_with(formats: &[(u32, &[u8])]) -> windows::core::Result<()> {
-    // SAFETY: the clipboard is opened and closed here on one thread.
-    unsafe {
-        OpenClipboard(None)?;
-        let written = EmptyClipboard().and_then(|()| {
-            formats
-                .iter()
-                .try_for_each(|&(format, bytes)| set(format, bytes))
-        });
-        CloseClipboard()?;
-        written
+    while_open(|| {
+        // SAFETY: the clipboard is open on this thread for the whole call.
+        unsafe { EmptyClipboard() }?;
+        formats
+            .iter()
+            .try_for_each(|&(format, bytes)| set(format, bytes))
+    })
+}
+
+/// Runs `work` with the clipboard open on a message-only window of this thread's, then
+/// closes it. A clipboard opened on no window has no owner after `EmptyClipboard`, so another
+/// program can open it in the middle of the write and `SetClipboardData` fails; opened on a
+/// window, the other program is refused until it is closed. A clipboard another program
+/// holds is tried [`OPEN_ATTEMPTS`] times.
+fn while_open<T>(work: impl FnOnce() -> windows::core::Result<T>) -> windows::core::Result<T> {
+    // SAFETY: STATIC is a system class, and a message-only window needs no instance.
+    let window = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            None,
+            WINDOW_STYLE::default(),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            None,
+            None,
+        )
+    }?;
+    let done = open_on(window).and_then(|()| {
+        let worked = work();
+        // SAFETY: the clipboard was opened on this thread by open_on.
+        let closed = unsafe { CloseClipboard() };
+        worked.and_then(|value| closed.map(|()| value))
+    });
+    // SAFETY: the window was created above on this thread and is destroyed once, here.
+    let destroyed = unsafe { DestroyWindow(window) };
+    done.and_then(|value| destroyed.map(|()| value))
+}
+
+fn open_on(window: HWND) -> windows::core::Result<()> {
+    let mut attempt = 1;
+    loop {
+        // SAFETY: `window` is a live window of this thread.
+        match unsafe { OpenClipboard(Some(window)) } {
+            Ok(()) => return Ok(()),
+            Err(_) if attempt < OPEN_ATTEMPTS => {
+                attempt += 1;
+                std::thread::sleep(OPEN_RETRY);
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -69,12 +124,11 @@ fn set(format: u32, bytes: &[u8]) -> windows::core::Result<()> {
 /// that were put there.
 #[cfg(any(test, feature = "field-test"))]
 pub(crate) fn read(format: u32) -> windows::core::Result<Vec<u8>> {
-    // SAFETY: the clipboard is opened and closed here; the block is read only while locked
-    // and only within its own size.
-    unsafe {
-        OpenClipboard(None)?;
-        let read = GetClipboardData(format).and_then(|handle| {
-            let block = HGLOBAL(handle.0);
+    while_open(|| {
+        // SAFETY: the clipboard is open on this thread; the block is read only while locked
+        // and only within its own size.
+        unsafe {
+            let block = HGLOBAL(GetClipboardData(format)?.0);
             let start = GlobalLock(block).cast::<u8>();
             if start.is_null() {
                 return Err(windows::core::Error::from_thread());
@@ -84,10 +138,8 @@ pub(crate) fn read(format: u32) -> windows::core::Result<Vec<u8>> {
             // the expected outcome here.
             let _ = GlobalUnlock(block);
             Ok(bytes)
-        });
-        CloseClipboard()?;
-        read
-    }
+        }
+    })
 }
 
 /// Frees `block` and gives back `error`, the failure that kept the clipboard from taking it.
