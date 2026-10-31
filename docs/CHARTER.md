@@ -315,7 +315,7 @@ The app manifest (`crates/cleanshot-app/cleanshot.exe.manifest`, embedded by the
 | Layer | How |
 | --- | --- |
 | `core` | Unit and property tests (undo/redo round-trips, command invertibility). |
-| `render` | Golden PNGs in `tests/golden/`: each shape, redaction, crop, effects. Fails on any pixel diff; update with an explicit `--bless` flag. |
+| `render` | Golden PNGs in `tests/golden/`: each shape, redaction, crop, effects. Fails on any pixel diff; update with an explicit `--bless` flag. Export is DPI-free by construction: flatten, redaction and encode work in image pixels, and the text masks are drawn one DIP to an image pixel with no transform, so no input carries the display scaling and one set of goldens holds at every DPI. |
 | `win` | Integration tests on the Windows CI runner: capture of a known window at 100/150/200% DPI, clipboard round-trip, file-name rules. |
 | Manual | Release checklist: paste targets (F-20), multi-monitor mixed DPI, a monitor rotated to portrait (D-28 sizes a duplicated output from its desktop bounds, which a rotated output swaps), PrtSc conflict (F-52), high contrast. |
 
@@ -429,7 +429,7 @@ flowchart TD
 
 ### M3 · Hardening and beta
 
-- [ ] Golden DPI matrix (100/150/200%, negative-coordinate monitors) in CI.
+- [ ] Golden DPI matrix (100/150/200%, negative-coordinate monitors) in CI. (Export needs none, see the `render` row of section 7's Tests table. Editor canvas: `d41_at_every_display_scaling_a_fitted_capture_has_each_pixel_on_its_own_device_pixel`.)
 - [ ] All P-budgets measured on the reference machine; fixes for any Must miss.
 - [ ] Release workflow (section 9) with SBOM, checksums, provenance; `SECURITY.md`.
 - [ ] Code signing in place.
