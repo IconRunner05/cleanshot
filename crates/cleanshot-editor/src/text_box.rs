@@ -1,8 +1,9 @@
 use std::ops::Range;
 
 use cleanshot_core::{
-    BoxPress, Command, LineMove, LinePosition, LineStep, PointF, Shape, Style, TextBlock,
-    TextBlockError, TextEdit, TextKey, TextOrigin, commit_text, hits,
+    BoxPress, Command, LineMove, LinePosition, LineStep, Look, Looks, PointF, Property,
+    PropertyError, Shape, Style, TextBlock, TextBlockError, TextEdit, TextKey, TextOrigin,
+    commit_text, hits,
 };
 use gpui::{
     App, BorderStyle, Bounds, ClipboardItem, Pixels, Point, UTF16Selection, Window, fill, point,
@@ -52,6 +53,24 @@ impl TextBox {
 
     pub fn edit_mut(&mut self) -> &mut TextEdit {
         &mut self.edit
+    }
+
+    /// How the box draws, as the property strip shows it.
+    pub fn look(&self, looks: &Looks) -> Look {
+        looks.text_look(&self.origin)
+    }
+
+    /// Sets `property` on the box, and on the text it reopened by the returned command.
+    ///
+    /// # Errors
+    ///
+    /// [`PropertyError`] if `property`'s value is refused; then nothing changes.
+    pub fn restyle(
+        &mut self,
+        looks: &mut Looks,
+        property: Property,
+    ) -> Result<Option<Command>, PropertyError> {
+        looks.restyle_text(property, &mut self.origin)
     }
 
     /// The command that makes the box's text a shape, or `None` if that changes nothing.

@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use cleanshot_core::Tool;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AssetSource, BoxShadow, ElementId, InteractiveElement, IntoElement, ParentElement, Role,
+    AssetSource, BoxShadow, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Role,
     SharedString, StatefulInteractiveElement, Styled, Toggled, div, hsla, point, px, svg,
 };
 
@@ -68,8 +68,7 @@ pub(crate) const TOOLS: [(Tool, &str, &str, char); 10] = [
     (Tool::Crop, "crop", "Crop", 'C'),
 ];
 
-/// The floating tool panel (CHARTER 4: dark material, hairline border, soft shadow, 12 px
-/// corners, 28 px buttons with 7 px corners). `on_pick` is called with the tool clicked.
+/// The tool panel (CHARTER 4: 28 px buttons with 7 px corners). `on_pick` is called with the tool clicked.
 pub(crate) fn toolbar(
     current: Tool,
     theme: Theme,
@@ -108,35 +107,33 @@ pub(crate) fn toolbar(
                     .text_color(if picked { ON_ACCENT } else { theme.text }),
             )
     });
+    panel(theme)
+        .id("toolbar")
+        .role(Role::Toolbar)
+        .aria_label("Tools")
+        .gap(px(4.0))
+        .children(buttons)
+}
+
+/// A floating panel (CHARTER 4): dark material, hairline border, soft shadow, 12 px corners,
+/// laying its children out in a row.
+pub(crate) fn panel(theme: Theme) -> Div {
     div()
-        .absolute()
-        .top(px(16.0))
-        .left_0()
-        .right_0()
+        .occlude()
         .flex()
-        .justify_center()
-        .child(
-            div()
-                .id("toolbar")
-                .role(Role::Toolbar)
-                .aria_label("Tools")
-                .occlude()
-                .flex()
-                .gap(px(4.0))
-                .p(px(6.0))
-                .rounded(px(12.0))
-                .bg(theme.material)
-                .border_1()
-                .border_color(theme.hairline)
-                .shadow(vec![BoxShadow {
-                    color: hsla(0.0, 0.0, 0.0, 0.25),
-                    offset: point(px(0.0), px(8.0)),
-                    blur_radius: px(24.0),
-                    spread_radius: px(0.0),
-                    inset: false,
-                }])
-                .children(buttons),
-        )
+        .items_center()
+        .p(px(6.0))
+        .rounded(px(12.0))
+        .bg(theme.material)
+        .border_1()
+        .border_color(theme.hairline)
+        .shadow(vec![BoxShadow {
+            color: hsla(0.0, 0.0, 0.0, 0.25),
+            offset: point(px(0.0), px(8.0)),
+            blur_radius: px(24.0),
+            spread_radius: px(0.0),
+            inset: false,
+        }])
 }
 
 #[cfg(test)]

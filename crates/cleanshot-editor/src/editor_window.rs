@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
-    KeyAction, Looks, Modifiers, Output, Press, RgbaImage, ShapeId, Start, TextBlockError,
-    TextEdit, TextKey, TextOrigin, Tool, action_for_key, delivery_notice, save_as_notice,
+    KeyAction, Looks, Modifiers, Output, Press, Property, PropertyError, RgbaImage, Setting,
+    ShapeId, Start, TextBlockError, TextEdit, TextKey, TextOrigin, Tool, action_for_key,
+    delivery_notice, save_as_notice,
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InputHandler, InteractiveElement, IntoElement,
@@ -18,6 +19,7 @@ use gpui::{
 use crate::Error;
 use crate::canvas::{OnPointer, Overlay, PaintOver, Pointer, document_canvas, render_image};
 use crate::placement::{Fit, Placement};
+use crate::strip::property_strip;
 use crate::text::register_inter;
 use crate::text_box::TextBox;
 use crate::theme::Theme;
@@ -231,6 +233,24 @@ impl EditorView {
         }
     }
 
+    /// A strip change (D-55): on the open text box, else on the selection, else on how the
+    /// current tool draws next.
+    fn set_property(&mut self, property: Property) {
+        let restyled = if let Some(text_box) = &mut self.text_box {
+            text_box.restyle(&mut self.looks, property)
+        } else {
+            let selected = self.selected.and_then(|id| self.document.shape(id));
+            self.looks.set(property, self.tool, selected)
+        };
+        match restyled {
+            Ok(Some(command)) => self.apply(command),
+            Ok(None) => {}
+            Err(PropertyError::NotPositive(_)) => {
+                self.notice = Some("A size must be more than 0, so nothing changed.".into());
+            }
+        }
+    }
+
     fn open_text_box(&mut self, origin: TextOrigin) {
         match TextBox::open(origin) {
             Ok(text_box) => self.text_box = Some(text_box),
@@ -361,6 +381,24 @@ impl Render for EditorView {
                 cx.notify();
             });
         };
+        let setter = view.clone();
+        let on_set = move |property, window: &mut Window, cx: &mut App| {
+            // Err only means the window closed, and with it what the strip could change.
+            let _ = setter.update(cx, |view, cx| {
+                view.set_property(property);
+                if view.text_box.is_some() {
+                    window.focus(&view.focus, cx);
+                }
+                cx.notify();
+            });
+        };
+        let (strip_tool, look) = if let Some(text_box) = &self.text_box {
+            (Tool::Text, text_box.look(&self.looks))
+        } else {
+            let selected = self.selected.and_then(|id| self.document.shape(id));
+            self.looks.shown(self.tool, selected)
+        };
+        let settings = Setting::for_tool(strip_tool);
         let input = view.clone();
         let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {
             // Err only means the window closed, and with it everything the pointer could change.
@@ -407,7 +445,22 @@ impl Render for EditorView {
                     .size_full()
                     .child(canvas.size_full()),
             )
-            .child(toolbar(self.tool, theme, on_pick))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(16.0))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(toolbar(self.tool, theme, on_pick))
+                    .children(
+                        (!settings.is_empty())
+                            .then(|| property_strip(settings, look, theme, on_set)),
+                    ),
+            )
             .children(
                 self.notice
                     .clone()

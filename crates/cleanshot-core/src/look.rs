@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
-use crate::document::{Color, Fill, RedactMode, Shape, ShapeEntry, Style};
+use crate::document::{Color, Fill, RedactMode, Shape, ShapeEntry, ShapeId, Style};
 use crate::history::Command;
-use crate::text::DEFAULT_TEXT_SIZE;
+use crate::text::{DEFAULT_TEXT_SIZE, TextBlock};
+use crate::text_edit::TextOrigin;
 use crate::tool::Tool;
 
 const ANNOTATION_RED: Color = Color {
@@ -69,6 +70,18 @@ impl Look {
         self.text_size
     }
 
+    /// What a box-shaped shape is filled with: an outline, or the style colour.
+    #[must_use]
+    pub fn fill(&self) -> Fill {
+        self.fill
+    }
+
+    /// How a redaction replaces its pixels.
+    #[must_use]
+    pub fn redact(&self) -> RedactMode {
+        self.redact
+    }
+
     /// `shape` drawn in this look: in its style, and with its fill, redaction or text size where
     /// `shape` has one. New shapes and restyled ones both take their look through here.
     #[must_use]
@@ -86,13 +99,23 @@ impl Look {
                 rect,
                 mode: self.redact,
             },
-            Shape::Text(block) => Shape::Text(block.with_size(self.text_size)),
+            Shape::Text(block) => Shape::Text(self.dress_text(&block)),
             shape @ (Shape::Arrow { .. }
             | Shape::Line { .. }
             | Shape::Pen(_)
             | Shape::Highlight(_)) => shape,
         };
         (shape, self.style)
+    }
+
+    fn dress_text(&self, block: &TextBlock) -> TextBlock {
+        block.with_size(self.text_size)
+    }
+
+    /// Whether `property` is already this look's value, which the strip shows as checked.
+    #[must_use]
+    pub fn has(&self, property: Property) -> bool {
+        self.with(property) == Ok(*self)
     }
 
     /// This look with `property` changed.
@@ -166,6 +189,96 @@ pub enum Property {
     TextSize(f32),
 }
 
+/// A setting on the property strip, without a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setting {
+    Color,
+    StrokeWidth,
+    Fill,
+    Redact,
+    TextSize,
+}
+
+impl Setting {
+    /// The settings the strip shows for what `tool` draws, in strip order: none for the select
+    /// and crop tools, which draw nothing.
+    #[must_use]
+    pub fn for_tool(tool: Tool) -> &'static [Self] {
+        match tool {
+            Tool::Arrow | Tool::Line | Tool::Pen => &[Self::Color, Self::StrokeWidth],
+            Tool::Rectangle | Tool::Ellipse => &[Self::Color, Self::StrokeWidth, Self::Fill],
+            Tool::Highlighter => &[Self::Color],
+            Tool::Redact => &[Self::Redact],
+            Tool::Text => &[Self::Color, Self::TextSize],
+            Tool::Select | Tool::Crop => &[],
+        }
+    }
+
+    /// What the strip and a screen reader call this setting.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Color => "Colour",
+            Self::StrokeWidth => "Stroke width",
+            Self::Fill => "Fill",
+            Self::Redact => "Redaction",
+            Self::TextSize => "Text size",
+        }
+    }
+
+    /// The values the strip offers for this setting, each with the name a screen reader reads,
+    /// in strip order (D-55).
+    #[must_use]
+    pub fn choices(self) -> &'static [(Property, &'static str)] {
+        match self {
+            Self::Color => &COLOR_CHOICES,
+            Self::StrokeWidth => &STROKE_WIDTH_CHOICES,
+            Self::Fill => &FILL_CHOICES,
+            Self::Redact => &REDACT_CHOICES,
+            Self::TextSize => &TEXT_SIZE_CHOICES,
+        }
+    }
+}
+
+const fn color(r: u8, g: u8, b: u8) -> Property {
+    Property::Color(Color { r, g, b, a: 255 })
+}
+
+const COLOR_CHOICES: [(Property, &str); 8] = [
+    (Property::Color(ANNOTATION_RED), "Red"),
+    (color(255, 149, 0), "Orange"),
+    (Property::Color(HIGHLIGHTER_YELLOW), "Yellow"),
+    (color(52, 199, 89), "Green"),
+    (color(0, 122, 255), "Blue"),
+    (color(175, 82, 222), "Purple"),
+    (color(0, 0, 0), "Black"),
+    (color(255, 255, 255), "White"),
+];
+
+const STROKE_WIDTH_CHOICES: [(Property, &str); 4] = [
+    (Property::StrokeWidth(2.0), "2 pixels"),
+    (Property::StrokeWidth(3.0), "3 pixels"),
+    (Property::StrokeWidth(5.0), "5 pixels"),
+    (Property::StrokeWidth(8.0), "8 pixels"),
+];
+
+const FILL_CHOICES: [(Property, &str); 2] = [
+    (Property::Fill(Fill::Hollow), "Outline"),
+    (Property::Fill(Fill::Solid), "Filled"),
+];
+
+const REDACT_CHOICES: [(Property, &str); 2] = [
+    (Property::Redact(RedactMode::Pixelate), "Pixelate"),
+    (Property::Redact(RedactMode::Blur), "Blur"),
+];
+
+const TEXT_SIZE_CHOICES: [(Property, &str); 4] = [
+    (Property::TextSize(16.0), "16 pixels"),
+    (Property::TextSize(DEFAULT_TEXT_SIZE), "24 pixels"),
+    (Property::TextSize(36.0), "36 pixels"),
+    (Property::TextSize(48.0), "48 pixels"),
+];
+
 /// Why the strip refused a value.
 #[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
 pub enum PropertyError {
@@ -219,6 +332,68 @@ impl Looks {
         };
         self.0.insert(tool, next);
         Ok(restyled)
+    }
+
+    /// What the strip shows: the selected shape's tool and its own look, or with nothing
+    /// selected, `tool` and how it draws next.
+    #[must_use]
+    pub fn shown(&self, tool: Tool, selected: Option<&ShapeEntry>) -> (Tool, Look) {
+        match selected {
+            Some(entry) => {
+                let tool = Tool::drawing(&entry.shape);
+                (tool, Look::of(entry, self.look(tool)))
+            }
+            None => (tool, self.look(tool)),
+        }
+    }
+
+    /// The look an open text box shows: the text tool's for a new box, or the text's own.
+    #[must_use]
+    pub fn text_look(&self, origin: &TextOrigin) -> Look {
+        match origin {
+            TextOrigin::New { .. } => self.look(Tool::Text),
+            TextOrigin::Existing { id, block, style } => {
+                self.shown(Tool::Text, Some(&text_entry(*id, block, *style)))
+                    .1
+            }
+        }
+    }
+
+    /// Sets `property` while a text box is open, as on a selection: a new box takes the text
+    /// tool's look as it now is, and an existing text is restyled at once by the returned
+    /// command, one undo step (F-38), which `origin` then follows.
+    ///
+    /// # Errors
+    ///
+    /// [`PropertyError`] if `property`'s value is refused; then nothing changes.
+    pub fn restyle_text(
+        &mut self,
+        property: Property,
+        origin: &mut TextOrigin,
+    ) -> Result<Option<Command>, PropertyError> {
+        match origin {
+            TextOrigin::New { size, style, .. } => {
+                self.set(property, Tool::Text, None)?;
+                let look = self.look(Tool::Text);
+                (*size, *style) = (look.text_size, look.style);
+                Ok(None)
+            }
+            TextOrigin::Existing { id, block, style } => {
+                let entry = text_entry(*id, block, *style);
+                let restyled = self.set(property, Tool::Text, Some(&entry))?;
+                let look = Look::of(&entry, self.look(Tool::Text)).with(property)?;
+                (*block, *style) = (look.dress_text(block), look.style);
+                Ok(restyled)
+            }
+        }
+    }
+}
+
+fn text_entry(id: ShapeId, block: &TextBlock, style: Style) -> ShapeEntry {
+    ShapeEntry {
+        id,
+        shape: Shape::Text(block.clone()),
+        style,
     }
 }
 
@@ -439,5 +614,87 @@ mod tests {
             }
         }
         assert_eq!(looks.look(Tool::Pen), Look::default_for(Tool::Pen));
+    }
+
+    #[test]
+    fn the_strip_shows_only_the_settings_what_is_drawn_has() {
+        assert_eq!(Setting::for_tool(Tool::Select), &[]);
+        assert_eq!(Setting::for_tool(Tool::Crop), &[]);
+        assert!(Setting::for_tool(Tool::Rectangle).contains(&Setting::Fill));
+        assert!(!Setting::for_tool(Tool::Arrow).contains(&Setting::Fill));
+        assert_eq!(Setting::for_tool(Tool::Redact), &[Setting::Redact]);
+        assert!(Setting::for_tool(Tool::Text).contains(&Setting::TextSize));
+        let style = Look::default_for(Tool::Rectangle).style();
+        let solid = entry(
+            Shape::Rect {
+                rect: AREA,
+                fill: Fill::Solid,
+            },
+            style,
+        );
+        let (tool, look) = Looks::default().shown(Tool::Select, Some(&solid));
+        assert_eq!((tool, look.fill()), (Tool::Rectangle, Fill::Solid));
+    }
+
+    #[test]
+    fn f34_a_strip_change_while_typing_restyles_the_open_text_box() {
+        let mut looks = Looks::default();
+        let at = PointF { x: 1.0, y: 1.0 };
+        let mut new = TextOrigin::New {
+            at,
+            size: DEFAULT_TEXT_SIZE,
+            style: Look::default_for(Tool::Text).style(),
+        };
+        let added = looks.restyle_text(Property::TextSize(40.0), &mut new);
+        assert_eq!(added, Ok(None));
+        assert!(matches!(new, TextOrigin::New { size: 40.0, .. }));
+        assert_eq!(looks.look(Tool::Text).text_size(), 40.0);
+        let style = Look::default_for(Tool::Text).style();
+        let block = TextBlock::new(at, "Hi".into(), 24.0, 1.5).unwrap();
+        let mut existing = TextOrigin::Existing {
+            id: ShapeId(7),
+            block: block.clone(),
+            style,
+        };
+        let restyled = looks.restyle_text(Property::Color(BLUE), &mut existing);
+        assert!(
+            matches!(restyled, Ok(Some(Command::Replace { .. }))),
+            "{restyled:?}"
+        );
+        let TextOrigin::Existing {
+            block: kept,
+            style: now,
+            ..
+        } = &existing
+        else {
+            panic!("still the existing text");
+        };
+        assert_eq!((kept.size(), now.color), (24.0, BLUE));
+        assert_eq!(looks.text_look(&existing).style().color, BLUE);
+    }
+
+    #[test]
+    fn every_strip_choice_is_accepted_and_each_tool_starts_on_one_choice_per_setting() {
+        for tool in [
+            Tool::Arrow,
+            Tool::Line,
+            Tool::Rectangle,
+            Tool::Ellipse,
+            Tool::Pen,
+            Tool::Highlighter,
+            Tool::Text,
+            Tool::Redact,
+        ] {
+            let look = Look::default_for(tool);
+            for setting in Setting::for_tool(tool) {
+                let choices = setting.choices();
+                assert!(choices.iter().all(|(choice, _)| look.with(*choice).is_ok()));
+                let checked = choices
+                    .iter()
+                    .filter(|(choice, _)| look.has(*choice))
+                    .count();
+                assert_eq!(checked, 1, "{tool:?} {setting:?}");
+            }
+        }
     }
 }

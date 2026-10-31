@@ -41,6 +41,12 @@ impl Document {
         self.shapes.iter().any(|entry| entry.id == id)
     }
 
+    /// The shape with `id`, if it is in the document.
+    #[must_use]
+    pub fn shape(&self, id: ShapeId) -> Option<&ShapeEntry> {
+        self.shapes.iter().find(|entry| entry.id == id)
+    }
+
     /// The part of the base image an export keeps, inside the image with a positive size;
     /// `None` keeps all of it.
     #[must_use]
