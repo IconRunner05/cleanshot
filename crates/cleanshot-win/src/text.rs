@@ -8,17 +8,20 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1Brush, ID2D1RenderTarget,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_COLOR_GLYPH_RUN, DWRITE_FACTORY_TYPE_ISOLATED, DWRITE_FONT_STRETCH_NORMAL,
+    DWRITE_COLOR_GLYPH_RUN, DWRITE_FACTORY_TYPE_ISOLATED, DWRITE_FONT_FEATURE,
+    DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_ALTERNATES, DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_LIGATURES,
+    DWRITE_FONT_FEATURE_TAG_STANDARD_LIGATURES, DWRITE_FONT_STRETCH_NORMAL,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_GLYPH_RUN,
     DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_GRID_FIT_MODE, DWRITE_GRID_FIT_MODE_DEFAULT,
     DWRITE_MATRIX, DWRITE_MEASURING_MODE, DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_OUTLINE_THRESHOLD_ANTIALIASED, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
     DWRITE_RENDERING_MODE1, DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
     DWRITE_RENDERING_MODE1_OUTLINE, DWRITE_STRIKETHROUGH, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE, DWRITE_TEXT_METRICS, DWRITE_TEXTURE_ALIASED_1x1,
-    DWRITE_UNDERLINE, DWriteCreateFactory, IDWriteFactory2, IDWriteFactory3, IDWriteFactory5,
-    IDWriteFontCollection, IDWriteFontFace3, IDWriteInMemoryFontFileLoader, IDWriteInlineObject,
-    IDWritePixelSnapping_Impl, IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextRenderer,
+    DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE,
+    DWRITE_TEXTURE_ALIASED_1x1, DWRITE_UNDERLINE, DWriteCreateFactory, IDWriteFactory2,
+    IDWriteFactory3, IDWriteFactory5, IDWriteFontCollection, IDWriteFontFace3,
+    IDWriteInMemoryFontFileLoader, IDWriteInlineObject, IDWritePixelSnapping_Impl,
+    IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextLayout, IDWriteTextRenderer,
     IDWriteTextRenderer_Impl,
 };
 use windows::Win32::System::SystemServices::LOCALE_NAME_MAX_LENGTH;
@@ -217,6 +220,43 @@ impl Fonts {
         }
     }
 
+    /// `line` laid out in `format` with the OpenType features GPUI shapes the editor's text
+    /// with (D-69), so the export keeps the screen's widths.
+    fn layout(
+        &self,
+        line: &[u16],
+        format: &IDWriteTextFormat,
+    ) -> windows::core::Result<IDWriteTextLayout> {
+        let length =
+            u32::try_from(line.len()).map_err(|_| windows::core::Error::from(E_INVALIDARG))?;
+        // SAFETY: `line` and `format` outlive the calls, and the layout and typography are
+        // owned here.
+        unsafe {
+            let layout =
+                self.factory
+                    .CreateTextLayout(line, format, f32::INFINITY, f32::INFINITY)?;
+            let typography = self.factory.CreateTypography()?;
+            for feature in [
+                DWRITE_FONT_FEATURE_TAG_STANDARD_LIGATURES,
+                DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_LIGATURES,
+                DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_ALTERNATES,
+            ] {
+                typography.AddFontFeature(DWRITE_FONT_FEATURE {
+                    nameTag: feature,
+                    parameter: 1,
+                })?;
+            }
+            layout.SetTypography(
+                &typography,
+                DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length,
+                },
+            )?;
+            Ok(layout)
+        }
+    }
+
     /// Every glyph layer of `block`, in painting order.
     fn layers(&self, block: &TextBlock) -> windows::core::Result<Vec<Layer>> {
         let format = self.format(block.size())?;
@@ -231,15 +271,48 @@ impl Fonts {
             // SAFETY: the layout and the renderer live until Draw returns, and Draw calls the
             // renderer on this thread only.
             unsafe {
-                let layout =
-                    self.factory
-                        .CreateTextLayout(&text, &format, f32::INFINITY, f32::INFINITY)?;
-                layout.Draw(None, &runs.to_interface::<IDWriteTextRenderer>(), 0.0, 0.0)?;
+                self.layout(&text, &format)?.Draw(
+                    None,
+                    &runs.to_interface::<IDWriteTextRenderer>(),
+                    0.0,
+                    0.0,
+                )?;
             }
             layers.append(&mut runs.layers.borrow_mut());
         }
         Ok(layers)
     }
+}
+
+/// Each of `texts` measured as [`masks`] lays it out, in ems: the widest line's advance,
+/// for F-34's drift test against the editor's GPUI measure.
+///
+/// # Errors
+///
+/// [`Error::Text`] if DirectWrite refuses the font or a layout.
+#[cfg(feature = "drift-test")]
+pub fn em_widths(texts: &[&str]) -> Result<Vec<f32>, Error> {
+    const SIZE: f32 = 100.0;
+    let width = |fonts: &Fonts, format: &IDWriteTextFormat, line: &str| {
+        let line: Vec<u16> = line.encode_utf16().collect();
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        // SAFETY: the layout lives for this call and `metrics` is writable.
+        unsafe { fonts.layout(&line, format)?.GetMetrics(&raw mut metrics) }?;
+        windows::core::Result::Ok(metrics.width)
+    };
+    let fonts = Fonts::inter().map_err(Error::Text)?;
+    let format = fonts.format(SIZE).map_err(Error::Text)?;
+    texts
+        .iter()
+        .map(|text| {
+            text.split('\n')
+                .try_fold(0.0_f32, |widest, line| {
+                    Ok(widest.max(width(&fonts, &format, line)?))
+                })
+                .map(|widest| widest / SIZE)
+                .map_err(Error::Text)
+        })
+        .collect()
 }
 
 fn user_locale() -> windows::core::Result<HSTRING> {

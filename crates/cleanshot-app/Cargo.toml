@@ -17,6 +17,10 @@ harness = false
 name = "toolbar_automation"
 harness = false
 
+[[test]]
+name = "text_drift"
+harness = false
+
 [dependencies]
 cleanshot-core.workspace = true
 cleanshot-render.workspace = true
@@ -24,7 +28,8 @@ cleanshot-win.workspace = true
 cleanshot-editor.workspace = true
 
 [dev-dependencies]
-cleanshot-win = { workspace = true, features = ["ui-automation-test"] }
+cleanshot-win = { workspace = true, features = ["ui-automation-test", "drift-test"] }
+cleanshot-editor = { workspace = true, features = ["drift-test"] }
 
 [lints]
 workspace = true

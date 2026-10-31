@@ -43,6 +43,8 @@ windows = { version = "0.62.2", features = [
 # What the UI Automation tests read; never in cleanshot.exe.
 ui-automation-test = []
 field-test = []
+# What the F-34 drift test measures with; never in cleanshot.exe.
+drift-test = []
 
 [lints]
 workspace = true
