@@ -23,7 +23,7 @@ use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
 use cleanshot_win::settings_file::{read_settings, settings_path};
 use cleanshot_win::text;
 use cleanshot_win::tray::{
-    Request, Tray, ask_running_instance_to_capture, print_screen_fallback,
+    Request, Tray, ask_running_instance_to_capture, message_box, print_screen_fallback,
     snipping_tool_holds_print_screen,
 };
 
@@ -33,9 +33,14 @@ fn main() {
         Launch::First(instance) => instance,
         Launch::AlreadyRunning => {
             // C-14: a second launch asks the running one to capture, then exits. If that
-            // one is still starting it has no tray window yet, and this launch is lost.
+            // one is still starting it has no tray window yet, and this launch says so.
             if let Err(error) = ask_running_instance_to_capture() {
-                eprintln!("Cleanshot is already running and could not be reached: {error}");
+                let text = format!(
+                    "Cleanshot is already running but did not answer ({error}). Wait a few seconds and start it again. If it still does not answer, end cleanshot.exe in Task Manager and start Cleanshot again."
+                );
+                if let Err(shown) = message_box("Cleanshot", &text) {
+                    eprintln!("{text} ({shown})");
+                }
             }
             return;
         }

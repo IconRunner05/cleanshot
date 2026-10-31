@@ -17,11 +17,12 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     FindWindowW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, IDI_APPLICATION, LoadIconW,
-    MF_STRING, PostMessageW, RegisterWindowMessageW, SetForegroundWindow, SetWindowLongPtrW,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_HOTKEY,
-    WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    MB_ICONWARNING, MB_OK, MF_STRING, MessageBoxW, PostMessageW, RegisterWindowMessageW,
+    SetForegroundWindow, SetWindowLongPtrW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
+    WM_CLOSE, WM_CONTEXTMENU, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::Error;
 
@@ -201,6 +202,28 @@ impl Drop for Tray {
         let destroyed = unsafe { DestroyWindow(self.window) };
         debug_assert!(destroyed.is_ok(), "the tray window is destroyed once");
     }
+}
+
+/// Shows `text` under `title` in a warning box with an OK button, and returns when it is
+/// closed. For a process with no tray icon to warn from.
+///
+/// # Errors
+///
+/// The Windows error if the box cannot be shown.
+pub fn message_box(title: &str, text: &str) -> windows::core::Result<()> {
+    // SAFETY: both strings live until MessageBoxW returns; the box has no owner window.
+    let pressed = unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(text),
+            &HSTRING::from(title),
+            MB_OK | MB_ICONWARNING,
+        )
+    };
+    if pressed.0 == 0 {
+        return Err(windows::core::Error::from_thread());
+    }
+    Ok(())
 }
 
 /// Asks the Cleanshot already running in this session to capture a region (C-14).
