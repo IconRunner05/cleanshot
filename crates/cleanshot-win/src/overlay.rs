@@ -24,15 +24,16 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW,
-    SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow, WM_DESTROY, WM_GETOBJECT, WM_HOTKEY,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WNDCLASSEXW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, PCWSTR, w};
 
 use crate::Error;
 use crate::capture::MonitorImage;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
+use crate::toolbar::automation::{self, Mirror, Request};
 use crate::toolbar::{self, Control, Layout, Paint};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
@@ -119,6 +120,7 @@ struct Shared {
     /// The toolbar's monitor and its physical pixels per DIP (F-05).
     toolbar: Option<(RECT, f32)>,
     focus: Cell<Control>,
+    mirror: Mirror,
 }
 
 impl Shared {
@@ -130,10 +132,13 @@ impl Shared {
 
     fn select(&self, selected: Option<RECT>) {
         self.selected.set(selected);
-        self.repaint();
+        self.changed();
     }
 
-    fn repaint(&self) {
+    /// Repaints every window and tells UI Automation what the toolbar now shows.
+    fn changed(&self) {
+        self.mirror
+            .show(self.toolbar().map(|placed| (placed, self.focus.get())));
         for &window in self.windows.borrow().iter() {
             // SAFETY: invalidating this thread's own window; a failure only skips one repaint.
             let _ = unsafe { InvalidateRect(Some(window), None, false) };
@@ -150,13 +155,15 @@ impl Shared {
         match (key, self.selected.get()) {
             (Key::Choose(control), _) => self.choose(control),
             (Key::Press, _) => self.choose(self.focus.get()),
-            (Key::Focus(step), _) => {
-                self.focus.set(self.focus.get().step(step));
-                self.repaint();
-            }
+            (Key::Focus(step), _) => self.focus(self.focus.get().step(step)),
             (Key::Nudge(dx, dy), Some(selected)) => self.select(Some(nudged(selected, dx, dy))),
             (Key::Nudge(..), None) => {}
         }
+    }
+
+    fn focus(&self, control: Control) {
+        self.focus.set(control);
+        self.changed();
     }
 
     /// F-05: Cancel always closes; the others need a selection to act on.
@@ -307,7 +314,9 @@ impl Overlay {
             windows: RefCell::new(Vec::with_capacity(captures.len())),
             toolbar,
             focus: Cell::new(Control::Copy),
+            mirror: Mirror::default(),
         });
+        shared.changed();
         let mut overlay = Self {
             windows: Vec::with_capacity(captures.len()),
         };
@@ -637,6 +646,31 @@ unsafe extern "system" fn window_procedure(
             let surface = unsafe { &*surface };
             if let Some(&(_, _, key)) = KEYS.get(wparam.0) {
                 surface.shared.press(key);
+            }
+            LRESULT(0)
+        }
+        WM_GETOBJECT => {
+            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
+            let surface = unsafe { &*surface };
+            let answered = surface
+                .toolbar
+                .as_ref()
+                .and_then(|_| automation::answer(window, &surface.shared.mirror, wparam, lparam));
+            // SAFETY: forwarding a request this window has no provider for.
+            answered.unwrap_or_else(|| unsafe { DefWindowProcW(window, message, wparam, lparam) })
+        }
+        WM_DESTROY => {
+            automation::forget(window);
+            LRESULT(0)
+        }
+        automation::WAKE => {
+            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
+            let shared = &unsafe { &*surface }.shared;
+            for request in shared.mirror.requests() {
+                match request {
+                    Request::Choose(control) => shared.choose(control),
+                    Request::Focus(control) => shared.focus(control),
+                }
             }
             LRESULT(0)
         }

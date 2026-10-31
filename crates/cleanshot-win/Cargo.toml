@@ -30,6 +30,8 @@ windows = { version = "0.62.2", features = [
     "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_HiDpi",
@@ -38,9 +40,7 @@ windows = { version = "0.62.2", features = [
 
 [features]
 # What the UI Automation tests read; never in cleanshot.exe.
-ui-automation-test = [
-    "windows/Win32_UI_Accessibility",
-]
+ui-automation-test = []
 field-test = []
 
 [lints]

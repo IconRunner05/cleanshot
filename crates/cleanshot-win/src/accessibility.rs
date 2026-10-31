@@ -4,7 +4,8 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, TreeScope_Subtree, UIA_ImageControlTypeId,
+    CUIAutomation, IUIAutomation, IUIAutomationInvokePattern, TreeScope_Subtree,
+    UIA_ButtonControlTypeId, UIA_ImageControlTypeId, UIA_InvokePatternId,
     UIA_RadioButtonControlTypeId, UIA_ToolBarControlTypeId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId};
@@ -22,6 +23,7 @@ pub struct Control {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlKind {
     ToolBar,
+    Button,
     RadioButton,
     Image,
     /// Any other `UIA_*ControlTypeId`.
@@ -46,6 +48,55 @@ pub fn controls_in_own_windows() -> Result<Vec<Control>, Error> {
     controls
 }
 
+/// Presses the first button named `name` under this process's top-level windows through its
+/// Invoke pattern, as a screen reader's activate command does. Returns whether one was found.
+/// Call it from a thread that owns no window, as for [`controls_in_own_windows`].
+///
+/// # Errors
+///
+/// [`Error::Accessibility`] if COM, UI Automation or the button refuses a call.
+pub fn invoke_in_own_windows(name: &str) -> Result<bool, Error> {
+    // SAFETY: COM is initialised for this thread and released below once the call ends.
+    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+        .ok()
+        .map_err(Error::Accessibility)?;
+    let invoked = invoke(name).map_err(Error::Accessibility);
+    // SAFETY: balances the successful CoInitializeEx above, after every COM object is dropped.
+    unsafe { CoUninitialize() };
+    invoked
+}
+
+fn invoke(name: &str) -> windows::core::Result<bool> {
+    // SAFETY: CUIAutomation is the system class for IUIAutomation, created in process.
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }?;
+    for window in own_windows()? {
+        // SAFETY: `window` is a top-level window handle; UI Automation checks it is live.
+        let found = unsafe {
+            let root = automation.ElementFromHandle(window)?;
+            root.FindAll(TreeScope_Subtree, &automation.CreateTrueCondition()?)?
+        };
+        // SAFETY: a read of the array's own length.
+        for index in 0..unsafe { found.Length() }? {
+            // SAFETY: `index` is below the array's length; the element is live.
+            let element = unsafe { found.GetElement(index) }?;
+            // SAFETY: plain property reads of a live element.
+            let (kind, named) = unsafe { (element.CurrentControlType()?, element.CurrentName()?) };
+            if kind != UIA_ButtonControlTypeId || named != name {
+                continue;
+            }
+            // SAFETY: the element is live, and the pattern asked for is the interface cast to.
+            unsafe {
+                element
+                    .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)?
+                    .Invoke()?;
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
     // SAFETY: CUIAutomation is the system class for IUIAutomation, created in process.
     let automation: IUIAutomation =
@@ -67,6 +118,7 @@ fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
             };
             let kind = [
                 (UIA_ToolBarControlTypeId, ControlKind::ToolBar),
+                (UIA_ButtonControlTypeId, ControlKind::Button),
                 (UIA_RadioButtonControlTypeId, ControlKind::RadioButton),
                 (UIA_ImageControlTypeId, ControlKind::Image),
             ]

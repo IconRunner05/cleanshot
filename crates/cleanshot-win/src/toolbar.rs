@@ -11,6 +11,8 @@ use windows::core::Interface;
 
 use crate::text::{Fonts, Label};
 
+pub(crate) mod automation;
+
 /// A control on the capture toolbar (F-05).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Control {
@@ -20,7 +22,8 @@ pub(crate) enum Control {
     Cancel,
 }
 
-/// The toolbar's controls in the order it shows them and Tab visits them.
+/// The toolbar's controls in the order it shows them, Tab visits them and UI Automation lists
+/// them.
 pub(crate) const CONTROLS: [Control; 4] =
     [Control::Copy, Control::Save, Control::Edit, Control::Cancel];
 
