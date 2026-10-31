@@ -3,6 +3,14 @@ use toml::{Table, Value};
 /// The largest settings file read, in bytes (C-13).
 pub const MAX_SETTINGS_BYTES: usize = 64 * 1024;
 
+/// The longest `save_folder` read, in UTF-8 bytes: written back with every other setting at its
+/// longest and every byte escaped (`\u001F`, 6 bytes), the file stays within
+/// [`MAX_SETTINGS_BYTES`] (C-13).
+const MAX_SAVE_FOLDER_BYTES: usize = (MAX_SETTINGS_BYTES - 1024) / 6;
+
+// F-54: a folder within the limit is also within Windows' 32,767-unit path limit.
+const _: () = assert!(MAX_SAVE_FOLDER_BYTES <= 32_767);
+
 /// Everything `cleanshot.toml` holds (F-54). Each field has the default [`Settings::default`]
 /// gives it.
 #[expect(
@@ -154,7 +162,7 @@ impl Settings {
         let save_folder = reader.read("save_folder", |value| {
             value
                 .as_str()
-                .filter(|folder| !folder.is_empty())
+                .filter(|folder| !folder.is_empty() && folder.len() <= MAX_SAVE_FOLDER_BYTES)
                 .map(|folder| Some(folder.to_owned()))
         });
         let settings = Self {
@@ -478,6 +486,43 @@ mod tests {
     }
 
     #[test]
+    fn c13_the_largest_settings_read_write_back_within_the_size_limit() {
+        let longest = hotkey("Ctrl+Alt+Shift+Win+F24");
+        let largest = Settings {
+            save_folder: Some("\u{1F}".repeat(MAX_SAVE_FOLDER_BYTES)),
+            hotkeys: Hotkeys {
+                region: longest,
+                last_region: longest,
+                full_screen: longest,
+                window: longest,
+                capture_panel: longest,
+            },
+            ..Settings::default()
+        };
+        let written = largest.to_toml();
+        assert!(
+            written.len() <= MAX_SETTINGS_BYTES,
+            "{} bytes",
+            written.len()
+        );
+        assert_eq!(
+            Settings::from_toml(written.as_bytes()),
+            (largest, Vec::new())
+        );
+
+        let too_long = format!(
+            "save_folder = '{}'\n",
+            "x".repeat(MAX_SAVE_FOLDER_BYTES + 1)
+        );
+        let (settings, problems) = Settings::from_toml(too_long.as_bytes());
+        assert_eq!(settings.save_folder, None);
+        let invalid = SettingsProblem::InvalidValue {
+            key: "save_folder".into(),
+        };
+        assert_eq!(problems, [invalid]);
+    }
+
+    #[test]
     fn f51_hotkey_names_ignore_case_and_print_in_one_spelling() {
         assert_eq!(hotkey(" shift + ctrl + f12 ").to_string(), "Ctrl+Shift+F12");
         assert_eq!(hotkey("win+alt+a").to_string(), "Alt+Win+A");
@@ -578,11 +623,8 @@ mod tests {
                 }
             }
         }
-        let written = settings.to_toml();
-        if written.len() <= MAX_SETTINGS_BYTES {
-            let read_back = Settings::from_toml(written.as_bytes());
-            assert_eq!(read_back, (settings, Vec::new()), "{context}");
-        }
+        let read_back = Settings::from_toml(settings.to_toml().as_bytes());
+        assert_eq!(read_back, (settings, Vec::new()), "{context}");
     }
 
     #[test]
