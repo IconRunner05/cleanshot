@@ -623,6 +623,19 @@ pub(crate) fn open_with(
     .map_err(|error| Error::WindowOpen(error.into()))
 }
 
+/// P-08's bench: draws the editor in `window` at `placement`, where a pan or zoom (F-39) would
+/// leave it, or fitted for `None`.
+pub(crate) fn show_at(window: &Window, cx: &mut App, placement: Option<Placement>) {
+    let view = window
+        .root::<EditorView>()
+        .flatten()
+        .expect("the bench draws only in a window open_with opened on an editor");
+    view.update(cx, |view, cx| {
+        view.placement = placement;
+        cx.notify();
+    });
+}
+
 impl EditorWindow {
     /// Closes the window. A window the user already closed is left as it is.
     pub fn close(self, cx: &mut App) {
