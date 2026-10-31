@@ -1,7 +1,11 @@
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+#[cfg(any(test, feature = "field-test"))]
+use windows::Win32::System::DataExchange::GetClipboardData;
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
+#[cfg(any(test, feature = "field-test"))]
+use windows::Win32::System::Memory::GlobalSize;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_DIBV5;
 use windows::core::w;
@@ -61,6 +65,31 @@ fn set(format: u32, bytes: &[u8]) -> windows::core::Result<()> {
     }
 }
 
+/// The block the clipboard holds as `format`, whole: Windows may round it up past the bytes
+/// that were put there.
+#[cfg(any(test, feature = "field-test"))]
+pub(crate) fn read(format: u32) -> windows::core::Result<Vec<u8>> {
+    // SAFETY: the clipboard is opened and closed here; the block is read only while locked
+    // and only within its own size.
+    unsafe {
+        OpenClipboard(None)?;
+        let read = GetClipboardData(format).and_then(|handle| {
+            let block = HGLOBAL(handle.0);
+            let start = GlobalLock(block).cast::<u8>();
+            if start.is_null() {
+                return Err(windows::core::Error::from_thread());
+            }
+            let bytes = std::slice::from_raw_parts(start, GlobalSize(block)).to_vec();
+            // GlobalUnlock reports an error when the lock count reaches zero, which is
+            // the expected outcome here.
+            let _ = GlobalUnlock(block);
+            Ok(bytes)
+        });
+        CloseClipboard()?;
+        read
+    }
+}
+
 /// Frees `block` and gives back `error`, the failure that kept the clipboard from taking it.
 unsafe fn freed(block: HGLOBAL, error: windows::core::Error) -> windows::core::Error {
     // SAFETY: the caller owns `block`, unlocked, and no clipboard holds it. A block that will
@@ -71,32 +100,16 @@ unsafe fn freed(block: HGLOBAL, error: windows::core::Error) -> windows::core::E
 
 #[cfg(test)]
 mod tests {
-    use windows::Win32::System::DataExchange::GetClipboardData;
-
     use super::*;
-
-    fn read(format: u32, length: usize) -> Vec<u8> {
-        // SAFETY: the clipboard is opened and closed here; the block is read only while
-        // locked and only up to the length written by the test.
-        unsafe {
-            OpenClipboard(None).expect("the clipboard opens");
-            let handle = GetClipboardData(format).expect("the format is present");
-            let block = HGLOBAL(handle.0);
-            let start = GlobalLock(block).cast::<u8>();
-            assert!(!start.is_null(), "the clipboard block locks");
-            let bytes = std::slice::from_raw_parts(start, length).to_vec();
-            let _ = GlobalUnlock(block);
-            CloseClipboard().expect("the clipboard closes");
-            bytes
-        }
-    }
 
     #[test]
     fn f20_copy_puts_the_bitmap_and_the_png_on_the_clipboard_unchanged() {
         let bitmap: Vec<u8> = (0..=255).collect();
         let png: Vec<u8> = (0..=255).rev().collect();
         copy_image(&bitmap, &png).expect("the clipboard takes the image");
-        assert_eq!(read(u32::from(CF_DIBV5.0), bitmap.len()), bitmap);
-        assert_eq!(read(png_format().expect("PNG registers"), png.len()), png);
+        let bitmap_read = read(u32::from(CF_DIBV5.0)).expect("the bitmap is on the clipboard");
+        let png_read = read(png_format().expect("PNG registers")).expect("the PNG is too");
+        assert_eq!(bitmap_read[..bitmap.len()], bitmap);
+        assert_eq!(png_read[..png.len()], png);
     }
 }

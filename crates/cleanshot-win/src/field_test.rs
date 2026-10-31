@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HGLOBAL, HMODULE, RECT};
+use windows::Win32::Foundation::{HMODULE, RECT};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
 };
@@ -20,8 +20,6 @@ use windows::Win32::Graphics::Gdi::{
     DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW, HMONITOR, MONITORINFO,
     MONITORINFOEXW,
 };
-use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
-use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Registry::{
     HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
@@ -466,25 +464,13 @@ fn write_clipboard(text: &str) -> Result<(), windows::core::Error> {
 }
 
 fn read_clipboard() -> Result<String, windows::core::Error> {
-    // SAFETY: the clipboard is opened and closed here; the data handle is read only while
-    // locked, and only up to its NUL.
-    unsafe {
-        OpenClipboard(None)?;
-        let read = GetClipboardData(u32::from(CF_UNICODETEXT.0)).and_then(|handle| {
-            let block = HGLOBAL(handle.0);
-            let start = GlobalLock(block).cast::<u16>();
-            if start.is_null() {
-                return Err(windows::core::Error::from_thread());
-            }
-            let mut length = 0;
-            while *start.add(length) != 0 {
-                length += 1;
-            }
-            let text = String::from_utf16_lossy(std::slice::from_raw_parts(start, length));
-            let _ = GlobalUnlock(block);
-            Ok(text)
-        });
-        CloseClipboard()?;
-        read
-    }
+    let bytes = crate::clipboard::read(u32::from(CF_UNICODETEXT.0))?;
+    let text: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&unit| u16::from_le_bytes(unit))
+        .take_while(|&unit| unit != 0)
+        .collect();
+    Ok(String::from_utf16_lossy(&text))
 }

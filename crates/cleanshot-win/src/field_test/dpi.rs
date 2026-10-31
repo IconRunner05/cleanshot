@@ -3,15 +3,13 @@
 
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, CDS_TYPE, ChangeDisplaySettingsW, DEVMODEW,
     DIB_RGB_COLORS, DISP_CHANGE_SUCCESSFUL, DM_PELSHEIGHT, DM_PELSWIDTH, EndPaint,
     MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint, PAINTSTRUCT, SetDIBitsToDevice, UpdateWindow,
 };
-use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::CF_DIBV5;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
@@ -313,27 +311,7 @@ fn copy_screen(mut copies: impl FnMut() -> u32) -> Result<CopiedImage, DpiRunErr
     if !within(TIMEOUT, || copies() > before) {
         return Err(DpiRunError::NothingCopied(TIMEOUT));
     }
-    parse_dib(&clipboard_dibv5().map_err(DpiRunError::ClipboardHeld)?)
-}
-
-fn clipboard_dibv5() -> windows::core::Result<Vec<u8>> {
-    // SAFETY: the clipboard is opened and closed here; the block is read only while locked and
-    // only within its own size.
-    unsafe {
-        OpenClipboard(None)?;
-        let read = GetClipboardData(u32::from(CF_DIBV5.0)).and_then(|handle| {
-            let block = HGLOBAL(handle.0);
-            let start = GlobalLock(block).cast::<u8>();
-            if start.is_null() {
-                return Err(windows::core::Error::from_thread());
-            }
-            let bytes = std::slice::from_raw_parts(start, GlobalSize(block)).to_vec();
-            let _ = GlobalUnlock(block);
-            Ok(bytes)
-        });
-        CloseClipboard()?;
-        read
-    }
+    parse_dib(&crate::clipboard::read(u32::from(CF_DIBV5.0)).map_err(DpiRunError::ClipboardHeld)?)
 }
 
 fn parse_dib(bytes: &[u8]) -> Result<CopiedImage, DpiRunError> {
