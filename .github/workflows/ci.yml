@@ -27,6 +27,12 @@ jobs:
       - name: Code is formatted
         run: cargo fmt --all -- --check
 
+      - name: Install ast-grep
+        run: npm install -g @ast-grep/cli@0.51.0
+
+      - name: Code passes the ast-grep rules in sgconfig.yml
+        run: ast-grep scan
+
       - name: Clippy reports no warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 

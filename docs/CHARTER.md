@@ -322,7 +322,7 @@ The app manifest (`crates/cleanshot-app/cleanshot.exe.manifest`, embedded by the
 
 Gates 3–5 are `charter-gates.sh`. CI runs it on the release exe it builds and uploads. The fold bar on a Mac or Linux machine also runs it, on a scan-only exe that cargo-xwin builds with the `scan-only` profile. That exe is never shipped and cannot run: off Windows, GPUI's shaders cannot be compiled into it, so it reads them from the build machine's cargo checkout.
 
-1. fmt, clippy, tests (x64), build (ARM64).
+1. fmt, `ast-grep scan` (the rules `sgconfig.yml` names), clippy, tests (x64), build (ARM64).
 2. `cargo deny check` (advisories, bans, licences, sources) and `cargo audit`.
 3. **Binary scan**: fail on imports from `ws2_32`, `winhttp`, `wininet`, or on `CreateProcess*` / `ShellExecute*` / `WinExec` (C-10, C-11); fail unless it imports `SetDefaultDllDirectories` (C-12); fail if ASLR, DEP or CFG is not set (C-17); fail unless the exe is a Windows GUI exe, so no console window opens beside the tray; fail if any DLL is imported that is not on the script's system DLL list (C-02); fail if the release exe holds a build-host path (`/Users/`, `/home/`, `C:\Users\`, `\.cargo\`), so nothing about the builder ships.
 4. `unsafe` scan: fail if a crate root other than `cleanshot-win`'s lacks `#![forbid(unsafe_code)]`, or `unsafe` appears outside `crates/cleanshot-win` (C-16).
