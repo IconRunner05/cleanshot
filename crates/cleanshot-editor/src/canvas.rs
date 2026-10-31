@@ -188,9 +188,10 @@ pub(crate) fn document_canvas(
         |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
         move |bounds, hitbox, window, cx| {
             let image = document.base();
-            let placement = placement
-                .unwrap_or_else(|| Placement::fitted(bounds.size, image, window.scale_factor()));
-            let fit = Fit::new(bounds, image, placement);
+            let scale_factor = window.scale_factor();
+            let placement =
+                placement.unwrap_or_else(|| Placement::fitted(bounds.size, image, scale_factor));
+            let fit = Fit::new(bounds, image, placement, scale_factor);
             // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
             let _ = window.paint_image(
                 fit.image_bounds,

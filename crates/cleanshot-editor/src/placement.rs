@@ -67,8 +67,15 @@ impl Fit {
         clippy::cast_precision_loss,
         reason = "image sides are far below 2^24, where f32 stops being exact"
     )]
-    pub fn new(canvas: Bounds<Pixels>, image: &RgbaImage, placement: Placement) -> Self {
-        let origin = canvas.origin + placement.corner;
+    pub fn new(
+        canvas: Bounds<Pixels>,
+        image: &RgbaImage,
+        placement: Placement,
+        scale_factor: f32,
+    ) -> Self {
+        // D-41: the shapes start on the device pixel GPUI draws the image from.
+        let origin = (canvas.origin + placement.corner)
+            .map(|at| px((f32::from(at) * scale_factor).round() / scale_factor));
         let image_size = size(
             px(image.width() as f32 * placement.scale),
             px(image.height() as f32 * placement.scale),
@@ -126,7 +133,31 @@ mod tests {
             canvas,
             &image,
             Placement::fitted(CANVAS, &image, scale_factor),
+            scale_factor,
         )
+    }
+
+    #[test]
+    fn d41_at_every_display_scaling_a_fitted_capture_has_each_pixel_on_its_own_device_pixel() {
+        let image = image(301, 157);
+        let canvas = Bounds::new(point(px(0.3), px(41.7)), size(px(997.0), px(603.0)));
+        for scale_factor in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            let placement = Placement::fitted(canvas.size, &image, scale_factor);
+            let fit = Fit::new(canvas, &image, placement, scale_factor);
+            assert!(
+                (fit.scale * scale_factor - 1.0).abs() < 1e-6,
+                "{scale_factor}"
+            );
+            for (x, y) in [(0.0, 0.0), (1.0, 1.0), (150.0, 77.0), (301.0, 157.0)] {
+                let corner = fit.point(PointF { x, y });
+                let device = |at: Pixels| f32::from(at) * scale_factor;
+                let (left, top) = (device(corner.x), device(corner.y));
+                assert!(
+                    (left - left.round()).abs() < 1e-3 && (top - top.round()).abs() < 1e-3,
+                    "{scale_factor}: pixel corner {x},{y} at device {left},{top}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -159,9 +190,9 @@ mod tests {
         let canvas = Bounds::new(point(px(20.0), px(30.0)), CANVAS);
         let placement = Placement::fitted(CANVAS, &image, 1.0);
         let pointer = point(px(612.0), px(411.0));
-        let before = Fit::new(canvas, &image, placement).image_point(canvas.origin + pointer);
+        let before = Fit::new(canvas, &image, placement, 1.0).image_point(canvas.origin + pointer);
         let zoomed = placement.zoomed(3.0, pointer);
-        let after = Fit::new(canvas, &image, zoomed).image_point(canvas.origin + pointer);
+        let after = Fit::new(canvas, &image, zoomed, 1.0).image_point(canvas.origin + pointer);
         assert_eq!(zoomed.scale, 3.0);
         assert!((after.x - before.x).abs() < 1e-3 && (after.y - before.y).abs() < 1e-3);
     }
