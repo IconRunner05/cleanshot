@@ -64,26 +64,23 @@ enum RedactionPreview {
 }
 
 impl RedactionPreviews {
-    /// Keeps a preview for each redaction among `shapes`, making the ones it lacks from `image`
-    /// and dropping the ones no longer drawn.
-    pub(crate) fn update<'a>(
-        &mut self,
-        image: &RgbaImage,
-        shapes: impl Iterator<Item = &'a Shape>,
-    ) {
+    /// Keeps a preview for each redaction in `document`, making the ones it lacks and dropping
+    /// the ones no longer there. A redaction still being dragged is not in the document, so it
+    /// has none until release and paints as a solid fill (D-58).
+    pub(crate) fn update(&mut self, document: &Document) {
         let mut kept = HashMap::new();
-        for shape in shapes {
-            let Shape::Redact { rect, mode } = shape else {
+        for entry in document.shapes() {
+            let Shape::Redact { rect, mode } = entry.shape else {
                 continue;
             };
-            let key = RedactionKey::new(*rect, *mode);
+            let key = RedactionKey::new(rect, mode);
             if kept.contains_key(&key) {
                 continue;
             }
             let preview = self
                 .0
                 .remove(&key)
-                .unwrap_or_else(|| redaction_preview(image, *rect, *mode));
+                .unwrap_or_else(|| redaction_preview(document.base(), rect, mode));
             kept.insert(key, preview);
         }
         self.0 = kept;
@@ -442,6 +439,7 @@ pub(crate) fn rgba(color: Color) -> Rgba {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cleanshot_core::History;
 
     fn image_of(previews: &RedactionPreviews, rect: RectF, mode: RedactMode) -> Arc<RenderImage> {
         match previews.0.get(&RedactionKey::new(rect, mode)) {
@@ -462,13 +460,29 @@ mod tests {
             height: 10.0,
         };
         let mode = RedactMode::Blur;
-        let redaction = Shape::Redact { rect, mode };
+        let add = || Command::Add {
+            shape: Shape::Redact { rect, mode },
+            style: Style {
+                color: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                stroke_width: 1.0,
+            },
+        };
+        let mut history = History::new(Document::new(Arc::new(image)));
+        history.apply(add()).unwrap();
+        history.apply(add()).unwrap();
         let mut previews = RedactionPreviews::default();
-        previews.update(&image, [&redaction, &redaction].into_iter());
+        previews.update(history.document());
         let first = image_of(&previews, rect, mode);
-        previews.update(&image, [&redaction].into_iter());
+        history.undo().unwrap();
+        previews.update(history.document());
         assert!(Arc::ptr_eq(&first, &image_of(&previews, rect, mode)));
-        previews.update(&image, std::iter::empty());
+        history.undo().unwrap();
+        previews.update(history.document());
         assert!(previews.0.is_empty());
     }
 }

@@ -421,12 +421,7 @@ impl Render for EditorView {
                 over: None,
             },
         };
-        let previewed = match &overlay.preview {
-            Some(Command::Add { shape, .. } | Command::Replace { shape, .. }) => Some(shape),
-            Some(Command::Remove(_) | Command::SetCrop(_)) | None => None,
-        };
-        let shapes = self.document.shapes().iter().map(|entry| &entry.shape);
-        Rc::make_mut(&mut self.redactions).update(self.document.base(), shapes.chain(previewed));
+        Rc::make_mut(&mut self.redactions).update(&self.document);
         let canvas = document_canvas(
             Rc::clone(&self.document),
             Arc::clone(&self.base),
