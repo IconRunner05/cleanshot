@@ -365,7 +365,7 @@ Releases ship as a bare, signed `cleanshot.exe` on GitHub Releases. A winget **p
 1. Build x64 (and ARM64, once enabled) on `windows-latest` from the tag; never on a developer machine. A scan-only exe from the fold bar is never released.
 2. Run every CI gate (section 7) against the release binary.
 3. Code-sign the exe (signing service is an open question; until then, releases are marked pre-release).
-4. Publish to GitHub Releases: `cleanshot-X.Y.Z-x64.exe`, `SHA256SUMS`, CycloneDX SBOM, and a GitHub build-provenance attestation.
+4. Publish to GitHub Releases: `cleanshot-X.Y.Z-x64.exe`, `SHA256SUMS`, CycloneDX SBOM, and a GitHub build-provenance attestation. `.github/workflows/release.yml` does steps 1, 2 and 4 on a tag, taking the release notes from the version's `CHANGELOG.md` section; run by hand, it builds and checks the same files and uploads them without publishing.
 5. Open or update the winget-pkgs PR with a winget releaser action, such as `winget-releaser` (Komac). These tools update an existing package, so **v1.0.0 is submitted to `microsoft/winget-pkgs` by hand once**.
 
 ### winget manifest shape
@@ -453,6 +453,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-70 | 2026-10-31 | `cargo-cyclonedx` (pinned, installed with `--locked`) writes the release's CycloneDX SBOM in the release workflow only. It is a CI tool, not a dependency of any crate, so section 6 does not list it | decided (owner, 2026-10-31) | Section 9 asks for a CycloneDX SBOM, and cargo-cyclonedx is the CycloneDX project's own generator for Cargo, reading the same `Cargo.lock` the exe is built from |
 | D-69 | 2026-10-31 | Text is kerned on screen and in the export. The editor asks GPUI for `kern` on its Inter; the export shapes with the features GPUI then applies, kerning plus standard and contextual ligatures and contextual alternates, and none of DirectWrite's other defaults | decided (owner, 2026-10-31) | The export must keep the widths the user saw (F-34, D-53). GPUI replaces DirectWrite's default features with its own list, which leaves out kerning unless the font asks for it; kerning on both sides was the owner's look decision |
 | D-68 | 2026-10-31 | The overlay appears with no fade and closes with a 120 ms fade out, all its monitors together, after the copy or save it was closed for has finished. Edit hands over to the editor with no fade, so the editor is not held back. The fade is skipped when Windows' Animation effects setting is off; if the setting cannot be read or the fade fails, the overlay closes at once and the tray says why | decided (orchestrator, 2026-10-31) | F-13 asks for 120-150 ms fades but not where. A fade in would hold the overlay back from P-01's 100 ms, and a fade out costs nothing the user waits on, because the image is already delivered |
 | D-67 | 2026-10-31 | Until M4 the tray menu holds Capture region, Capture screen and Exit. Settings joins it with the F-55 settings window, so the menu never offers an item that opens nothing | decided (orchestrator, 2026-10-31) | F-50 is M1 and names a Settings item, but the window it opens is F-55, an M4 feature. Meanwhile the settings live in cleanshot.toml (D-30) |

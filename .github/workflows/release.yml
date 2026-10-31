@@ -1,0 +1,97 @@
+name: Release
+
+# A tag vX.Y.Z publishes that version as a GitHub pre-release (CHARTER 9). A manual run builds
+# and checks the same files without publishing them, and uploads them as an artifact.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Every CI gate (CHARTER 7), and the release exe they scanned, uploaded as cleanshot-exe.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The tag names the version in Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          version=$(cargo pkgid -p cleanshot-app | sed 's/.*[#@]//')
+          if [[ $GITHUB_REF == refs/tags/* && $GITHUB_REF_NAME != "v$version" ]]; then
+            echo "FAIL: the tag is $GITHUB_REF_NAME but cleanshot-app is version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: CHANGELOG.md has a section for this version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v heading="## [$VERSION]" 'index($0, heading) == 1 { on = 1; next } on && /^## \[/ { exit } on' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md" || { echo "FAIL: CHANGELOG.md has no notes under ## [$VERSION]"; exit 1; }
+
+      - name: Download the exe the CI gates scanned
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cleanshot-exe
+          path: ${{ runner.temp }}/exe
+
+      - name: Install cargo-cyclonedx (D-70)
+        run: cargo install --locked cargo-cyclonedx@0.5.9
+
+      - name: Release files are the exe, its SBOM and their checksums
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir dist
+          cp "$RUNNER_TEMP/exe/cleanshot.exe" "dist/cleanshot-$VERSION-x64.exe"
+          cargo cyclonedx --manifest-path crates/cleanshot-app/Cargo.toml --format json \
+            --spec-version 1.5 --target x86_64-pc-windows-msvc --override-filename sbom
+          cp crates/cleanshot-app/sbom.json "dist/cleanshot-$VERSION-x64.cdx.json"
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest the exe's build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/cleanshot-${{ steps.version.outputs.version }}-x64.exe
+
+      - name: Publish the pre-release, unsigned until signing is decided (CHARTER 11)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --verify-tag --prerelease --title "Cleanshot $VERSION"
+          --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Upload the release files of a manual run
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
