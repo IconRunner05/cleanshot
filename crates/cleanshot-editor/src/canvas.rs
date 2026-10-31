@@ -1,10 +1,13 @@
+use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, PointF, RgbaImage, Shape, ShapeId, Style, arrow_head, handles,
+    Color, Command, Document, Fill, PointF, RectF, RedactMode, RgbaImage, Shape, ShapeId, Style,
+    arrow_head, handles,
 };
+use cleanshot_render::{Redacted, redacted};
 use gpui::{
     App, BorderStyle, Bounds, Canvas, DispatchPhase, Hitbox, HitboxBehavior, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, RenderImage, Rgba,
@@ -26,6 +29,105 @@ pub(crate) fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
         *bgra = [rgba[2], rgba[1], rgba[0], rgba[3]];
     }
     Arc::new(RenderImage::new(smallvec![image::Frame::new(buffer)]))
+}
+
+/// What the canvas shows for each redaction: the pixels an export leaves there (F-36, D-58),
+/// made once for each rectangle and mode rather than every frame.
+#[derive(Clone, Default)]
+pub(crate) struct RedactionPreviews(HashMap<RedactionKey, RedactionPreview>);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct RedactionKey {
+    rect: [u32; 4],
+    mode: RedactMode,
+}
+
+impl RedactionKey {
+    fn new(rect: RectF, mode: RedactMode) -> Self {
+        Self {
+            rect: [rect.x, rect.y, rect.width, rect.height].map(f32::to_bits),
+            mode,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum RedactionPreview {
+    Pixels {
+        bounds: RectF,
+        image: Arc<RenderImage>,
+    },
+    CoversNoPixel,
+    /// The preview could not be made, so the area is painted over to keep what is under it
+    /// hidden.
+    Failed,
+}
+
+impl RedactionPreviews {
+    /// Keeps a preview for each redaction among `shapes`, making the ones it lacks from `image`
+    /// and dropping the ones no longer drawn.
+    pub(crate) fn update<'a>(
+        &mut self,
+        image: &RgbaImage,
+        shapes: impl Iterator<Item = &'a Shape>,
+    ) {
+        let mut kept = HashMap::new();
+        for shape in shapes {
+            let Shape::Redact { rect, mode } = shape else {
+                continue;
+            };
+            let key = RedactionKey::new(*rect, *mode);
+            if kept.contains_key(&key) {
+                continue;
+            }
+            let preview = self
+                .0
+                .remove(&key)
+                .unwrap_or_else(|| redaction_preview(image, *rect, *mode));
+            kept.insert(key, preview);
+        }
+        self.0 = kept;
+    }
+
+    fn paint(&self, rect: RectF, mode: RedactMode, fit: &Fit, window: &mut Window) {
+        let hide = |window: &mut Window| window.paint_quad(fill(fit.bounds(rect), gpui::black()));
+        match self.0.get(&RedactionKey::new(rect, mode)) {
+            Some(RedactionPreview::Pixels { bounds, image }) => {
+                let bounds = fit.bounds(*bounds);
+                if let Err(error) =
+                    window.paint_image(bounds, bounds, 0.0.into(), Arc::clone(image), 0, false)
+                {
+                    eprintln!("the redaction preview could not be drawn: {error:#}");
+                    hide(window);
+                }
+            }
+            Some(RedactionPreview::CoversNoPixel) => {}
+            Some(RedactionPreview::Failed) | None => hide(window),
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "image sides are far below 2^24, where f32 stops being exact"
+)]
+fn redaction_preview(image: &RgbaImage, rect: RectF, mode: RedactMode) -> RedactionPreview {
+    match redacted(image, rect, mode) {
+        Ok(Some(Redacted { left, top, pixels })) => RedactionPreview::Pixels {
+            bounds: RectF {
+                x: left as f32,
+                y: top as f32,
+                width: pixels.width() as f32,
+                height: pixels.height() as f32,
+            },
+            image: render_image(&pixels),
+        },
+        Ok(None) => RedactionPreview::CoversNoPixel,
+        Err(error) => {
+            eprintln!("the redaction preview could not be made: {error}");
+            RedactionPreview::Failed
+        }
+    }
 }
 
 /// The pointer on the canvas, in image pixels, clamped to the image.
@@ -81,6 +183,7 @@ pub(crate) fn document_canvas(
     document: Rc<Document>,
     base: Arc<RenderImage>,
     placement: Option<Placement>,
+    redactions: Rc<RedactionPreviews>,
     overlay: Overlay,
     on_pointer: OnPointer,
 ) -> Canvas<Hitbox> {
@@ -111,13 +214,13 @@ pub(crate) fn document_canvas(
                     Some((id, shape, style)) if id == entry.id => (shape, style),
                     Some(_) | None => (&entry.shape, &entry.style),
                 };
-                paint_shape(shape, *style, &fit, window, cx);
+                paint_shape(shape, *style, &fit, &redactions, window, cx);
                 if overlay.selected == Some(entry.id) {
                     selected_shape = Some(shape);
                 }
             }
             if let Some((shape, style)) = added {
-                paint_shape(shape, *style, &fit, window, cx);
+                paint_shape(shape, *style, &fit, &redactions, window, cx);
             }
             if let Some(Command::SetCrop(Some(crop))) = &overlay.preview {
                 paint_outline(fit.bounds(*crop), window);
@@ -232,7 +335,14 @@ fn paint_handle(centre: Point<Pixels>, window: &mut Window) {
     ));
 }
 
-fn paint_shape(shape: &Shape, style: Style, fit: &Fit, window: &mut Window, cx: &mut App) {
+fn paint_shape(
+    shape: &Shape,
+    style: Style,
+    fit: &Fit,
+    redactions: &RedactionPreviews,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let color = rgba(style.color);
     let width = px(style.stroke_width * fit.scale);
     let stroke = PathBuilder::stroke(width);
@@ -290,8 +400,7 @@ fn paint_shape(shape: &Shape, style: Style, fit: &Fit, window: &mut Window, cx: 
             paint_polygon(window, stroke, &points, false, color);
         }
         Shape::Text(block) => paint_text(block, color, fit, window, cx),
-        // The editor's redaction preview comes with its tool, after the M0 gate.
-        Shape::Redact { .. } => {}
+        Shape::Redact { rect, mode } => redactions.paint(*rect, *mode, fit, window),
     }
 }
 
@@ -327,5 +436,39 @@ pub(crate) fn rgba(color: Color) -> Rgba {
         g: f32::from(color.g) / 255.0,
         b: f32::from(color.b) / 255.0,
         a: f32::from(color.a) / 255.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image_of(previews: &RedactionPreviews, rect: RectF, mode: RedactMode) -> Arc<RenderImage> {
+        match previews.0.get(&RedactionKey::new(rect, mode)) {
+            Some(RedactionPreview::Pixels { image, .. }) => Arc::clone(image),
+            Some(RedactionPreview::CoversNoPixel | RedactionPreview::Failed) | None => {
+                panic!("a preview of {rect:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn f36_a_redaction_preview_is_made_once_and_dropped_with_its_redaction() {
+        let image = RgbaImage::new(64, 48, vec![200; 64 * 48 * 4]).unwrap();
+        let rect = RectF {
+            x: 3.0,
+            y: 2.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        let mode = RedactMode::Blur;
+        let redaction = Shape::Redact { rect, mode };
+        let mut previews = RedactionPreviews::default();
+        previews.update(&image, [&redaction, &redaction].into_iter());
+        let first = image_of(&previews, rect, mode);
+        previews.update(&image, [&redaction].into_iter());
+        assert!(Arc::ptr_eq(&first, &image_of(&previews, rect, mode)));
+        previews.update(&image, std::iter::empty());
+        assert!(previews.0.is_empty());
     }
 }

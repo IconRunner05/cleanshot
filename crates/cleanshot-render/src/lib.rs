@@ -13,6 +13,7 @@ use cleanshot_core::{ImageError, RectF, ShapeId};
 pub use encode::{Format, encode};
 pub use flatten::flatten;
 pub use gamma::TEXT_GAMMA_RATIOS;
+pub use redact::{Redacted, redacted};
 
 /// Why an export failed.
 #[derive(Debug, thiserror::Error)]

@@ -28,16 +28,7 @@ pub fn flatten(document: &Document, masks: &TextMasks) -> Result<RgbaImage, Erro
         width: base.width(),
         height: base.height(),
     };
-    let premultiplied = base
-        .pixels()
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|&[r, g, b, a]| {
-            let pixel = ColorU8::from_rgba(r, g, b, a).premultiply();
-            [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
-        })
-        .collect();
+    let premultiplied = premultiplied(base.pixels());
     let size = IntSize::from_wh(base.width(), base.height()).ok_or_else(too_large)?;
     let mut pixmap = Pixmap::from_vec(premultiplied, size).ok_or_else(too_large)?;
     for entry in document.shapes() {
@@ -56,15 +47,32 @@ pub fn flatten(document: &Document, masks: &TextMasks) -> Result<RgbaImage, Erro
             .and_then(|bounds| pixmap.clone_rect(bounds))
             .ok_or(Error::CropOutsideImage(crop))?;
     }
-    let straight = pixmap
+    RgbaImage::new(pixmap.width(), pixmap.height(), straight(&pixmap)).map_err(Error::Output)
+}
+
+/// Straight RGBA bytes as the premultiplied ones tiny-skia draws on.
+pub(crate) fn premultiplied(straight: &[u8]) -> Vec<u8> {
+    straight
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, a]| {
+            let pixel = ColorU8::from_rgba(r, g, b, a).premultiply();
+            [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
+        })
+        .collect()
+}
+
+/// `pixmap`'s pixels as straight RGBA bytes.
+pub(crate) fn straight(pixmap: &Pixmap) -> Vec<u8> {
+    pixmap
         .pixels()
         .iter()
         .flat_map(|pixel| {
             let pixel = pixel.demultiply();
             [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
         })
-        .collect();
-    RgbaImage::new(pixmap.width(), pixmap.height(), straight).map_err(Error::Output)
+        .collect()
 }
 
 /// The columns and rows of every image pixel `rect` touches, so fractional coordinates lose no

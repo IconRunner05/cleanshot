@@ -105,7 +105,7 @@ pub enum Fill {
 }
 
 /// How a redaction replaces the pixels under it (F-36).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RedactMode {
     Pixelate,
     Blur,

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, History, PointF, RectF, RgbaImage, Shape, Style, TextBlock,
+    Color, Command, Document, Fill, History, PointF, RectF, RedactMode, RgbaImage, Shape, Style,
+    TextBlock,
 };
 use gpui::{App, Pixels, Point, Window, point, px};
 
@@ -203,7 +204,7 @@ fn synthetic_shape(index: u32) -> Command {
         x: left + width,
         y: top + height,
     };
-    let (shape, alpha) = match index % 8 {
+    let (shape, alpha) = match index % 9 {
         0 => (Shape::Arrow { from, to }, 255),
         1 => (Shape::Line { from, to }, 255),
         2 => (
@@ -239,11 +240,22 @@ fn synthetic_shape(index: u32) -> Command {
             },
             255,
         ),
-        _ => (
+        7 => (
             Shape::Text(
                 TextBlock::new(from, format!("Shape {index}\nof {SHAPES}"), 24.0, 6.0)
                     .expect("24 px and 6 ems make a valid text block"),
             ),
+            255,
+        ),
+        _ => (
+            Shape::Redact {
+                rect,
+                mode: if index.is_multiple_of(2) {
+                    RedactMode::Pixelate
+                } else {
+                    RedactMode::Blur
+                },
+            },
             255,
         ),
     };

@@ -17,7 +17,9 @@ use gpui::{
 };
 
 use crate::Error;
-use crate::canvas::{OnPointer, Overlay, PaintOver, Pointer, document_canvas, render_image};
+use crate::canvas::{
+    OnPointer, Overlay, PaintOver, Pointer, RedactionPreviews, document_canvas, render_image,
+};
 use crate::placement::{Fit, Placement};
 use crate::strip::property_strip;
 use crate::text::register_inter;
@@ -53,6 +55,7 @@ struct EditorView {
     text_box: Option<TextBox>,
     /// How each tool draws, as the property strip sets it; not part of the document.
     looks: Looks,
+    redactions: Rc<RedactionPreviews>,
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
     placement: Option<Placement>,
@@ -97,6 +100,7 @@ impl EditorView {
             drag: None,
             text_box: None,
             looks: Looks::default(),
+            redactions: Rc::default(),
             shift: false,
             placement: None,
             space_held: false,
@@ -416,10 +420,17 @@ impl Render for EditorView {
                 over: None,
             },
         };
+        let previewed = match &overlay.preview {
+            Some(Command::Add { shape, .. } | Command::Replace { shape, .. }) => Some(shape),
+            Some(Command::Remove(_) | Command::SetCrop(_)) | None => None,
+        };
+        let shapes = self.document.shapes().iter().map(|entry| &entry.shape);
+        Rc::make_mut(&mut self.redactions).update(self.document.base(), shapes.chain(previewed));
         let canvas = document_canvas(
             Rc::clone(&self.document),
             Arc::clone(&self.base),
             self.placement,
+            Rc::clone(&self.redactions),
             overlay,
             on_pointer,
         );

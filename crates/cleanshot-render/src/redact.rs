@@ -1,9 +1,10 @@
 use std::ops::Range;
 
-use cleanshot_core::{RectF, RedactMode};
-use tiny_skia::Pixmap;
+use cleanshot_core::{RectF, RedactMode, RgbaImage};
+use tiny_skia::{IntSize, Pixmap};
 
-use crate::flatten::covered_pixels;
+use crate::Error;
+use crate::flatten::{covered_pixels, premultiplied, straight};
 
 /// The side of a pixelation cell in image pixels. Cells are spread evenly over the area, so
 /// none is much smaller than this unless the area itself is.
@@ -50,6 +51,61 @@ pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode) {
             }
         }
     }
+}
+
+/// What a redaction leaves of the screenshot: the pixels it covers, from `left`, `top`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Redacted {
+    pub left: u32,
+    pub top: u32,
+    pub pixels: RgbaImage,
+}
+
+/// The pixels a redaction of `rect` in `mode` leaves of `image`, exactly as an export draws
+/// them where no shape is under it (C-22, F-36); `None` if `rect` covers no pixel.
+///
+/// # Errors
+///
+/// [`Error::TooLarge`] if the covered area exceeds the renderer's size limit.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "an image side is far below 2^24, where f32 stops being exact"
+)]
+pub fn redacted(
+    image: &RgbaImage,
+    rect: RectF,
+    mode: RedactMode,
+) -> Result<Option<Redacted>, Error> {
+    let Some((columns, rows)) = covered_pixels(rect, image.width(), image.height()) else {
+        return Ok(None);
+    };
+    let (width, height) = (columns.end - columns.start, rows.end - rows.start);
+    let too_large = || Error::TooLarge { width, height };
+    let stride = image.width() as usize * 4;
+    let (start, length) = (columns.start as usize * 4, width as usize * 4);
+    let covered: Vec<u8> = rows
+        .clone()
+        .flat_map(|y| {
+            let row = y as usize * stride + start;
+            &image.pixels()[row..row + length]
+        })
+        .copied()
+        .collect();
+    let size = IntSize::from_wh(width, height).ok_or_else(too_large)?;
+    let mut pixmap = Pixmap::from_vec(premultiplied(&covered), size).ok_or_else(too_large)?;
+    let whole = RectF {
+        x: 0.0,
+        y: 0.0,
+        width: width as f32,
+        height: height as f32,
+    };
+    redact(&mut pixmap, whole, mode);
+    let pixels = RgbaImage::new(width, height, straight(&pixmap)).map_err(Error::Output)?;
+    Ok(Some(Redacted {
+        left: columns.start,
+        top: rows.start,
+        pixels,
+    }))
 }
 
 /// Premultiplied RGBA bytes, `stride` pixels to a row.
@@ -274,5 +330,62 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(blurred(0), blurred(1));
+    }
+
+    /// No two neighbouring pixels alike, and every other column half transparent.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "each channel is reduced modulo 256 first"
+    )]
+    fn varied() -> RgbaImage {
+        let mut pixels = Vec::new();
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let alpha = if x % 2 == 0 { 255 } else { 128 };
+                pixels.extend([
+                    ((x * 37 + y * 11) % 256) as u8,
+                    ((x * 5 + y * 53) % 256) as u8,
+                    ((x * y * 7) % 256) as u8,
+                    alpha,
+                ]);
+            }
+        }
+        RgbaImage::new(WIDTH, HEIGHT, pixels).unwrap()
+    }
+
+    #[test]
+    fn f36_the_editor_preview_of_a_redaction_is_the_exported_pixels() {
+        let rect = RectF {
+            x: 3.4,
+            y: 2.6,
+            width: 32.5,
+            height: 16.2,
+        };
+        for mode in [RedactMode::Pixelate, RedactMode::Blur] {
+            let mut history = History::new(Document::new(Arc::new(varied())));
+            let command = Command::Add {
+                shape: Shape::Redact { rect, mode },
+                style: style(MAGENTA),
+            };
+            history.apply(command).unwrap();
+            let export = flatten(history.document(), &TextMasks::default()).unwrap();
+            let preview = redacted(&varied(), rect, mode).unwrap().unwrap();
+            let size = (preview.pixels.width(), preview.pixels.height());
+            assert_eq!(
+                (preview.left, preview.top, size),
+                (3, 2, (33, 17)),
+                "{mode:?}"
+            );
+            for (x, y, pixel) in pixels(&export) {
+                if (3..36).contains(&x) && (2..19).contains(&y) {
+                    let at = ((y - 2) * 33 + (x - 3)) as usize * 4;
+                    assert_eq!(
+                        &preview.pixels.pixels()[at..at + 4],
+                        pixel,
+                        "{mode:?} {x},{y}"
+                    );
+                }
+            }
+        }
     }
 }
