@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Activity, Command, CommandError, Delivered, DeliveryError, Document, Drag, History, KeyAction,
-    Modifiers, Output, Press, RgbaImage, ShapeId, Start, Tool, action_for_key,
+    Modifiers, Output, Press, RgbaImage, ShapeId, Start, Tool, action_for_key, delivery_notice,
 };
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
@@ -185,7 +185,7 @@ impl EditorView {
 
     fn deliver(&mut self, output: Output) {
         if let Some(deliver) = &self.deliver {
-            self.notice = Some(delivery_notice(deliver(output, self.history.document())));
+            self.notice = Some(delivery_notice(&deliver(output, self.history.document())).into());
         }
     }
 
@@ -221,34 +221,6 @@ fn notice_panel(text: SharedString, theme: Theme) -> impl IntoElement {
         .text_color(theme.text)
         .text_size(px(13.0))
         .child(text)
-}
-
-fn delivery_notice(outcome: Result<Delivered, DeliveryError>) -> SharedString {
-    match outcome {
-        Ok(Delivered::Copied) => "Copied to the clipboard".into(),
-        Ok(Delivered::Saved(path)) => format!("Saved to {}", path.display()).into(),
-        Err(DeliveryError::TooLarge { width, height }) => {
-            format!("This {width}x{height} image is too large to export").into()
-        }
-        Err(DeliveryError::ClipboardBusy) => {
-            "Another program is using the clipboard. Try again.".into()
-        }
-        Err(DeliveryError::NoSaveFolder) => {
-            "Windows could not find or create the Screenshots folder".into()
-        }
-        Err(DeliveryError::SaveFolderNotFull { configured }) => {
-            format!("The save folder \"{configured}\" in the settings is not a full path").into()
-        }
-        Err(DeliveryError::NoFreeName { name }) => {
-            format!("Every numbered name for \"{name}\" is taken").into()
-        }
-        Err(DeliveryError::NotWritten { folder }) => {
-            format!("Could not write to {}", folder.display()).into()
-        }
-        Err(DeliveryError::TextNotDrawn) => {
-            "The text could not be drawn, so nothing was copied or saved".into()
-        }
-    }
 }
 
 fn refusal(error: &CommandError) -> &'static str {
@@ -384,37 +356,5 @@ fn window_options(cx: &App) -> WindowOptions {
         }),
         window_min_size: Some(size(px(480.0), px(320.0))),
         ..WindowOptions::default()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::*;
-
-    #[test]
-    fn f40_a_delivery_notice_names_the_file_folder_or_name_it_is_about() {
-        let notice = |outcome| delivery_notice(outcome).to_string();
-        let saved = PathBuf::from(r"C:\Shots\Screenshot 2026-10-30 101500.png");
-        assert!(notice(Ok(Delivered::Saved(saved.clone()))).contains(&*saved.to_string_lossy()));
-        let folder = PathBuf::from(r"D:\Full");
-        let not_written = notice(Err(DeliveryError::NotWritten {
-            folder: folder.clone(),
-        }));
-        assert!(not_written.contains(&*folder.to_string_lossy()));
-        let configured = "Pictures".to_owned();
-        let relative = DeliveryError::SaveFolderNotFull {
-            configured: configured.clone(),
-        };
-        assert!(notice(Err(relative)).contains(&configured));
-        let name = "Screenshot 2026-10-30 101500".to_owned();
-        let taken = DeliveryError::NoFreeName { name: name.clone() };
-        assert!(notice(Err(taken)).contains(&name));
-        let large = DeliveryError::TooLarge {
-            width: 70000,
-            height: 9,
-        };
-        assert!(notice(Err(large)).contains("70000x9"));
     }
 }
