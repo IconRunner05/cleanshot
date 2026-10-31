@@ -72,11 +72,11 @@ same commit.
 - The canvas shapes each text block with GPUI's text system at `size * fit.scale` and paints it in
   the shape's colour, with emoji in their own colours, as GPUI draws them.
 - The edit state is a pure type in core, `TextEdit { text, selection, marked }`, with UTF-16
-  ranges. It implements the operations GPUI's `EntityInputHandler` needs
+  ranges. It implements the operations GPUI's `InputHandler` needs
   (`replace_text_in_range`, `replace_and_mark_text_in_range`, `unmark_text`, select all, delete
   backward and forward, caret moves), so host tests cover typing, selection and an IME composition
-  sequence. `EditorView` implements the trait by forwarding to it, and registers it each frame with
-  `window.handle_input`. GPUI's Windows platform turns `WM_IME_COMPOSITION` into those calls
+  sequence. The editor's `BoxInput` forwards the trait's calls to it, and the canvas registers it
+  each frame with `window.handle_input` while a box is open (D-52). GPUI's Windows platform turns `WM_IME_COMPOSITION` into those calls
   (`events.rs:152-153`).
 - Key routing while editing is part of core's key map: `action_for_key` takes the editor's state
   (idle, dragging, editing, composing) in place of `dragging`. While editing, tool letters, Delete

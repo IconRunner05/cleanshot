@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 
-use cleanshot_core::{INTER, LINE_HEIGHT, TextBlock};
+use cleanshot_core::{INTER, LINE_HEIGHT, PointF, TextBlock};
 use gpui::{
-    App, Font, FontWeight, Global, Pixels, Point, Rgba, TextAlign, TextRun, Window, font, point, px,
+    App, Font, FontWeight, Global, Pixels, Point, Rgba, ShapedLine, TextAlign, TextRun, Window,
+    black, font, point, px,
 };
 
 use crate::Error;
@@ -33,6 +34,65 @@ pub(crate) fn register_inter(cx: &mut App) -> Result<(), Error> {
     Ok(())
 }
 
+/// One line of a text block shaped by GPUI, with the top-left corner and height of its line box.
+pub(crate) struct LaidLine {
+    pub shaped: ShapedLine,
+    pub origin: Point<Pixels>,
+    pub height: Pixels,
+}
+
+/// The size, in pixels per em, that [`em_width`] measures at; advances scale linearly with size
+/// in the natural measuring mode, so any size gives the same ems, and a large one keeps them
+/// precise.
+const MEASURE_SIZE: f32 = 100.0;
+
+/// `block`'s lines shaped in Inter and `color`, `scale` pixels to an image pixel, each line box
+/// placed by `place` on core's baselines.
+pub(crate) fn lay_out(
+    block: &TextBlock,
+    color: Rgba,
+    scale: f32,
+    place: impl Fn(PointF) -> Point<Pixels>,
+    window: &Window,
+) -> Vec<LaidLine> {
+    let font_size = px(block.size() * scale);
+    let height = font_size * LINE_HEIGHT;
+    block
+        .lines()
+        .map(|(line, baseline)| {
+            let shaped = shape(line, font_size, color, window);
+            let origin = line_origin(place(baseline), height, shaped.ascent, shaped.descent);
+            LaidLine {
+                shaped,
+                origin,
+                height,
+            }
+        })
+        .collect()
+}
+
+/// The widest line of `text` in ems, as [`TextBlock::new`] takes it (F-34).
+pub(crate) fn em_width(text: &str, window: &Window) -> f32 {
+    text.split('\n')
+        .map(|line| f32::from(shape(line, px(MEASURE_SIZE), black().into(), window).width()))
+        .fold(0.0, f32::max)
+        / MEASURE_SIZE
+}
+
+fn shape(line: &str, font_size: Pixels, color: Rgba, window: &Window) -> ShapedLine {
+    let run = TextRun {
+        len: line.len(),
+        font: inter(),
+        color: color.into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(line.to_owned().into(), font_size, &[run], None)
+}
+
 pub(crate) fn paint_text(
     block: &TextBlock,
     color: Rgba,
@@ -40,29 +100,11 @@ pub(crate) fn paint_text(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let font_size = px(block.size() * fit.scale);
-    let line_height = font_size * LINE_HEIGHT;
-    for (line, baseline) in block.lines() {
-        let run = TextRun {
-            len: line.len(),
-            font: inter(),
-            color: color.into(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let shaped =
-            window
-                .text_system()
-                .shape_line(line.to_owned().into(), font_size, &[run], None);
-        let origin = line_origin(
-            fit.point(baseline),
-            line_height,
-            shaped.ascent,
-            shaped.descent,
-        );
+    for line in lay_out(block, color, fit.scale, |at| fit.point(at), window) {
         // Fails only if a glyph cannot be rasterised; the document keeps the text.
-        let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
+        let _ = line
+            .shaped
+            .paint(line.origin, line.height, TextAlign::Left, None, window, cx);
     }
 }
 

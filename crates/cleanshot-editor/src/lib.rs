@@ -6,6 +6,7 @@ mod editor_window;
 mod placement;
 mod restricted_platform;
 mod text;
+mod text_box;
 mod theme;
 mod toolbar;
 

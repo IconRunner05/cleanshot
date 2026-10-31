@@ -1,21 +1,24 @@
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Activity, Command, CommandError, Delivered, DeliveryError, Document, Drag, History, KeyAction,
-    Modifiers, Output, Press, RgbaImage, ShapeId, Start, Tool, action_for_key, delivery_notice,
+    Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
+    KeyAction, Modifiers, Output, Press, RgbaImage, ShapeId, Start, TextBlockError, TextEdit,
+    TextKey, TextOrigin, Tool, action_for_key, delivery_notice,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
-    KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowHandle, WindowOptions, div, px, size,
+    App, AppContext, Bounds, Context, FocusHandle, InputHandler, InteractiveElement, IntoElement,
+    KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, TitlebarOptions,
+    UTF16Selection, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 
 use crate::Error;
-use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
-use crate::placement::Placement;
+use crate::canvas::{OnPointer, Overlay, PaintOver, Pointer, document_canvas, render_image};
+use crate::placement::{Fit, Placement};
 use crate::text::register_inter;
+use crate::text_box::TextBox;
 use crate::theme::Theme;
 use crate::toolbar::toolbar;
 
@@ -36,6 +39,7 @@ struct EditorView {
     tool: Tool,
     selected: Option<ShapeId>,
     drag: Option<Drag>,
+    text_box: Option<TextBox>,
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
     placement: Option<Placement>,
@@ -76,6 +80,7 @@ impl EditorView {
             tool: Tool::Select,
             selected: None,
             drag: None,
+            text_box: None,
             shift: false,
             placement: None,
             space_held: false,
@@ -88,7 +93,7 @@ impl EditorView {
         }
     }
 
-    fn pointer(&mut self, pointer: Pointer, cx: &mut Context<Self>) {
+    fn pointer(&mut self, pointer: Pointer, window: &Window, cx: &mut Context<Self>) {
         match pointer {
             Pointer::Press {
                 position,
@@ -101,14 +106,25 @@ impl EditorView {
                 });
             }
             Pointer::Press { at, reach, .. } => {
+                self.notice = None;
+                if let Some(text_box) = &mut self.text_box {
+                    match text_box.press(at, reach, window) {
+                        BoxPress::PlaceCaret | BoxPress::Ignore => {
+                            cx.notify();
+                            return;
+                        }
+                        BoxPress::Commit => self.close_text_box(window),
+                    }
+                }
                 let Press { selected, start } =
                     Drag::press(&self.document, self.tool, self.selected, at, reach);
-                (self.selected, self.notice) = (selected, None);
-                self.drag = match start {
-                    Some(Start::Drag(drag)) => Some(drag),
-                    // F-34: the text box opens with the editor's text input, the next step.
-                    Some(Start::Type(_)) | None => None,
-                };
+                self.selected = selected;
+                self.drag = None;
+                match start {
+                    Some(Start::Drag(drag)) => self.drag = Some(drag),
+                    Some(Start::Type(origin)) => self.open_text_box(origin),
+                    None => {}
+                }
             }
             Pointer::Move { position, .. } if self.pan.is_some() => {
                 self.placement = self
@@ -148,10 +164,10 @@ impl EditorView {
             shift: gpui.shift,
             win: gpui.platform,
         };
-        let activity = if self.drag.is_some() {
-            Activity::Dragging
-        } else {
-            Activity::Idle
+        let activity = match (&self.text_box, &self.drag) {
+            (Some(text_box), _) => text_box.edit().activity(),
+            (None, Some(_)) => Activity::Dragging,
+            (None, None) => Activity::Idle,
         };
         let Some(action) = action_for_key(&event.keystroke.key, modifiers, activity) else {
             return;
@@ -171,8 +187,12 @@ impl EditorView {
             KeyAction::FocusNext => window.focus_next(cx),
             KeyAction::FocusPrevious => window.focus_prev(cx),
             KeyAction::Deliver(output) => self.deliver(output),
-            // F-34: no text box opens until the text tool is wired, so no text key arrives yet.
-            KeyAction::Text(_) => {}
+            KeyAction::Text(TextKey::Commit) => self.close_text_box(window),
+            KeyAction::Text(key) => {
+                if let Some(text_box) = &mut self.text_box {
+                    text_box.key(key, window, cx);
+                }
+            }
         }
         cx.notify();
     }
@@ -181,6 +201,25 @@ impl EditorView {
         match self.history.apply(command) {
             Ok(()) => self.refresh(),
             Err(error) => self.notice = Some(refusal(&error).into()),
+        }
+    }
+
+    fn open_text_box(&mut self, origin: TextOrigin) {
+        match TextBox::open(origin) {
+            Ok(text_box) => self.text_box = Some(text_box),
+            Err(error) => self.notice = Some(text_refusal(&error).into()),
+        }
+    }
+
+    /// F-34: the box's text becomes a shape in one undo step (F-38), and the box closes.
+    fn close_text_box(&mut self, window: &Window) {
+        let Some(text_box) = self.text_box.take() else {
+            return;
+        };
+        match text_box.commit(window) {
+            Ok(Some(command)) => self.apply(command),
+            Ok(None) => {}
+            Err(error) => self.notice = Some(text_refusal(&error).into()),
         }
     }
 
@@ -224,6 +263,15 @@ fn notice_panel(text: SharedString, theme: Theme) -> impl IntoElement {
         .child(text)
 }
 
+fn text_refusal(error: &TextBlockError) -> &'static str {
+    match error {
+        TextBlockError::SizeNotPositive(_) => "That text has no size, so it cannot be edited.",
+        TextBlockError::WidthNotMeasured(_) => {
+            "The text could not be measured, so it was not changed."
+        }
+    }
+}
+
 fn refusal(error: &CommandError) -> &'static str {
     match error {
         CommandError::UnknownShape(_) => {
@@ -240,20 +288,30 @@ impl Render for EditorView {
         let theme = Theme::for_appearance(window.appearance());
         let view = cx.entity().downgrade();
         let picker = view.clone();
-        let on_pick = move |tool, _: &mut Window, cx: &mut App| {
+        let on_pick = move |tool, window: &mut Window, cx: &mut App| {
             // Err only means the window closed, and with it the tool there was to pick.
             let _ = picker.update(cx, |view, cx| {
+                view.close_text_box(window);
                 view.tool = tool;
                 cx.notify();
             });
         };
-        let on_pointer: OnPointer = Rc::new(move |pointer, _, cx| {
+        let input = view.clone();
+        let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {
             // Err only means the window closed, and with it everything the pointer could change.
-            let _ = view.update(cx, |view, cx| view.pointer(pointer, cx));
+            let _ = view.update(cx, |view, cx| view.pointer(pointer, window, cx));
         });
-        let overlay = Overlay {
-            preview: self.drag.as_ref().and_then(|drag| drag.command(self.shift)),
-            selected: self.selected,
+        let overlay = match &self.text_box {
+            Some(text_box) => Overlay {
+                preview: Some(text_box.preview(window)),
+                selected: None,
+                over: Some(paint_text_box(text_box.clone(), input, self.focus.clone())),
+            },
+            None => Overlay {
+                preview: self.drag.as_ref().and_then(|drag| drag.command(self.shift)),
+                selected: self.selected,
+                over: None,
+            },
         };
         let canvas = document_canvas(
             Rc::clone(&self.document),
@@ -290,6 +348,115 @@ impl Render for EditorView {
                     .clone()
                     .map(|notice| notice_panel(notice, theme)),
             )
+    }
+}
+
+/// F-34: draws the box's caret and selection over the canvas, and hands the window's text input
+/// and input method to it while the editor has focus.
+fn paint_text_box(
+    text_box: TextBox,
+    view: WeakEntity<EditorView>,
+    focus: FocusHandle,
+) -> PaintOver {
+    Box::new(move |fit, window, cx| {
+        text_box.paint(fit, window);
+        window.handle_input(&focus, BoxInput { view, fit: *fit }, cx);
+    })
+}
+
+/// The open text box as GPUI's text input and input method see it, in UTF-16 offsets.
+struct BoxInput {
+    view: WeakEntity<EditorView>,
+    fit: Fit,
+}
+
+impl BoxInput {
+    fn read<R>(&self, cx: &App, read: impl FnOnce(&TextBox) -> R) -> Option<R> {
+        self.view.upgrade()?.read(cx).text_box.as_ref().map(read)
+    }
+
+    fn change(&self, cx: &mut App, change: impl FnOnce(&mut TextEdit)) {
+        // Err only means the window closed, and with it the box being typed into.
+        let _ = self.view.update(cx, |view, cx| {
+            if let Some(text_box) = &mut view.text_box {
+                change(text_box.edit_mut());
+                cx.notify();
+            }
+        });
+    }
+}
+
+impl InputHandler for BoxInput {
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Option<UTF16Selection> {
+        self.read(cx, TextBox::selected)
+    }
+
+    fn marked_text_range(&mut self, _: &mut Window, cx: &mut App) -> Option<Range<usize>> {
+        self.read(cx, |text_box| text_box.edit().marked()).flatten()
+    }
+
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        adjusted: &mut Option<Range<usize>>,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Option<String> {
+        let (text, range) = self.read(cx, |text_box| text_box.edit().text_for_range(range))?;
+        *adjusted = Some(range);
+        Some(text)
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut App,
+    ) {
+        self.change(cx, |edit| edit.replace(range, text));
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        selected: Option<Range<usize>>,
+        _: &mut Window,
+        cx: &mut App,
+    ) {
+        self.change(cx, |edit| edit.replace_and_mark(range, text, selected));
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut App) {
+        self.change(cx, TextEdit::unmark);
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Bounds<Pixels>> {
+        self.read(cx, |text_box| {
+            text_box.bounds_for(&range, &self.fit, window)
+        })
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        point: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<usize> {
+        self.read(cx, |text_box| {
+            text_box.offset_at_screen(point, &self.fit, window)
+        })
     }
 }
 

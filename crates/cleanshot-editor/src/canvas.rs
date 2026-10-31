@@ -58,11 +58,14 @@ pub(crate) enum Pointer {
 
 pub(crate) type OnPointer = Rc<dyn Fn(Pointer, &mut Window, &mut App)>;
 
-/// What is drawn over the document: the edit a drag would make, and the selected shape's
-/// handles.
+pub(crate) type PaintOver = Box<dyn FnOnce(&Fit, &mut Window, &mut App)>;
+
+/// What is drawn over the document: the edit a drag or the text box would make, the selected
+/// shape's handles, and last `over`, given where the image is (the text box's caret and input).
 pub(crate) struct Overlay {
     pub preview: Option<Command>,
     pub selected: Option<ShapeId>,
+    pub over: Option<PaintOver>,
 }
 
 /// How far from a shape or handle, in screen pixels, a press still grips it.
@@ -123,6 +126,9 @@ pub(crate) fn document_canvas(
                 for (_, at) in handles(shape) {
                     paint_handle(fit.point(at), window);
                 }
+            }
+            if let Some(over) = overlay.over {
+                over(&fit, window, cx);
             }
             listen_for_pointer(&fit, placement, bounds.origin, hitbox, &on_pointer, window);
         },
@@ -315,7 +321,7 @@ fn ellipse(bounds: Bounds<Pixels>) -> Vec<Point<Pixels>> {
         .collect()
 }
 
-fn rgba(color: Color) -> Rgba {
+pub(crate) fn rgba(color: Color) -> Rgba {
     Rgba {
         r: f32::from(color.r) / 255.0,
         g: f32::from(color.g) / 255.0,
