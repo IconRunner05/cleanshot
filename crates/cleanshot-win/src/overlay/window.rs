@@ -30,6 +30,7 @@ use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
 use crate::toolbar::Paint;
 use crate::toolbar::automation::{self, Request};
+
 pub(crate) const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
 const BORDER_WIDTH: f32 = 1.5;
 const HANDLE_SIZE: f32 = 8.0;
