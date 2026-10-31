@@ -13,6 +13,7 @@ use cleanshot_core::{
     AfterCapture, Delivered, DeliveryError, Document, Hotkey, MAX_SETTINGS_BYTES, Output,
     RgbaImage, SaveFormat, Settings, SettingsProblem, delivery_notice,
 };
+use cleanshot_editor::ask_save_path;
 use cleanshot_render::{Flattened, Format, encode, flatten};
 use cleanshot_win::capture::{
     Desktop, MonitorImage, RECT, capture_desktop, monitor_under_cursor, region,
@@ -79,13 +80,11 @@ fn main() {
             let defer = move |job: Box<dyn FnOnce()>| closer.spawn(async move |_| job()).detach();
             let opener = app.clone();
             let editing = Rc::clone(&session);
-            // F-05: Edit opens the selection in the editor, whose Copy and Save deliver as the
-            // overlay does (D-48).
-            let edit = move |image: RgbaImage| {
+            let pass_on = move |image: RgbaImage, to: Handoff| {
                 let session = Rc::clone(&editing);
                 opener
-                    .spawn(async move |cx| {
-                        cx.update(|cx| {
+                    .spawn(async move |cx| match to {
+                        Handoff::Editor => cx.update(|cx| {
                             if let Err(error) = cleanshot_editor::open(
                                 cx,
                                 image,
@@ -95,34 +94,33 @@ fn main() {
                             ) {
                                 session.warn(&format!("The editor could not open: {error}."));
                             }
-                        });
+                        }),
+                        Handoff::SaveAs => {
+                            let (folder, name) = save_as_start(&session.settings);
+                            let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
+                            save_chosen(&session, image, chosen.await);
+                        }
                     })
                     .detach();
             };
             // The tray's window procedure can run while GPUI holds the app, so the request
             // waits for GPUI's executor instead of borrowing the app here.
             app.spawn(async move |cx| {
-                cx.update(|cx| match request {
-                    Request::CaptureRegion => capture(&session, Capture::Region, asked, defer, edit),
-                    Request::CaptureScreen => capture(&session, Capture::Screen, asked, defer, edit),
-                    Request::CaptureLastRegion => capture(&session, Capture::LastRegion, asked, defer, edit),
-                    Request::Exit => cx.quit(),
+                cx.update(|cx| {
+                    let kind = match request {
+                        Request::CaptureRegion => Capture::Region,
+                        Request::CaptureScreen => Capture::Screen,
+                        Request::CaptureLastRegion => Capture::LastRegion,
+                        Request::Exit => return cx.quit(),
+                    };
+                    capture(&session, kind, asked, defer, pass_on);
                 });
             })
             .detach();
         })
         .expect("the tray window and icon are created");
-        // F-51: a hotkey another program holds is shown, not swallowed.
-        let taken: Vec<String> = created
-            .hotkeys()
-            .filter(|(_, _, registered)| registered.is_err())
-            .map(|(_, hotkey, _)| {
-                format!("{hotkey} is taken by another program, so it does not capture. Choose another in cleanshot.toml.")
-            })
-            .collect();
+        let text = start_warnings(&created, [warning, log_warning, fallback]);
         launched_tray.replace(Some(created));
-        let warnings = [warning, log_warning, fallback].into_iter().flatten().chain(taken);
-        let text = warnings.collect::<Vec<_>>().join(" ");
         if !text.is_empty() {
             launched.warn(&text);
         }
@@ -141,6 +139,23 @@ fn main() {
     // out to remove its icon.
     drop(tray.take());
     drop(instance);
+}
+
+/// What start-up has to tell the user, in one line: `earlier`, then each hotkey another program
+/// holds (F-51: shown, not swallowed).
+fn start_warnings(tray: &Tray, earlier: [Option<String>; 3]) -> String {
+    let taken = tray
+        .hotkeys()
+        .filter(|(_, _, registered)| registered.is_err())
+        .map(|(_, hotkey, _)| {
+            format!("{hotkey} is taken by another program, so it does not capture. Choose another in cleanshot.toml.")
+        });
+    earlier
+        .into_iter()
+        .flatten()
+        .chain(taken)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What lives as long as the tray: read once at start, or held between captures.
@@ -210,6 +225,14 @@ impl Session {
     }
 }
 
+/// Where the overlay hands a selection on to GPUI: the editor (F-05), or the Save As dialog
+/// once the overlay has closed (F-22).
+#[derive(Clone, Copy, Debug)]
+enum Handoff {
+    Editor,
+    SaveAs,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Capture {
     Region,
@@ -249,7 +272,7 @@ fn capture(
     kind: Capture,
     asked: Instant,
     defer: impl Fn(Box<dyn FnOnce()>) + 'static,
-    edit: impl Fn(RgbaImage) + 'static,
+    pass_on: impl Fn(RgbaImage, Handoff) + 'static,
 ) {
     if session.overlay.borrow().is_some() {
         return;
@@ -282,9 +305,11 @@ fn capture(
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
     let finishing = Rc::clone(session);
+    let pass_on = Rc::new(pass_on);
     let shown = Overlay::show(&captures, selected, move |event| {
         // F-13 (D-68): the editor takes over from the overlay with no fade between them.
         let handoff = matches!(event, OverlayEvent::Edit(_));
+        let mut saving_as = None;
         match event {
             OverlayEvent::Cancelled => {}
             OverlayEvent::Copy(selected) => {
@@ -295,8 +320,17 @@ fn capture(
                 finishing.last_selection.set(Some(selected));
                 finish(&finishing, &frozen, selected, Output::Save);
             }
+            OverlayEvent::SaveAs(selected) => {
+                finishing.last_selection.set(Some(selected));
+                match region(&frozen, selected) {
+                    Ok(image) => saving_as = Some(image),
+                    Err(error) => {
+                        finishing.warn(&format!("The capture did not finish: {error}."));
+                    }
+                }
+            }
             OverlayEvent::Edit(selected) => match region(&frozen, selected) {
-                Ok(image) => edit(image),
+                Ok(image) => pass_on(image, Handoff::Editor),
                 Err(error) => {
                     finishing.warn(&format!("The capture could not be edited: {error}."));
                 }
@@ -306,16 +340,20 @@ fn capture(
             }
         }
         // The event arrives inside an overlay window's procedure, so the windows close
-        // after it returns.
+        // after it returns, and the Save As dialog opens over the desktop, not the overlay.
         let closing = Rc::clone(&finishing);
+        let pass_on = Rc::clone(&pass_on);
         defer(Box::new(move || {
-            let Some(overlay) = closing.overlay.borrow_mut().take() else {
-                return;
-            };
-            if handoff {
-                drop(overlay);
-            } else if let Err(error) = overlay.close() {
-                closing.warn(&format!("The overlay could not fade out: {error}."));
+            let overlay = closing.overlay.borrow_mut().take();
+            if let Some(overlay) = overlay {
+                if handoff {
+                    drop(overlay);
+                } else if let Err(error) = overlay.close() {
+                    closing.warn(&format!("The overlay could not fade out: {error}."));
+                }
+            }
+            if let Some(image) = saving_as {
+                pass_on(image, Handoff::SaveAs);
             }
         }));
     });
@@ -443,6 +481,22 @@ fn save_as_start(settings: &Settings) -> (PathBuf, String) {
     let name = save::offered_name(FILE_NAME_TEMPLATE, Stamp::now(), extension)
         .unwrap_or_else(|error| panic!("the file-name template is a safe constant: {error}"));
     (folder, name)
+}
+
+/// F-22: saves the overlay's `image` to the path chosen in Save As. A cancel and a save show
+/// nothing, as the overlay's Save does; a failure is shown from the tray.
+fn save_chosen(
+    session: &Session,
+    image: RgbaImage,
+    chosen: Option<Result<PathBuf, DeliveryError>>,
+) {
+    let Some(chosen) = chosen else {
+        return;
+    };
+    let document = Document::new(Arc::new(image));
+    if let Err(error) = chosen.and_then(|path| save_to(&path, &document, &session.settings)) {
+        session.warn(&delivery_notice(&Err(error)));
+    }
 }
 
 /// F-22 (D-66): flattens `document` and writes it to `path`, the name the user confirmed in

@@ -289,19 +289,9 @@ impl EditorView {
             return;
         };
         let (folder, name) = (outputs.save_as_start)();
-        let dialog = cx.prompt_for_new_path(&folder, Some(&name));
+        let dialog = ask_save_path(cx, &folder, &name);
         self.save_as = Some(cx.spawn_in(window, async move |view, cx| {
-            let chosen = match dialog.await {
-                Ok(Ok(chosen)) => chosen.map(Ok),
-                Ok(Err(error)) => {
-                    eprintln!("the Save As dialog did not open: {error:#}");
-                    Some(Err(DeliveryError::NoSaveDialog))
-                }
-                Err(dropped) => {
-                    eprintln!("the Save As dialog closed with no answer: {dropped}");
-                    Some(Err(DeliveryError::NoSaveDialog))
-                }
-            };
+            let chosen = dialog.await;
             // Err only means the window closed while the dialog was open, with nothing to save.
             let _ = view.update(cx, |view, cx| view.save_to(chosen, cx));
         }));
@@ -582,6 +572,29 @@ impl InputHandler for BoxInput {
         self.read(cx, |text_box| {
             text_box.offset_at_screen(point, &self.fit, window)
         })
+    }
+}
+
+/// F-22: opens the Save As dialog on `folder`, offering `name`. The answer is the path the
+/// user confirmed, [`DeliveryError::NoSaveDialog`] if the dialog failed, or `None` for a cancel.
+pub fn ask_save_path(
+    cx: &App,
+    folder: &Path,
+    name: &str,
+) -> impl Future<Output = Option<Result<PathBuf, DeliveryError>>> + use<> {
+    let dialog = cx.prompt_for_new_path(folder, Some(name));
+    async move {
+        match dialog.await {
+            Ok(Ok(chosen)) => chosen.map(Ok),
+            Ok(Err(error)) => {
+                eprintln!("the Save As dialog did not open: {error:#}");
+                Some(Err(DeliveryError::NoSaveDialog))
+            }
+            Err(dropped) => {
+                eprintln!("the Save As dialog closed with no answer: {dropped}");
+                Some(Err(DeliveryError::NoSaveDialog))
+            }
+        }
     }
 }
 

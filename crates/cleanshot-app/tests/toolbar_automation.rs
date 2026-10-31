@@ -70,6 +70,7 @@ fn main() {
                 OverlayEvent::Copy(selected) => Some(selected),
                 OverlayEvent::Cancelled
                 | OverlayEvent::Save(_)
+                | OverlayEvent::SaveAs(_)
                 | OverlayEvent::Edit(_)
                 | OverlayEvent::DrawFailed(_) => None,
             };

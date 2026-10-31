@@ -43,6 +43,8 @@ pub enum OverlayEvent {
     Save(RECT),
     /// Edit was chosen for this selection, in physical virtual-desktop pixels (F-05).
     Edit(RECT),
+    /// Ctrl+Shift+S was pressed on this selection, in physical virtual-desktop pixels (F-22).
+    SaveAs(RECT),
     /// Direct2D could not draw a monitor's frozen image.
     DrawFailed(windows::core::Error),
 }
@@ -57,9 +59,10 @@ enum Key {
     /// Moves the toolbar's focus this many controls along.
     Focus(i32),
     Nudge(i32, i32),
+    SaveAs,
 }
 
-const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 15] = [
+const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 16] = [
     (MOD_NOREPEAT, VK_ESCAPE, Key::Choose(Control::Cancel)),
     (MOD_NOREPEAT, VK_RETURN, Key::Press),
     (MOD_NOREPEAT, VK_SPACE, Key::Press),
@@ -67,6 +70,11 @@ const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 15] = [
         HOT_KEY_MODIFIERS(MOD_NOREPEAT.0 | MOD_CONTROL.0),
         VK_S,
         Key::Choose(Control::Save),
+    ),
+    (
+        HOT_KEY_MODIFIERS(MOD_NOREPEAT.0 | MOD_CONTROL.0 | MOD_SHIFT.0),
+        VK_S,
+        Key::SaveAs,
     ),
     (MOD_NOREPEAT, VK_E, Key::Choose(Control::Edit)),
     (HOT_KEY_MODIFIERS(0), VK_TAB, Key::Focus(1)),
@@ -136,7 +144,8 @@ impl Shared {
             (Key::Press, _) => self.choose(self.focus.get()),
             (Key::Focus(step), _) => self.focus(self.focus.get().step(step)),
             (Key::Nudge(dx, dy), Some(selected)) => self.select(Some(nudged(selected, dx, dy))),
-            (Key::Nudge(..), None) => {}
+            (Key::Nudge(..) | Key::SaveAs, None) => {}
+            (Key::SaveAs, Some(selected)) => self.send(OverlayEvent::SaveAs(selected)),
         }
     }
 
@@ -479,6 +488,37 @@ mod tests {
         pump(Duration::from_millis(200));
         drop(overlay);
         assert_eq!(copied.get(), Some(screen));
+    }
+
+    #[test]
+    fn f22_ctrl_shift_s_asks_to_save_the_selection_as() {
+        let _screen = screen();
+        let screen = monitor().bounds;
+        let asked = Rc::new(Cell::new(None));
+        let sink = Rc::clone(&asked);
+        let overlay = Overlay::show(&[monitor()], Some(screen), move |event| {
+            if let OverlayEvent::SaveAs(selected) = event {
+                sink.set(Some(selected));
+            }
+        })
+        .expect("the overlay opens");
+        let save_as = KEYS
+            .iter()
+            .position(|&(_, _, key)| matches!(key, Key::SaveAs))
+            .expect("Ctrl+Shift+S is one of the overlay's keys");
+        // SAFETY: posting copies no memory, and the window belongs to this thread.
+        unsafe {
+            PostMessageW(
+                Some(overlay.windows[0]),
+                WM_HOTKEY,
+                WPARAM(save_as),
+                LPARAM(0),
+            )
+        }
+        .expect("the overlay window takes the message");
+        pump(Duration::from_millis(200));
+        drop(overlay);
+        assert_eq!(asked.get(), Some(screen));
     }
 
     /// Whether another registration holds `key`: a thread hotkey for it is refused.

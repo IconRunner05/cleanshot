@@ -18,7 +18,7 @@ use gpui::{App, Application};
 use gpui_windows::WindowsPlatform;
 
 pub use crate::bench::{BenchReport, bench};
-pub use crate::editor_window::{EditorWindow, open};
+pub use crate::editor_window::{EditorWindow, ask_save_path, open};
 use crate::restricted_platform::RestrictedPlatform;
 #[cfg(feature = "drift-test")]
 pub use crate::text::em_widths;
