@@ -21,6 +21,7 @@ pub enum Command {
     SetCrop(Option<RectF>),
 }
 
+/// Why [`History::apply`] refused a command.
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum CommandError {
     #[error("no shape has id {0:?}")]

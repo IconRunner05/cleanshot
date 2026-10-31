@@ -8,9 +8,11 @@ pub const LINE_HEIGHT: f32 = 1.25;
 /// Inter 4.1 in its semibold weight, the one font text shapes are drawn in, on screen and in the export.
 pub static INTER: &[u8] = include_bytes!("../fonts/Inter-SemiBold.ttf");
 
-/// Inter's design units per em, ascent and descent; its hhea, typo and win metrics agree.
+/// Inter's design units per em.
 pub const INTER_UNITS_PER_EM: u16 = 2048;
+/// Inter's ascent above the baseline, in design units; its hhea, typo and win metrics agree.
 pub const INTER_ASCENT: u16 = 1984;
+/// Inter's descent below the baseline, in design units; its hhea, typo and win metrics agree.
 pub const INTER_DESCENT: u16 = 494;
 
 /// A text shape: lines broken only where the user pressed Enter, with the width DirectWrite or
@@ -23,6 +25,7 @@ pub struct TextBlock {
     em_width: f32,
 }
 
+/// Why [`TextBlock::new`] refused its size or width.
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum TextBlockError {
     #[error("a font size must be a positive number of pixels, but it is {0}")]
@@ -116,6 +119,7 @@ pub struct GlyphMask {
     color: Option<Color>,
 }
 
+/// Why [`GlyphMask::new`] refused its coverage.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum GlyphMaskError {
     #[error("a {width}x{height} mask needs {width}*{height} bytes, but {len} were given")]

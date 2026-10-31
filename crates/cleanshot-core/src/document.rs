@@ -53,6 +53,7 @@ impl Document {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ShapeId(pub(crate) u64);
 
+/// A shape in the document, with its id and the style it is drawn in.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapeEntry {
     pub id: ShapeId,
@@ -60,6 +61,7 @@ pub struct ShapeEntry {
     pub style: Style,
 }
 
+/// What a shape draws, in image pixels.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
     Arrow {
@@ -96,12 +98,14 @@ pub enum Fill {
     Solid,
 }
 
+/// How a redaction replaces the pixels under it (F-36).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RedactMode {
     Pixelate,
     Blur,
 }
 
+/// The colour a shape is drawn in, and its stroke width in image pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
     pub color: Color,
@@ -117,6 +121,7 @@ pub struct Color {
     pub a: u8,
 }
 
+/// A point in image pixels, from the top-left corner of the image.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointF {
     pub x: f32,
@@ -139,6 +144,7 @@ pub fn arrow_head(from: PointF, to: PointF, stroke_width: f32) -> [PointF; 3] {
     [barb(1.0), to, barb(-1.0)]
 }
 
+/// A rectangle in image pixels: its top-left corner, width and height.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RectF {
     pub x: f32,
@@ -155,6 +161,7 @@ pub struct RgbaImage {
     pixels: Vec<u8>,
 }
 
+/// Why [`RgbaImage::new`] refused its pixels.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ImageError {
     #[error("an image needs at least one pixel, but it is {width}x{height}")]

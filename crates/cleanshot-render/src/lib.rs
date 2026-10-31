@@ -1,3 +1,6 @@
+//! A document's output pixels: flatten, redaction and encoding, drawn with tiny-skia
+//! (CHARTER 5).
+
 #![forbid(unsafe_code)]
 
 mod encode;

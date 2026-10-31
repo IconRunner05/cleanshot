@@ -1,3 +1,6 @@
+//! The document a capture is marked up in: shapes, commands with undo, text and settings
+//! types. Pure Rust, with no OS calls or I/O (CHARTER 5).
+
 #![forbid(unsafe_code)]
 
 mod delivery;

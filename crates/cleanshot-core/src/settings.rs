@@ -22,6 +22,7 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
 }
 
+/// The image format Save writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveFormat {
     Png,
@@ -53,6 +54,7 @@ pub struct Hotkey {
     key: Key,
 }
 
+/// The modifier keys a hotkey needs held with its key.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each modifier key is held or not, independently"
