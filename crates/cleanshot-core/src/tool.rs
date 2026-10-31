@@ -176,6 +176,12 @@ mod tests {
     }
 
     #[test]
+    fn f35_the_highlighter_defaults_to_yellow() {
+        let color = Tool::Highlighter.style().color;
+        assert_eq!((color.r, color.g, color.b), (255, 230, 0));
+    }
+
+    #[test]
     fn f31_shift_snaps_a_new_arrow_to_45_degrees() {
         let path = [point(0.0, 0.0), point(100.0, 10.0)];
         assert_eq!(
