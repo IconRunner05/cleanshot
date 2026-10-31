@@ -321,6 +321,9 @@ mod tests {
         GetUpdateRect, ReleaseDC, SelectObject,
     };
     use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+    use windows::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW, WM_HOTKEY,
     };
@@ -591,5 +594,34 @@ mod tests {
                 "{key:?} is still held after the failed open"
             );
         }
+    }
+
+    /// The dpi job (D-71) sets the runner's 1920x1080 display to each scale and names its dpi
+    /// in `CLEANSHOT_DPI`; outside that job there is no known scale to check.
+    #[test]
+    #[ignore = "needs the dpi job's display scale (D-71)"]
+    fn d71_the_toolbar_takes_the_scale_windows_gives_the_monitor() {
+        let dpi: u32 = std::env::var("CLEANSHOT_DPI")
+            .expect("the dpi job sets CLEANSHOT_DPI")
+            .parse()
+            .expect("CLEANSHOT_DPI is a number");
+        // SAFETY: sets this test thread's awareness to cleanshot.exe's, PerMonitorV2.
+        let earlier =
+            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        assert!(!earlier.is_invalid(), "the thread became PerMonitorV2");
+        let primary = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+
+        let scale = dpi_scale(primary).expect("the primary monitor has a DPI");
+        let pill = toolbar::layout(primary, None, scale)
+            .expect("a 1080p monitor holds the toolbar at 175%")
+            .pill;
+
+        let expected = i32::try_from((44 * dpi + 48) / 96).expect("a pill is a few pixels tall");
+        assert_eq!(pill.bottom - pill.top, expected, "at {dpi} dpi");
     }
 }

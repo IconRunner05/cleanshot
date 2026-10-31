@@ -458,6 +458,45 @@ mod tests {
         );
     }
 
+    /// A 3840x2160 monitor at 200% left of a 1920x1080 one at 100%, as a per-monitor-aware
+    /// process sees them: both in physical pixels, so neither side is scaled to the other.
+    #[test]
+    fn d71_a_region_across_a_200_percent_monitor_and_a_100_percent_one_keeps_physical_pixels() {
+        let shade =
+            |x: i32, y: i32| [u8::try_from((x * 3 + y * 7).rem_euclid(251)).expect("< 251"); 4];
+        let painted = |bounds: RECT| {
+            let pixels = (bounds.top..bounds.bottom)
+                .flat_map(|y| (bounds.left..bounds.right).flat_map(move |x| shade(x, y)))
+                .collect();
+            let (width, height) = size_of_rect(bounds).expect("a test monitor has an area");
+            MonitorImage {
+                bounds,
+                image: RgbaImage::new(width, height, pixels).expect("sized to match"),
+            }
+        };
+        let captures = [
+            painted(rect(-3840, 0, 0, 2160)),
+            painted(rect(0, 0, 1920, 1080)),
+        ];
+        let selected = rect(-2, 1078, 2, 1082);
+
+        let image = region(&captures, selected).expect("the region has an area");
+
+        let expected: Vec<u8> = (selected.top..selected.bottom)
+            .flat_map(|y| {
+                (selected.left..selected.right).flat_map(move |x| {
+                    if x >= 0 && y >= 1080 {
+                        [0; 4]
+                    } else {
+                        shade(x, y)
+                    }
+                })
+            })
+            .collect();
+        assert_eq!((image.width(), image.height()), (4, 4));
+        assert_eq!(image.pixels(), expected);
+    }
+
     #[test]
     fn f01_a_region_no_monitor_covers_stays_transparent() {
         let captures = [filled(rect(0, 0, 2, 2), 30)];
