@@ -5,6 +5,7 @@ mod canvas;
 mod editor_window;
 mod placement;
 mod restricted_platform;
+mod text;
 mod theme;
 mod toolbar;
 

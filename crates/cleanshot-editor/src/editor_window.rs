@@ -13,8 +13,9 @@ use gpui::{
 };
 
 use crate::Error;
-use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, register_inter, render_image};
+use crate::canvas::{OnPointer, Overlay, Pointer, document_canvas, render_image};
 use crate::placement::Placement;
+use crate::text::register_inter;
 use crate::theme::Theme;
 use crate::toolbar::toolbar;
 
