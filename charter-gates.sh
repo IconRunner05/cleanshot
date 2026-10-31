@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CHARTER 7 gates 3-5 on cleanshot.exe.
+# CHARTER 7 gates 3-5 on cleanshot.exe, and the CHARTER 11 Decisions log.
 #   ./charter-gates.sh                     Mac or Linux fold bar: builds a scan-only exe with
 #                                          cargo-xwin and scans its imports and headers.
 #   ./charter-gates.sh --release-exe PATH  CI on windows-latest: scans the shipped exe, size too.
@@ -49,6 +49,25 @@ done
 while IFS= read -r hit; do
     fail "C-16: unsafe outside crates/cleanshot-win at $hit."
 done < <(git grep -n -w unsafe -- 'crates/*.rs' ':!crates/cleanshot-win/' | cut -d: -f1,2)
+
+while IFS= read -r problem; do
+    fail "CHARTER 11: $problem"
+done < <(awk '
+    /^### Decisions log/ { log_open = 1; next }
+    /^### / { log_open = 0 }
+    log_open && /^\| D-[0-9]+ \|/ {
+        split($0, cell, " [|] ")
+        id = substr(cell[1], 5) + 0
+        rows++
+        if (id in line_of) printf "D-%d is the id of the rows at lines %d and %d.\n", id, line_of[id], NR
+        else if (above && id >= above) printf "D-%d at line %d is not below D-%d above it; the log reads newest first.\n", id, NR, above
+        status_allowed = "^(assumed|decided|decided [(](owner|owner approved|orchestrator)(, [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])?[)])$"
+        if (cell[4] !~ status_allowed) printf "D-%d at line %d has the Status \"%s\", not assumed, decided, or decided (owner or orchestrator, date).\n", id, NR, cell[4]
+        line_of[id] = NR
+        above = id
+    }
+    END { if (!rows) print "no Decisions log rows were found in docs/CHARTER.md, so the log was not checked." }
+' docs/CHARTER.md)
 
 cargo tree --locked -p cleanshot-app --target x86_64-pc-windows-msvc -e features -i cleanshot-win | grep -qF 'cleanshot-win feature "field-test"' &&
     fail "CHARTER 5: cleanshot-app turns on cleanshot-win's field-test feature, so field-test code could ship in cleanshot.exe."

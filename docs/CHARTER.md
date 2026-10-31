@@ -321,7 +321,7 @@ The app manifest (`crates/cleanshot-app/cleanshot.exe.manifest`, embedded by the
 
 ### CI gates (every push to `main` or `ci/**`, `windows-latest`)
 
-Gates 3–5 are `charter-gates.sh`. CI runs it on the release exe it builds and uploads. The fold bar on a Mac or Linux machine also runs it, on a scan-only exe that cargo-xwin builds with the `scan-only` profile. That exe is never shipped and cannot run: off Windows, GPUI's shaders cannot be compiled into it, so it reads them from the build machine's cargo checkout.
+Gates 3–5 are `charter-gates.sh`. It also checks the Decisions log (section 11): each id appears once, the ids read newest first, and each Status is assumed, decided, or decided by the owner or the orchestrator in the form `decided (owner, YYYY-MM-DD)`, the date optional. CI runs it on the release exe it builds and uploads. The fold bar on a Mac or Linux machine also runs it, on a scan-only exe that cargo-xwin builds with the `scan-only` profile. That exe is never shipped and cannot run: off Windows, GPUI's shaders cannot be compiled into it, so it reads them from the build machine's cargo checkout.
 
 1. fmt, `ast-grep scan` (the rules `sgconfig.yml` names), clippy, tests (x64), build (ARM64).
 2. `cargo deny check` (advisories, bans, licences, sources) and `cargo audit`.
