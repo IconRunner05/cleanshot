@@ -66,6 +66,16 @@ pub enum HotkeyAction {
 impl HotkeyAction {
     /// Every action, in the order the settings window lists them.
     pub const ALL: [Self; 3] = [Self::Region, Self::FullScreen, Self::LastRegion];
+
+    /// The action's name, as the tray menu shows it (F-50).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Region => "Capture region",
+            Self::FullScreen => "Capture screen",
+            Self::LastRegion => "Capture last region",
+        }
+    }
 }
 
 /// A key with its modifiers, written as `Ctrl+Shift+4`. Built only by [`Hotkey::parse`].
@@ -96,6 +106,13 @@ pub enum Key {
     Digit(char),
     Function(u8),
     PrintScreen,
+}
+
+/// Why a key pressed in the settings window cannot be a hotkey.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HotkeyRefusal {
+    UnknownKey,
+    NoModifier,
 }
 
 /// A part of the settings file that was not used, so its default applies (F-54).
@@ -328,6 +345,25 @@ impl Hotkey {
         Some(Self { modifiers, key })
     }
 
+    /// The hotkey for `key`, as the settings window's keyboard reports it, held with `modifiers`
+    /// (F-55). A letter or digit needs Ctrl, Alt or Win, or every program would lose that key.
+    ///
+    /// # Errors
+    ///
+    /// [`HotkeyRefusal::UnknownKey`] for a key [`Hotkey::parse`] does not name, and
+    /// [`HotkeyRefusal::NoModifier`] for a letter or digit alone or with Shift only.
+    pub fn recorded(key: &str, modifiers: Modifiers) -> Result<Self, HotkeyRefusal> {
+        let held = Self {
+            modifiers,
+            key: self::key(key).ok_or(HotkeyRefusal::UnknownKey)?,
+        };
+        let typed = matches!(held.key, Key::Letter(_) | Key::Digit(_));
+        if typed && !(modifiers.ctrl || modifiers.alt || modifiers.win) {
+            return Err(HotkeyRefusal::NoModifier);
+        }
+        Ok(held)
+    }
+
     /// The modifier keys held with [`Hotkey::key`].
     #[must_use]
     pub fn modifiers(self) -> Modifiers {
@@ -558,6 +594,28 @@ mod tests {
             Err(invalid.clone())
         );
         assert_eq!(folder(String::new()).checked(), Err(invalid));
+    }
+
+    #[test]
+    fn f55_a_recorded_letter_or_digit_needs_ctrl_alt_or_win_and_a_function_key_does_not() {
+        let held = |ctrl, shift| Modifiers {
+            ctrl,
+            shift,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            Hotkey::recorded("4", held(true, true)),
+            Ok(hotkey("Ctrl+Shift+4"))
+        );
+        assert_eq!(Hotkey::recorded("f9", held(false, false)), Ok(hotkey("F9")));
+        assert_eq!(
+            Hotkey::recorded("a", held(false, true)),
+            Err(HotkeyRefusal::NoModifier)
+        );
+        assert_eq!(
+            Hotkey::recorded("escape", held(true, false)),
+            Err(HotkeyRefusal::UnknownKey)
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod keys;
 mod look;
 mod selection;
 mod settings;
+mod settings_change;
 mod text;
 mod text_edit;
 mod tool;
@@ -31,9 +32,10 @@ pub use selection::{
     resized_box, shape_at,
 };
 pub use settings::{
-    AfterCapture, Hotkey, HotkeyAction, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers, SaveFormat,
-    Settings, SettingsProblem,
+    AfterCapture, Hotkey, HotkeyAction, HotkeyRefusal, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers,
+    SaveFormat, Settings, SettingsProblem,
 };
+pub use settings_change::{Applied, SettingsNotice, SettingsSaveError, settings_notice};
 pub use text::{
     DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,
     INTER_UNITS_PER_EM, LINE_HEIGHT, TextBlock, TextBlockError, TextMasks,
