@@ -77,7 +77,7 @@ jobs:
         with:
           subject-path: dist/cleanshot-${{ steps.version.outputs.version }}-x64.exe
 
-      - name: Publish the pre-release, unsigned until signing is decided (CHARTER 11)
+      - name: Publish the pre-release, unsigned until SignPath signing is in place (D-74)
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:

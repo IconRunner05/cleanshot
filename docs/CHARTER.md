@@ -364,7 +364,7 @@ Releases ship as a bare, signed `cleanshot.exe` on GitHub Releases. A winget **p
 
 1. Build x64 (and ARM64, once enabled) on `windows-latest` from the tag; never on a developer machine. A scan-only exe from the fold bar is never released.
 2. Run every CI gate (section 7) against the release binary.
-3. Code-sign the exe (signing service is an open question; until then, releases are marked pre-release).
+3. Code-sign the exe through SignPath Foundation (D-74); until the first signed release, releases are unsigned and marked pre-release. `README.md` carries the code signing policy the Foundation requires.
 4. Publish to GitHub Releases: `cleanshot-X.Y.Z-x64.exe`, `SHA256SUMS`, CycloneDX SBOM, and a GitHub build-provenance attestation. `.github/workflows/release.yml` does steps 1, 2 and 4 on a tag, taking the release notes from the version's `CHANGELOG.md` section; run by hand, it builds and checks the same files and uploads them without publishing.
 5. Open or update the winget-pkgs PR with a winget releaser action, such as `winget-releaser` (Komac). These tools update an existing package, so **v1.0.0 is submitted to `microsoft/winget-pkgs` by hand once**.
 
@@ -453,6 +453,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-74 | 2026-10-31 | Code-signing route: SignPath Foundation's free open-source signing, through SignPath's GitHub action in the release workflow; the Foundation holds the certificate, and the owner approves each signing request | decided (owner, 2026-10-31) | Free for an OSI-licensed project, and signs on GitHub-hosted runners from the workflow that builds the exe, so no certificate or key is held by the project. Its terms require a code signing policy on the project's home page, product metadata in the signed exe and multi-factor sign-in for the team |
 | D-72 | 2026-10-31 | `save_folder` is read only up to 10,752 UTF-8 bytes; longer is an invalid value and the default applies (F-54). The limit is the 64 KB cap less 1 KB for every other setting, over 6 because `to_toml` can write a byte as `\u001F`. | decided (orchestrator, 2026-10-31) | Anything read must write back under the C-13 cap, or the next start would ignore the whole file. Bytes, not characters: Windows' 32,767-unit path limit is up to about 96 KB of UTF-8. 10,752 bytes is within that path limit too. |
 | D-70 | 2026-10-31 | `cargo-cyclonedx` (pinned, installed with `--locked`) writes the release's CycloneDX SBOM in the release workflow only. It is a CI tool, not a dependency of any crate, so section 6 does not list it | decided (owner, 2026-10-31) | Section 9 asks for a CycloneDX SBOM, and cargo-cyclonedx is the CycloneDX project's own generator for Cargo, reading the same `Cargo.lock` the exe is built from |
 | D-69 | 2026-10-31 | Text is kerned on screen and in the export. The editor asks GPUI for `kern` on its Inter; the export shapes with the features GPUI then applies, kerning plus standard and contextual ligatures and contextual alternates, and none of DirectWrite's other defaults | decided (owner, 2026-10-31) | The export must keep the widths the user saw (F-34, D-53). GPUI replaces DirectWrite's default features with its own list, which leaves out kerning unless the font asks for it; kerning on both sides was the owner's look decision |
@@ -523,7 +524,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 ### Open questions
 
 - [ ] winget `PackageIdentifier` / publisher name and the GitHub owner.
-- [ ] Code-signing route (signing service and who holds the certificate).
+- [x] Code-signing route (signing service and who holds the certificate): SignPath Foundation (D-74).
 - [ ] ARM64 in the v1.0 release, or after?
 
 ### Known risks
