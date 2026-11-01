@@ -432,7 +432,7 @@ flowchart TD
 ### M3 · Hardening and beta
 
 - [ ] Golden DPI matrix (100/150/200%, negative-coordinate monitors) in CI. (Export needs none, see the `render` row of section 7's Tests table. Editor canvas: `d41_at_every_display_scaling_a_fitted_capture_has_each_pixel_on_its_own_device_pixel`.)
-- [ ] All P-budgets measured on the reference machine; fixes for any Must miss.
+- [ ] All P-budgets measured on the reference machine; fixes for any Must miss. A manual run of `release.yml` uploads the `cleanshot-budget-kit` artifact: the gate-scanned exe, `cleanshot-fieldtest`, the `p02_` test binary and `budgets.bat`, which leaves only `results.txt`, each budget judged by `cleanshot-fieldtest --budgets`.
 - [x] Release workflow (section 9) with SBOM, checksums, provenance; `SECURITY.md`. (v0.1.0, release run 41237644122.)
 - [ ] Code signing in place.
 - [ ] **Gate:** every Must budget met; public beta as a GitHub pre-release.

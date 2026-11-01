@@ -95,3 +95,47 @@ jobs:
           name: release-files
           path: dist/
           if-no-files-found: error
+
+  # CHARTER 10: the files the reference machine measures the budgets with, never published.
+  budget-kit:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    needs: ci
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the exe the CI gates scanned
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cleanshot-exe
+          path: kit
+
+      - name: The probe and the P-02 test build
+        shell: bash
+        run: |
+          cargo build --release --locked -p cleanshot-fieldtest
+          test_exe=$(cargo test --release --locked -p cleanshot-app --bin cleanshot --no-run --message-format json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test) | .executable')
+          cp target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe kit/
+          cp "$test_exe" kit/p02.exe
+          cp crates/cleanshot-fieldtest/budgets.bat kit/
+
+      - name: The kit runs here, judges all 8 budgets and leaves only results.txt (C-21)
+        shell: bash
+        run: |
+          cp -r kit "$RUNNER_TEMP/trial"
+          cd "$RUNNER_TEMP/trial"
+          cmd //c "budgets.bat < nul"
+          cat results.txt
+          verdicts=$(grep -cE '^P-0[1-8] (PASS|FAIL): ' results.txt || true)
+          (( verdicts == 8 )) || { echo "FAIL: results.txt holds ${verdicts} of 8 budget verdicts"; exit 1; }
+          left=$(ls -A | LC_ALL=C sort | tr '\n' ' ')
+          expected="budgets.bat cleanshot-fieldtest.exe cleanshot.exe p02.exe results.txt "
+          [[ $left == "$expected" ]] || { echo "FAIL C-21: the kit folder holds ${left}"; exit 1; }
+
+      - name: Upload the budget kit
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cleanshot-budget-kit
+          path: kit/
+          if-no-files-found: error
