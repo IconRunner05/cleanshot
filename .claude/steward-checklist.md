@@ -42,3 +42,8 @@ clean, well organised, and written by a human for a human.
   (charter-gates checks it), pins the rebased commit, and says so in the notes. CHANGES only when
   the conflict touches a row's content. (Orchestrator's rule, 2026-10-31, after five round trips
   under `decision-row-head-conflict`.)
+- **`cleanshot-app/src/main.rs` stays wiring (CHARTER 5, "thin").** A commit that adds a
+  pipeline there (a sequence that captures, cuts, delivers, times or asks the user, rather than
+  connecting one module's event to another's call) gets a refine moving it into its own file
+  in `cleanshot-app`, or CHANGES if the move needs the builder's decision. Measure main.rs
+  before and after (`scc --by-file`), whatever its size.
