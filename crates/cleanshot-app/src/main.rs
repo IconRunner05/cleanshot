@@ -70,6 +70,10 @@ fn main() {
     });
     let launched = Rc::clone(&session);
     cleanshot_editor::run(move |cx| {
+        // D-76: prewarm on the overlay thread before the tray is ready.
+        let unwarmed = Overlay::prewarm()
+            .err()
+            .map(|error| format!("The capture overlay could not be prepared: {error}."));
         let app = cx.to_async();
         let created = Tray::create(&hotkeys, move |request| {
             // P-01 counts from here, inside the tray's handling of the hotkey message.
@@ -108,7 +112,7 @@ fn main() {
             .detach();
         })
         .expect("the tray window and icon are created");
-        let text = start_warnings(&created, [warning, log_warning, fallback]);
+        let text = start_warnings(&created, [warning, log_warning, fallback, unwarmed]);
         launched_tray.replace(Some(created));
         if !text.is_empty() {
             launched.warn(&text);
@@ -132,7 +136,7 @@ fn main() {
 
 /// What start-up has to tell the user, in one line: `earlier`, then each hotkey another program
 /// holds (F-51: shown, not swallowed).
-fn start_warnings(tray: &Tray, earlier: [Option<String>; 3]) -> String {
+fn start_warnings(tray: &Tray, earlier: [Option<String>; 4]) -> String {
     let taken = tray
         .hotkeys()
         .filter(|(_, _, registered)| registered.is_err())

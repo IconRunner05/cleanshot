@@ -179,6 +179,23 @@ pub struct Overlay {
 }
 
 impl Overlay {
+    /// Makes and drops what the first overlay on this thread would otherwise pay to start
+    /// Direct2D and DirectWrite, with no window ever shown (P-01).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Window`] if Direct2D, DirectWrite or the hidden window cannot be made; the
+    /// overlay then most likely cannot open either.
+    pub fn prewarm() -> Result<(), Error> {
+        register_class()?;
+        // SAFETY: D2D1CreateFactory has no preconditions.
+        let factory: ID2D1Factory =
+            unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
+                .map_err(Error::Window)?;
+        let palette = Palette::current().map_err(Error::Window)?;
+        window::prewarm(&factory, &palette).map_err(Error::Window)
+    }
+
     /// Shows `captures`, one window per monitor at that monitor's physical bounds.
     ///
     /// # Errors
@@ -321,13 +338,15 @@ mod tests {
         GetUpdateRect, ReleaseDC, SelectObject,
     };
     use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::HiDpi::{
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SendMessageW, WM_HOTKEY,
-        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        DispatchMessageW, EnumThreadWindows, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
+        SendMessageW, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
+    use windows::core::BOOL;
 
     use super::*;
 
@@ -493,6 +512,36 @@ mod tests {
         pump(Duration::from_millis(200));
         drop(overlay);
         assert_eq!(copied.get(), Some(screen));
+    }
+
+    /// How many windows this thread owns now.
+    fn thread_windows() -> usize {
+        unsafe extern "system" fn count(_: HWND, counted: LPARAM) -> BOOL {
+            // SAFETY: `counted` is the address of the usize below, live for the enumeration.
+            // EnumThreadWindows calls this only during our call, with our own LPARAM; no window
+            // message carries it, so no other process can supply it.
+            // ast-grep-ignore: pointer-from-handle-value
+            unsafe { *(counted.0 as *mut usize) += 1 };
+            BOOL(1)
+        }
+        let mut counted = 0_usize;
+        // SAFETY: the callback writes only through the pointer to `counted`, which outlives it.
+        let _ = unsafe {
+            EnumThreadWindows(
+                GetCurrentThreadId(),
+                Some(count),
+                LPARAM(&raw mut counted as isize),
+            )
+        };
+        counted
+    }
+
+    #[test]
+    fn p01_the_prewarm_leaves_no_window_behind() {
+        let _screen = screen();
+        let before = thread_windows();
+        Overlay::prewarm().expect("Direct2D and DirectWrite start");
+        assert_eq!(thread_windows(), before);
     }
 
     #[test]

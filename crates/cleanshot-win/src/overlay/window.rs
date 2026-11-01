@@ -26,6 +26,7 @@ use super::{DESKTOP_DPI, Gesture, KEYS, OverlayEvent, Shared, dpi_scale};
 use crate::Error;
 use crate::capture::MonitorImage;
 use crate::loupe;
+use crate::palette::Palette;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
 use crate::toolbar::Paint;
@@ -210,15 +211,44 @@ pub(super) fn open_window(
     }
 }
 
-fn surface(
+/// Pays Direct2D's and DirectWrite's one-time start-up on this thread, on a window that is
+/// never shown, so the first overlay does not.
+pub(super) fn prewarm(factory: &ID2D1Factory, palette: &Palette) -> windows::core::Result<()> {
+    // SAFETY: the class is registered and every string is 'static. Without WS_VISIBLE the
+    // window is never shown, and WS_EX_TOOLWINDOW keeps it off the taskbar and Alt+Tab.
+    let window = unsafe {
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WINDOW_CLASS,
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            None,
+            None,
+            None,
+            None,
+        )
+    }?;
+    let warmed = target_and_bitmap(factory, window, 1, 1, &[0; 4])
+        .and_then(|(target, frozen)| Paint::new(&target.cast()?, &frozen, 1.0, palette).map(drop));
+    // SAFETY: the window was created above and holds no state.
+    let destroyed = unsafe { DestroyWindow(window) };
+    debug_assert!(destroyed.is_ok(), "a window made here is destroyed once");
+    warmed
+}
+
+/// A render target for `window`, `width` x `height` physical pixels, and a bitmap on it of
+/// `bgra`, rows of premultiplied BGRA `width` pixels long.
+fn target_and_bitmap(
     factory: &ID2D1Factory,
     window: HWND,
-    capture: &MonitorImage,
     width: u32,
     height: u32,
-    shared: &Rc<Shared>,
-    hosts_toolbar: bool,
-) -> windows::core::Result<Surface> {
+    bgra: &[u8],
+) -> windows::core::Result<(ID2D1HwndRenderTarget, ID2D1Bitmap)> {
     let format = D2D1_PIXEL_FORMAT {
         format: DXGI_FORMAT_B8G8R8A8_UNORM,
         alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
@@ -239,12 +269,11 @@ fn surface(
         dpiX: DESKTOP_DPI,
         dpiY: DESKTOP_DPI,
     };
-    // Captures are opaque, so straight and premultiplied alpha agree and only the channel
-    // order changes.
-    let mut bgra = capture.image.pixels().to_vec();
-    for pixel in bgra.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
+    assert_eq!(
+        bgra.len(),
+        width as usize * height as usize * 4,
+        "bgra is width x height pixels"
+    );
     // SAFETY: every description is fully initialised; `bgra` holds width * height * 4 bytes
     // with a pitch of width * 4, and Direct2D copies it during CreateBitmap.
     unsafe {
@@ -256,6 +285,28 @@ fn surface(
             width * 4,
             &raw const bitmap_properties,
         )?;
+        Ok((target, frozen))
+    }
+}
+
+fn surface(
+    factory: &ID2D1Factory,
+    window: HWND,
+    capture: &MonitorImage,
+    width: u32,
+    height: u32,
+    shared: &Rc<Shared>,
+    hosts_toolbar: bool,
+) -> windows::core::Result<Surface> {
+    // Captures are opaque, so straight and premultiplied alpha agree and only the channel
+    // order changes.
+    let mut bgra = capture.image.pixels().to_vec();
+    for pixel in bgra.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    let (target, frozen) = target_and_bitmap(factory, window, width, height, &bgra)?;
+    // SAFETY: every call takes owned or borrowed COM objects that outlive it.
+    unsafe {
         let palette = shared.palette;
         let dim = target.CreateSolidColorBrush(&raw const palette.dim, None)?;
         let accent = target.CreateSolidColorBrush(&raw const palette.accent, None)?;
