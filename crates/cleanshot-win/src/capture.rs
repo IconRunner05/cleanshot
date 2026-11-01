@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use cleanshot_core::RgbaImage;
 pub use windows::Win32::Foundation::RECT;
 use windows::Win32::Foundation::{HMODULE, LPARAM, POINT};
@@ -8,8 +10,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter1,
-    IDXGIFactory1, IDXGIOutput, IDXGIOutput1, IDXGIResource,
+    CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
@@ -22,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use crate::Error;
 
-const FIRST_FRAME_TIMEOUT_MILLISECONDS: u32 = 500;
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// How the desktop is copied (CHARTER 5 runtime model: the M0 spike picks one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,11 +107,13 @@ pub struct OutputReport {
     pub frame: Option<FrameReport>,
 }
 
-/// The facts DXGI gave about a duplicated frame.
+/// The facts DXGI gave about the duplicated frame that was copied.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameReport {
     /// The duplication's `DXGI_FORMAT`.
     pub format: i32,
+    /// Frames passed over before it because they held only a pointer update.
+    pub pointer_only_frames: u32,
     pub accumulated_frames: u32,
     pub desktop_updated: bool,
     pub pointer_updated: bool,
@@ -401,7 +405,7 @@ fn duplicate_listed(
         Ok(description) => description,
         Err(error) => return duplicates.results.push(Err(Error::Capture(error))),
     };
-    let mut report = OutputReport {
+    let report = OutputReport {
         adapter: adapter.to_owned(),
         vendor,
         output: wide(&description.DeviceName),
@@ -410,6 +414,10 @@ fn duplicate_listed(
         rotation: description.Rotation.0,
         frame: None,
     };
+    if !report.attached {
+        return duplicates.reports.push(report);
+    }
+    let mut report = report;
     let image = output
         .cast::<IDXGIOutput1>()
         .map_err(Error::Capture)
@@ -441,26 +449,16 @@ fn duplicate_output(
     let duplication = unsafe { output.DuplicateOutput(device) }.map_err(Error::Capture)?;
     // SAFETY: a read of the duplication's own description.
     let format = unsafe { duplication.GetDesc() }.ModeDesc.Format.0;
-    let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
-    let mut resource: Option<IDXGIResource> = None;
-    // SAFETY: both outputs are writable; the frame is released below before returning.
-    unsafe {
-        duplication.AcquireNextFrame(
-            FIRST_FRAME_TIMEOUT_MILLISECONDS,
-            &raw mut frame_info,
-            &raw mut resource,
-        )
-    }
-    .map_err(Error::Capture)?;
+    let (frame_info, resource) = desktop_frame(&duplication)?;
     *frame = Some(FrameReport {
         format,
-        accumulated_frames: frame_info.AccumulatedFrames,
-        desktop_updated: frame_info.LastPresentTime != 0,
-        pointer_updated: frame_info.LastMouseUpdateTime != 0,
-        protected_content_masked: frame_info.ProtectedContentMaskedOut.as_bool(),
+        pointer_only_frames: frame_info.pointer_only_frames,
+        accumulated_frames: frame_info.info.AccumulatedFrames,
+        desktop_updated: frame_info.info.LastPresentTime != 0,
+        pointer_updated: frame_info.info.LastMouseUpdateTime != 0,
+        protected_content_masked: frame_info.info.ProtectedContentMaskedOut.as_bool(),
     });
     let copied = resource
-        .expect("AcquireNextFrame returned a resource on success")
         .cast::<ID3D11Texture2D>()
         .and_then(|frame| copy_to_cpu(device, context, &frame, width, height));
     // SAFETY: the frame acquired above is released once, after its last use.
@@ -472,6 +470,58 @@ fn duplicate_output(
         bounds,
         image: RgbaImage::new(width, height, pixels)?,
     })
+}
+
+struct DesktopFrameInfo {
+    info: DXGI_OUTDUPL_FRAME_INFO,
+    pointer_only_frames: u32,
+}
+
+/// The first frame of a new `duplication` that carries a desktop image, still acquired. A
+/// frame with no accumulated desktop update holds only the pointer; its texture was never
+/// given the desktop, so it is released and the next is awaited, up to
+/// [`FIRST_FRAME_TIMEOUT`] in all.
+/// Whether a duplicated frame was given the desktop. A frame that holds only a pointer update
+/// has a texture that was never written, which reads as black.
+fn holds_desktop_image(info: &DXGI_OUTDUPL_FRAME_INFO) -> bool {
+    info.AccumulatedFrames > 0
+}
+
+fn desktop_frame(
+    duplication: &IDXGIOutputDuplication,
+) -> Result<(DesktopFrameInfo, IDXGIResource), Error> {
+    let started = Instant::now();
+    let mut pointer_only_frames = 0;
+    loop {
+        let left = FIRST_FRAME_TIMEOUT.saturating_sub(started.elapsed());
+        let left = u32::try_from(left.as_millis()).expect("under the 500 ms timeout");
+        let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
+        let mut resource: Option<IDXGIResource> = None;
+        // SAFETY: both outputs are writable; an acquired frame is released before the next
+        // acquire, or by the caller.
+        let acquired =
+            unsafe { duplication.AcquireNextFrame(left, &raw mut info, &raw mut resource) };
+        match acquired {
+            Ok(()) => {}
+            Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
+                return Err(Error::NoDesktopImage {
+                    pointer_only_frames,
+                });
+            }
+            Err(error) => return Err(Error::Capture(error)),
+        }
+        if holds_desktop_image(&info) {
+            let resource = resource.expect("AcquireNextFrame returned a resource on success");
+            let frame = DesktopFrameInfo {
+                info,
+                pointer_only_frames,
+            };
+            return Ok((frame, resource));
+        }
+        pointer_only_frames += 1;
+        // SAFETY: the pointer-only frame acquired above is released once, unused.
+        unsafe { duplication.ReleaseFrame() }.map_err(Error::Capture)?;
+    }
 }
 
 fn copy_to_cpu(
@@ -688,6 +738,21 @@ mod tests {
             let frame = output.frame.expect("a duplicated output names its frame");
             assert_eq!(frame.format, DXGI_FORMAT_B8G8R8A8_UNORM.0, "{output:?}");
         }
+    }
+
+    #[test]
+    fn f01_a_pointer_only_frame_is_never_copied() {
+        let pointer_only = DXGI_OUTDUPL_FRAME_INFO {
+            LastMouseUpdateTime: 1,
+            ..Default::default()
+        };
+        assert!(!holds_desktop_image(&pointer_only));
+        let desktop = DXGI_OUTDUPL_FRAME_INFO {
+            LastPresentTime: 1,
+            AccumulatedFrames: 1,
+            ..Default::default()
+        };
+        assert!(holds_desktop_image(&desktop));
     }
 
     #[test]

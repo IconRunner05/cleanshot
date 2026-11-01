@@ -75,6 +75,10 @@ pub enum Error {
     NoMonitorAtPointer,
     #[error("no display output could be duplicated")]
     NothingDuplicated,
+    #[error(
+        "duplication gave no desktop image in time, after {pointer_only_frames} frames that held only the pointer"
+    )]
+    NoDesktopImage { pointer_only_frames: u32 },
     #[error("DirectWrite could not lay out or draw the text")]
     Text(#[source] windows::core::Error),
     #[error("a glyph mask has an impossible size")]
