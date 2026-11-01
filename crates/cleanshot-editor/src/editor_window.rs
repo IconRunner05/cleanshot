@@ -1,4 +1,5 @@
-use std::ops::Range;
+mod text_input;
+
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -7,27 +8,27 @@ use std::time::Instant;
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
     KeyAction, Looks, Modifiers, Output, PointF, Press, Property, PropertyError, RgbaImage,
-    Setting, ShapeId, Start, TextBlockError, TextEdit, TextKey, TextOrigin, Tool, action_for_key,
+    Setting, ShapeId, Start, TextBlockError, TextKey, TextOrigin, Tool, action_for_key,
     delivery_notice, save_as_notice,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, FocusHandle, InputHandler, InteractiveElement,
-    IntoElement, KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
+    App, AppContext, Bounds, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions,
-    UTF16Selection, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px,
-    size,
+    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
 
 use crate::Error;
 use crate::canvas::{
-    OnPointer, Overlay, PaintOver, Pointer, RedactionPreviews, document_canvas, render_image,
+    OnPointer, Overlay, Pointer, RedactionPreviews, document_canvas, render_image,
 };
-use crate::placement::{Fit, Placement};
+use crate::placement::Placement;
 use crate::strip::property_strip;
 use crate::text::register_inter;
 use crate::text_box::TextBox;
 use crate::theme::Theme;
 use crate::toolbar::toolbar;
+use text_input::paint_text_box;
 
 type Deliver = Box<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
 type SaveTo = Box<dyn Fn(&Path, &Document) -> Result<Delivered, DeliveryError>>;
@@ -484,115 +485,6 @@ impl Render for EditorView {
                     .clone()
                     .map(|notice| notice_panel(notice, theme)),
             )
-    }
-}
-
-/// F-34: draws the box's caret and selection over the canvas, and hands the window's text input
-/// and input method to it while the editor has focus.
-fn paint_text_box(
-    text_box: TextBox,
-    view: WeakEntity<EditorView>,
-    focus: FocusHandle,
-) -> PaintOver {
-    Box::new(move |fit, window, cx| {
-        text_box.paint(fit, window);
-        window.handle_input(&focus, BoxInput { view, fit: *fit }, cx);
-    })
-}
-
-/// The open text box as GPUI's text input and input method see it, in UTF-16 offsets.
-struct BoxInput {
-    view: WeakEntity<EditorView>,
-    fit: Fit,
-}
-
-impl BoxInput {
-    fn read<R>(&self, cx: &App, read: impl FnOnce(&TextBox) -> R) -> Option<R> {
-        self.view.upgrade()?.read(cx).text_box.as_ref().map(read)
-    }
-
-    fn change(&self, cx: &mut App, change: impl FnOnce(&mut TextEdit)) {
-        // Err only means the window closed, and with it the box being typed into.
-        let _ = self.view.update(cx, |view, cx| {
-            if let Some(text_box) = &mut view.text_box {
-                change(text_box.edit_mut());
-                cx.notify();
-            }
-        });
-    }
-}
-
-impl InputHandler for BoxInput {
-    fn selected_text_range(
-        &mut self,
-        _ignore_disabled_input: bool,
-        _: &mut Window,
-        cx: &mut App,
-    ) -> Option<UTF16Selection> {
-        self.read(cx, TextBox::selected)
-    }
-
-    fn marked_text_range(&mut self, _: &mut Window, cx: &mut App) -> Option<Range<usize>> {
-        self.read(cx, |text_box| text_box.edit().marked()).flatten()
-    }
-
-    fn text_for_range(
-        &mut self,
-        range: Range<usize>,
-        adjusted: &mut Option<Range<usize>>,
-        _: &mut Window,
-        cx: &mut App,
-    ) -> Option<String> {
-        let (text, range) = self.read(cx, |text_box| text_box.edit().text_for_range(range))?;
-        *adjusted = Some(range);
-        Some(text)
-    }
-
-    fn replace_text_in_range(
-        &mut self,
-        range: Option<Range<usize>>,
-        text: &str,
-        _: &mut Window,
-        cx: &mut App,
-    ) {
-        self.change(cx, |edit| edit.replace(range, text));
-    }
-
-    fn replace_and_mark_text_in_range(
-        &mut self,
-        range: Option<Range<usize>>,
-        text: &str,
-        selected: Option<Range<usize>>,
-        _: &mut Window,
-        cx: &mut App,
-    ) {
-        self.change(cx, |edit| edit.replace_and_mark(range, text, selected));
-    }
-
-    fn unmark_text(&mut self, _: &mut Window, cx: &mut App) {
-        self.change(cx, TextEdit::unmark);
-    }
-
-    fn bounds_for_range(
-        &mut self,
-        range: Range<usize>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Option<Bounds<Pixels>> {
-        self.read(cx, |text_box| {
-            text_box.bounds_for(&range, &self.fit, window)
-        })
-    }
-
-    fn character_index_for_point(
-        &mut self,
-        point: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Option<usize> {
-        self.read(cx, |text_box| {
-            text_box.offset_at_screen(point, &self.fit, window)
-        })
     }
 }
 
