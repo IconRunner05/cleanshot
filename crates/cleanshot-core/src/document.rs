@@ -135,6 +135,19 @@ pub struct Frame {
     pub shadow: bool,
 }
 
+// D-80: CHARTER 4's "0 8 24, 25% black" shadow, blur radius two deviations; a 20% black border.
+impl Frame {
+    /// The border's opacity: black at 20%, one image pixel wide.
+    pub const BORDER_ALPHA: u8 = 51;
+    /// How far, in image pixels, the shadow falls below the image.
+    pub const SHADOW_OFFSET: u32 = 8;
+    /// The shadow's blur radius in image pixels: twice its standard deviation, and how far
+    /// past the offset image the export reaches.
+    pub const SHADOW_BLUR: u32 = 24;
+    /// The shadow's opacity where it is fully covered: black at 25%.
+    pub const SHADOW_ALPHA: f32 = 0.25;
+}
+
 /// Names one shape for the life of its [`crate::History`]; never reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ShapeId(pub(crate) u64);

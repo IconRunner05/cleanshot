@@ -4,14 +4,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM, Shape,
-    ShapeId, Style, arrow_head, dimmed_areas, handles,
+    Color, Command, Document, Fill, Frame, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM,
+    Shape, ShapeId, Style, arrow_head, dimmed_areas, handles,
 };
 use cleanshot_render::{Redacted, redacted};
 use gpui::{
-    App, BorderStyle, Bounds, Canvas, DispatchPhase, Hitbox, HitboxBehavior, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, RenderImage, Rgba,
-    ScrollDelta, ScrollEvent, Window, canvas, fill, point, px, quad, size, transparent_black,
+    App, BorderStyle, Bounds, BoxShadow, Canvas, Corners, DispatchPhase, Hitbox, HitboxBehavior,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point,
+    RenderImage, Rgba, ScrollDelta, ScrollEvent, Window, canvas, fill, hsla, point, px, quad, size,
+    transparent_black,
 };
 use smallvec::smallvec;
 
@@ -192,6 +193,7 @@ pub(crate) fn document_canvas(
             let placement =
                 placement.unwrap_or_else(|| Placement::fitted(bounds.size, image, scale_factor));
             let fit = Fit::new(bounds, image, placement, scale_factor);
+            paint_frame(document.frame(), fit.image_bounds, fit.scale, window);
             // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
             let _ = window.paint_image(
                 fit.image_bounds,
@@ -313,6 +315,40 @@ fn listen_for_pointer(
             on_zoom(zoom, window, cx);
         }
     });
+}
+
+/// F-44: the frame the export draws around the image, at the image's scale, so the canvas shows
+/// how the export will look. It frames the whole image, as the canvas shows it uncropped.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the frame's sizes are a few pixels, exact in f32"
+)]
+fn paint_frame(frame: Frame, image: Bounds<Pixels>, scale: f32, window: &mut Window) {
+    let border = if frame.border { scale } else { 0.0 };
+    let block = image.dilate(px(border));
+    if frame.shadow {
+        window.paint_drop_shadows(
+            block,
+            Corners::default(),
+            &[BoxShadow {
+                color: hsla(0.0, 0.0, 0.0, Frame::SHADOW_ALPHA),
+                offset: point(px(0.0), px(Frame::SHADOW_OFFSET as f32 * scale)),
+                blur_radius: px(Frame::SHADOW_BLUR as f32 * scale),
+                spread_radius: px(0.0),
+                inset: false,
+            }],
+        );
+    }
+    if frame.border {
+        window.paint_quad(quad(
+            block,
+            px(0.0),
+            transparent_black(),
+            px(border),
+            hsla(0.0, 0.0, 0.0, f32::from(Frame::BORDER_ALPHA) / 255.0),
+            BorderStyle::Solid,
+        ));
+    }
 }
 
 fn paint_outline(bounds: Bounds<Pixels>, window: &mut Window) {

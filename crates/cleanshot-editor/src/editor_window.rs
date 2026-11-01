@@ -364,6 +364,46 @@ fn refusal(error: &CommandError) -> &'static str {
     }
 }
 
+impl EditorView {
+    /// The property strip for what the next strip change would restyle, and the frame toggles.
+    fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
+        let setter = view.clone();
+        let on_set = move |property, window: &mut Window, cx: &mut App| {
+            // Err only means the window closed, and with it what the strip could change.
+            let _ = setter.update(cx, |view, cx| {
+                view.set_property(property);
+                if view.text_box.is_some() {
+                    window.focus(&view.focus, cx);
+                }
+                cx.notify();
+            });
+        };
+        let framer = view.clone();
+        let on_frame = move |frame, _: &mut Window, cx: &mut App| {
+            // Err only means the window closed, and with it the frame there was to change.
+            let _ = framer.update(cx, |view, cx| {
+                view.apply(Command::SetFrame(frame));
+                cx.notify();
+            });
+        };
+        let (strip_tool, look) = if let Some(text_box) = &self.text_box {
+            (Tool::Text, text_box.look(&self.looks))
+        } else {
+            let selected = self.selected.and_then(|id| self.document.shape(id));
+            self.looks.shown(self.tool, selected)
+        };
+        let settings = Setting::for_tool(strip_tool);
+        property_strip(
+            settings,
+            look,
+            self.document.frame(),
+            theme,
+            on_set,
+            on_frame,
+        )
+    }
+}
+
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
@@ -377,24 +417,7 @@ impl Render for EditorView {
                 cx.notify();
             });
         };
-        let setter = view.clone();
-        let on_set = move |property, window: &mut Window, cx: &mut App| {
-            // Err only means the window closed, and with it what the strip could change.
-            let _ = setter.update(cx, |view, cx| {
-                view.set_property(property);
-                if view.text_box.is_some() {
-                    window.focus(&view.focus, cx);
-                }
-                cx.notify();
-            });
-        };
-        let (strip_tool, look) = if let Some(text_box) = &self.text_box {
-            (Tool::Text, text_box.look(&self.looks))
-        } else {
-            let selected = self.selected.and_then(|id| self.document.shape(id));
-            self.looks.shown(self.tool, selected)
-        };
-        let settings = Setting::for_tool(strip_tool);
+        let strip = self.strip(&view, theme);
         let input = view.clone();
         let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {
             // Err only means the window closed, and with it everything the pointer could change.
@@ -454,10 +477,7 @@ impl Render for EditorView {
                     .items_center()
                     .gap(px(8.0))
                     .child(toolbar(self.tool, theme, on_pick))
-                    .children(
-                        (!settings.is_empty())
-                            .then(|| property_strip(settings, look, theme, on_set)),
-                    ),
+                    .child(strip),
             )
             .children(
                 self.notice

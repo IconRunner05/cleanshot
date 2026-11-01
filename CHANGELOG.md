@@ -14,6 +14,10 @@ section exists.
 - Settings window (F-55): what happens after a capture, the save folder, the save format
   and the three capture hotkeys, each change saved at once. A hotkey another program holds
   is named, and the old one stays.
+- Border and shadow (F-44): the Border and Shadow toggles on the property strip put a thin
+  border and a soft drop shadow around the whole image, on the canvas and in what is copied
+  or saved. The image grows to hold them; PNG keeps the shadow's edge transparent, and
+  JPG, BMP and the copied bitmap put it over white.
 
 ## [0.1.2] - 2026-11-01
 

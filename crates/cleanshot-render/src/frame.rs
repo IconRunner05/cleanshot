@@ -5,12 +5,6 @@ use tiny_skia::{BlendMode, ColorU8, Paint, PathBuilder, Pixmap, Rect, Transform}
 
 use crate::Error;
 
-// D-80: CHARTER 4's "0 8 24, 25% black" shadow, blur radius two deviations; a 20% black border.
-const SHADOW_OFFSET: u32 = 8;
-const SHADOW_BLUR: u32 = 24;
-const SHADOW_ALPHA: f64 = 0.25;
-const BORDER_ALPHA: u8 = 51;
-
 /// The space a frame adds on each side of the image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Margins {
@@ -32,10 +26,10 @@ impl Margins {
             };
         }
         Self {
-            left: border + SHADOW_BLUR,
-            top: border + SHADOW_BLUR - SHADOW_OFFSET,
-            right: border + SHADOW_BLUR,
-            bottom: border + SHADOW_BLUR + SHADOW_OFFSET,
+            left: border + Frame::SHADOW_BLUR,
+            top: border + Frame::SHADOW_BLUR - Frame::SHADOW_OFFSET,
+            right: border + Frame::SHADOW_BLUR,
+            bottom: border + Frame::SHADOW_BLUR + Frame::SHADOW_OFFSET,
         }
     }
 }
@@ -69,8 +63,8 @@ pub(crate) fn framed(image: Pixmap, frame: Frame) -> Result<Pixmap, Error> {
             &mut framed,
             (block_left, block_left + block_width),
             (
-                block_top + SHADOW_OFFSET,
-                block_top + SHADOW_OFFSET + block_height,
+                block_top + Frame::SHADOW_OFFSET,
+                block_top + Frame::SHADOW_OFFSET + block_height,
             ),
             (
                 margins.left as usize..(margins.left + image.width()) as usize,
@@ -99,7 +93,8 @@ pub(crate) fn framed(image: Pixmap, frame: Frame) -> Result<Pixmap, Error> {
 }
 
 /// Black whose alpha at (x, y) is the box `columns` x `rows` blurred by a Gaussian of standard
-/// deviation `SHADOW_BLUR / 2`. A blurred box is one blurred edge profile per axis, multiplied.
+/// deviation half of [`Frame::SHADOW_BLUR`]. A blurred box is one blurred edge profile per axis,
+/// multiplied.
 /// Pixels under `image` are left alone, since the image covers them.
 fn cast_shadow(
     pixmap: &mut Pixmap,
@@ -129,7 +124,7 @@ fn cast_shadow(
                 clippy::cast_sign_loss,
                 reason = "coverage is in 0..=1, so the product is in 0..=255"
             )]
-            let alpha = (SHADOW_ALPHA * coverage * 255.0).round() as u8;
+            let alpha = (f64::from(Frame::SHADOW_ALPHA) * coverage * 255.0).round() as u8;
             row[x] = ColorU8::from_rgba(0, 0, 0, alpha).premultiply();
         }
     }
@@ -137,8 +132,8 @@ fn cast_shadow(
 
 /// For each of `length` pixels, the share of a Gaussian centred on it that falls in `span`.
 fn blurred_span(length: u32, span: (u32, u32)) -> Vec<f64> {
-    let sigma = f64::from(SHADOW_BLUR) / 2.0;
-    let reach = i64::from(SHADOW_BLUR) * 3 / 2;
+    let sigma = f64::from(Frame::SHADOW_BLUR) / 2.0;
+    let reach = i64::from(Frame::SHADOW_BLUR) * 3 / 2;
     let weights: Vec<f64> = (-reach..=reach)
         .map(|offset| {
             #[expect(clippy::cast_precision_loss, reason = "offsets are under 2^52")]
@@ -166,7 +161,7 @@ fn draw_border(pixmap: &mut Pixmap, left: u32, top: u32, width: u32, height: u32
         blend_mode: BlendMode::SourceOver,
         ..Paint::default()
     };
-    paint.set_color_rgba8(0, 0, 0, BORDER_ALPHA);
+    paint.set_color_rgba8(0, 0, 0, Frame::BORDER_ALPHA);
     #[expect(clippy::cast_precision_loss, reason = "image sides are under 2^24")]
     let edges = {
         let (left, top, width, height) = (left as f32, top as f32, width as f32, height as f32);
@@ -253,7 +248,7 @@ mod tests {
             let pixel = framed.pixel(x, y).unwrap();
             assert_eq!(
                 (pixel.red(), pixel.alpha()),
-                (0, BORDER_ALPHA),
+                (0, Frame::BORDER_ALPHA),
                 "({x}, {y})"
             );
         }
