@@ -332,12 +332,7 @@ fn report_clipboard(report: &mut String) {
 }
 
 fn report_text(report: &mut String) {
-    report.push_str(
-        "
-## DirectWrite rendering params
-
-",
-    );
+    report.push_str("\n## DirectWrite rendering params\n\n");
     match rendering_params() {
         Ok(params) => {
             line(report, "Gamma", format!("{:?}", params.gamma));
