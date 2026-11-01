@@ -9,6 +9,12 @@ section exists.
 
 ## [Unreleased]
 
+### Added
+
+- Spotlight (F-43): S, or the Spotlight button, draws a box that keeps its area bright and
+  dims the rest of the capture. Several spotlights share one bright area, and arrows, text
+  and other shapes are never dimmed.
+
 ## [0.1.1] - 2026-11-01
 
 A fix for copying while clipboard history is on. Still an unsigned pre-release.

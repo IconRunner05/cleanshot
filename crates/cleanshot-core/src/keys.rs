@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn f40_ctrl_c_copies_and_ctrl_s_saves_while_c_alone_picks_crop() {
+    fn f40_f43_ctrl_c_copies_and_ctrl_s_saves_while_c_and_s_alone_pick_crop_and_spotlight() {
         let copy = Some(KeyAction::Deliver(Output::Copy));
         assert_eq!(action_for_key("c", CTRL, Activity::Idle), copy);
         assert_eq!(
@@ -243,6 +243,10 @@ mod tests {
         assert_eq!(
             action_for_key("c", NONE, Activity::Idle),
             Some(KeyAction::PickTool(Tool::Crop))
+        );
+        assert_eq!(
+            action_for_key("s", NONE, Activity::Idle),
+            Some(KeyAction::PickTool(Tool::Spotlight))
         );
     }
 

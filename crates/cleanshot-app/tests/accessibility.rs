@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use cleanshot_core::{DeliveryError, RgbaImage};
 use cleanshot_win::accessibility::{Control, ControlKind, controls_in_own_windows};
 
-const TOOLS: [&str; 10] = [
+const TOOLS: [&str; 11] = [
     "Select",
     "Arrow",
     "Line",
@@ -21,6 +21,7 @@ const TOOLS: [&str; 10] = [
     "Highlighter",
     "Text",
     "Redact",
+    "Spotlight",
     "Crop",
 ];
 

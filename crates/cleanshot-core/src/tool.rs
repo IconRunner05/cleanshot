@@ -37,7 +37,7 @@ impl Tool {
         }
     }
 
-    /// The tool a single key picks, as in the CHARTER feature table: V, A, L, R, O, P, H, X, C, T.
+    /// The tool a single key picks, as in the CHARTER feature table: V, A, L, R, O, P, H, X, C, T, S.
     /// Case is ignored.
     #[must_use]
     pub fn for_key(key: char) -> Option<Self> {
@@ -52,6 +52,7 @@ impl Tool {
             'x' => Self::Redact,
             'c' => Self::Crop,
             't' => Self::Text,
+            's' => Self::Spotlight,
             _ => return None,
         };
         Some(tool)
@@ -128,7 +129,7 @@ mod tests {
 
     #[test]
     fn f30_each_tool_has_its_key_from_the_charter_table() {
-        let tools: Vec<_> = "VALROPHXCT".chars().map(Tool::for_key).collect();
+        let tools: Vec<_> = "VALROPHXCTS".chars().map(Tool::for_key).collect();
         assert_eq!(
             tools,
             [
@@ -142,6 +143,7 @@ mod tests {
                 Tool::Redact,
                 Tool::Crop,
                 Tool::Text,
+                Tool::Spotlight,
             ]
             .map(Some)
         );
@@ -193,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn f35_f36_f37_highlight_redact_and_crop_cover_the_dragged_box() {
+    fn f35_f36_f37_f43_highlight_redact_crop_and_spotlight_cover_the_dragged_box() {
         let path = [point(5.0, 5.0), point(25.0, 15.0)];
         let area = RectF {
             x: 5.0,
@@ -216,6 +218,7 @@ mod tests {
             Tool::Crop.command(&path, false, &Look::default_for(Tool::Crop)),
             Some(Command::SetCrop(Some(area)))
         );
+        assert_eq!(added(Tool::Spotlight, &path, false), Shape::Spotlight(area));
     }
 
     #[test]
