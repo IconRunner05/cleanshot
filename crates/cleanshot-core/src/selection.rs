@@ -47,7 +47,8 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
         | Shape::Ellipse { .. }
         | Shape::Pen(_)
         | Shape::Highlight(_)
-        | Shape::Redact { .. } => bounds(shape).map_or_else(Vec::new, |rect| {
+        | Shape::Redact { .. }
+        | Shape::Spotlight(_) => bounds(shape).map_or_else(Vec::new, |rect| {
             box_handles(rect)
                 .into_iter()
                 .map(|(handle, at)| (Handle::Box(handle), at))
@@ -133,6 +134,7 @@ pub fn moved(shape: &Shape, offset: PointF) -> Shape {
         Shape::Pen(points) => Shape::Pen(points.iter().copied().map(shift).collect()),
         Shape::Text(block) => Shape::Text(block.moved_to(shift(block.at()))),
         Shape::Highlight(rect) => Shape::Highlight(shift_rect(*rect)),
+        Shape::Spotlight(rect) => Shape::Spotlight(shift_rect(*rect)),
         Shape::Redact { rect, mode } => Shape::Redact {
             rect: shift_rect(*rect),
             mode: *mode,
@@ -161,6 +163,9 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
         (Shape::Highlight(_), Handle::Box(handle)) => {
             new_bounds(handle).map_or_else(|| shape.clone(), Shape::Highlight)
         }
+        (Shape::Spotlight(_), Handle::Box(handle)) => {
+            new_bounds(handle).map_or_else(|| shape.clone(), Shape::Spotlight)
+        }
         (Shape::Redact { mode, .. }, Handle::Box(handle)) => match new_bounds(handle) {
             Some(rect) => Shape::Redact { rect, mode: *mode },
             None => shape.clone(),
@@ -180,7 +185,8 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
             | Shape::Ellipse { .. }
             | Shape::Pen(_)
             | Shape::Highlight(_)
-            | Shape::Redact { .. },
+            | Shape::Redact { .. }
+            | Shape::Spotlight(_),
             Handle::Start | Handle::End,
         )
         | (Shape::Text(_), Handle::Box(_) | Handle::Start | Handle::End) => shape.clone(),
@@ -215,7 +221,10 @@ pub fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
         Shape::Rect {
             rect,
             fill: Fill::Hollow,
-        } => inside(grown(*rect, reach), point) && !inside(grown(*rect, -reach), point),
+        }
+        | Shape::Spotlight(rect) => {
+            inside(grown(*rect, reach), point) && !inside(grown(*rect, -reach), point)
+        }
         Shape::Rect {
             rect,
             fill: Fill::Solid,
@@ -243,7 +252,8 @@ fn bounds(shape: &Shape) -> Option<RectF> {
         Shape::Rect { rect, .. }
         | Shape::Ellipse { rect, .. }
         | Shape::Highlight(rect)
-        | Shape::Redact { rect, .. } => Some(*rect),
+        | Shape::Redact { rect, .. }
+        | Shape::Spotlight(rect) => Some(*rect),
         Shape::Pen(points) => {
             let (first, rest) = points.split_first()?;
             let (mut low, mut high) = (*first, *first);
@@ -590,5 +600,12 @@ mod tests {
             point(-20.0, -10.0),
         );
         assert_eq!(dragged, rect(-20.0, -10.0, 20.0, 10.0));
+    }
+
+    #[test]
+    fn f43_a_spotlight_is_gripped_by_its_edge_and_not_inside() {
+        let spotlight = Shape::Spotlight(rect(0.0, 0.0, 100.0, 50.0));
+        assert!(hits(&spotlight, point(100.0, 25.0), 3.0));
+        assert!(!hits(&spotlight, point(50.0, 25.0), 3.0));
     }
 }

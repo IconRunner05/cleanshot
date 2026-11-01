@@ -55,6 +55,71 @@ impl Document {
     }
 }
 
+/// The parts of `base` the spotlights among `shapes` dim: everything outside all of them, as
+/// rectangles that do not overlap; none when there is no spotlight (F-43, D-78).
+#[must_use]
+pub fn dimmed_areas<'a>(
+    base: &RgbaImage,
+    shapes: impl IntoIterator<Item = &'a Shape>,
+) -> Vec<RectF> {
+    let spotlights: Vec<RectF> = shapes
+        .into_iter()
+        .filter_map(|shape| {
+            if let Shape::Spotlight(rect) = shape {
+                Some(*rect)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if spotlights.is_empty() {
+        return Vec::new();
+    }
+    let cuts = |limit: u32, sides: fn(&RectF) -> [f32; 2]| {
+        let limit = f64::from(limit);
+        let mut cuts: Vec<f64> = spotlights
+            .iter()
+            .flat_map(sides)
+            .map(|side| f64::from(side).clamp(0.0, limit))
+            .chain([0.0, limit])
+            .collect();
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup();
+        cuts
+    };
+    let columns = cuts(base.width(), |rect| [rect.x, rect.x + rect.width]);
+    let rows = cuts(base.height(), |rect| [rect.y, rect.y + rect.height]);
+    let lit = |x: f64, y: f64| {
+        spotlights.iter().any(|spot| {
+            let (left, top) = (f64::from(spot.x), f64::from(spot.y));
+            (left..left + f64::from(spot.width)).contains(&x)
+                && (top..top + f64::from(spot.height)).contains(&y)
+        })
+    };
+    let mut dimmed = Vec::new();
+    for row in rows.windows(2) {
+        for column in columns.windows(2) {
+            if !lit(column[0].midpoint(column[1]), row[0].midpoint(row[1])) {
+                dimmed.push(cell(column[0], row[0], column[1], row[1]));
+            }
+        }
+    }
+    dimmed
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "every cut is an f32 side or an image size, clamped to the image"
+)]
+fn cell(left: f64, top: f64, right: f64, bottom: f64) -> RectF {
+    RectF {
+        x: left as f32,
+        y: top as f32,
+        width: (right - left) as f32,
+        height: (bottom - top) as f32,
+    }
+}
+
 /// Names one shape for the life of its [`crate::History`]; never reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ShapeId(pub(crate) u64);
@@ -95,6 +160,8 @@ pub enum Shape {
         rect: RectF,
         mode: RedactMode,
     },
+    /// Dims the image outside it (F-43).
+    Spotlight(RectF),
 }
 
 /// Whether a rectangle or ellipse is drawn as an outline or filled with the style colour.
@@ -110,6 +177,14 @@ pub enum RedactMode {
     Pixelate,
     Blur,
 }
+
+/// What a spotlight lays over the image outside it (F-43, D-78).
+pub const SPOTLIGHT_DIM: Color = Color {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 153,
+};
 
 /// The colour a shape is drawn in, and its stroke width in image pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -276,5 +351,49 @@ mod tests {
     fn f31_arrow_head_barbs_are_at_least_ten_pixels_for_thin_strokes() {
         let [left, tip, _] = arrow_head(PointF { x: 0.0, y: 0.0 }, PointF { x: 0.0, y: 50.0 }, 1.0);
         assert!(((left.x - tip.x).hypot(left.y - tip.y) - 10.0).abs() < 1e-4);
+    }
+
+    fn dimmed(shapes: &[Shape]) -> Vec<RectF> {
+        dimmed_areas(
+            &RgbaImage::new(40, 30, vec![0; 40 * 30 * 4]).unwrap(),
+            shapes,
+        )
+    }
+
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> RectF {
+        RectF {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn f43_every_pixel_outside_the_spotlights_is_dimmed_once_and_none_inside() {
+        let spots = [
+            rect(5.0, 4.0, 10.0, 8.0),
+            rect(12.0, 10.0, 10.0, 6.0),
+            rect(30.0, -5.0, 20.0, 10.0),
+        ];
+        let areas = dimmed(&spots.map(Shape::Spotlight));
+        let inside = |area: &RectF, x: f32, y: f32| {
+            (area.x..area.x + area.width).contains(&x)
+                && (area.y..area.y + area.height).contains(&y)
+        };
+        for y in 0..30_u8 {
+            for x in 0..40_u8 {
+                let (x, y) = (f32::from(x) + 0.5, f32::from(y) + 0.5);
+                let lit = spots.iter().any(|spot| inside(spot, x, y));
+                let dimmed = areas.iter().filter(|area| inside(area, x, y)).count();
+                assert_eq!(dimmed, usize::from(!lit), "pixel at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn f43_only_spotlights_dim() {
+        let highlight = Shape::Highlight(rect(5.0, 4.0, 10.0, 8.0));
+        assert_eq!(dimmed(&[highlight]), Vec::new());
     }
 }

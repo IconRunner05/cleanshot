@@ -17,6 +17,7 @@ pub enum Tool {
     Redact,
     Crop,
     Text,
+    Spotlight,
 }
 
 impl Tool {
@@ -32,6 +33,7 @@ impl Tool {
             Shape::Text(_) => Self::Text,
             Shape::Highlight(_) => Self::Highlighter,
             Shape::Redact { .. } => Self::Redact,
+            Shape::Spotlight(_) => Self::Spotlight,
         }
     }
 
@@ -102,6 +104,7 @@ impl Tool {
                     mode: RedactMode::Pixelate,
                 })
             }),
+            Self::Spotlight => has_area.then(|| add(Shape::Spotlight(area))),
             Self::Crop => has_area.then_some(Command::SetCrop(Some(area))),
         }
     }

@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use cleanshot_core::{
-    Color, Document, Fill, GlyphMask, PointF, RectF, RgbaImage, Shape, ShapeEntry, TextMasks,
-    arrow_head,
+    Color, Document, Fill, GlyphMask, PointF, RectF, RgbaImage, SPOTLIGHT_DIM, Shape, ShapeEntry,
+    TextMasks, arrow_head, dimmed_areas,
 };
 use tiny_skia::{
     BlendMode, ColorU8, FillRule, IntRect, IntSize, LineCap, LineJoin, Paint, Path, PathBuilder,
@@ -40,8 +40,9 @@ impl Flattened {
 }
 
 /// The document's final pixels: the base image with every shape drawn on it in order, cut to
-/// the crop (F-37). Copy and save both export these pixels (F-24). Text shapes are painted
-/// from `masks`, their glyph coverage as DirectWrite rasterised it (F-34).
+/// the crop (F-37), outside any spotlight dimmed first (F-43). Copy and save both export these
+/// pixels (F-24). Text shapes are painted from `masks`, their glyph coverage as DirectWrite
+/// rasterised it (F-34).
 ///
 /// # Errors
 ///
@@ -57,6 +58,17 @@ pub fn flatten(document: &Document, masks: &TextMasks) -> Result<Flattened, Erro
     let premultiplied = premultiplied(base.pixels());
     let size = IntSize::from_wh(base.width(), base.height()).ok_or_else(too_large)?;
     let mut pixmap = Pixmap::from_vec(premultiplied, size).ok_or_else(too_large)?;
+    let dim = Paint {
+        anti_alias: false,
+        ..paint(SPOTLIGHT_DIM, BlendMode::SourceOver)
+    };
+    for area in dimmed_areas(base, document.shapes().iter().map(|entry| &entry.shape)) {
+        fill(
+            &mut pixmap,
+            skia_rect(area).map(PathBuilder::from_rect),
+            &dim,
+        );
+    }
     for entry in document.shapes() {
         draw(&mut pixmap, entry, masks)?;
     }
@@ -177,6 +189,8 @@ fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry, masks: &TextMasks) -> Result<()
             &self::paint(entry.style.color, BlendMode::Multiply),
         ),
         Shape::Redact { rect, mode } => redact(pixmap, *rect, *mode),
+        // F-43: flatten dims around every spotlight before it draws any shape.
+        Shape::Spotlight(_) => {}
         Shape::Text(_) => {
             let layers = masks
                 .layers(entry.id)
@@ -489,5 +503,87 @@ mod tests {
         assert_eq!(pixel(&flat, 1, 2), [200, 100, 50, 255]);
         assert_eq!(pixel(&flat, 3, 2), [200, 100, 50, 255]);
         assert_eq!(pixel(&flat, 0, 1), [200, 100, 50, 255]);
+    }
+
+    #[test]
+    fn f43_a_spotlight_dims_the_capture_outside_it_and_no_annotation() {
+        let mut history = history(uniform([250, 250, 250, 255]));
+        let red = Style {
+            color: Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            stroke_width: 1.0,
+        };
+        let corner = RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        let spotlight = RectF {
+            x: 2.0,
+            y: 1.0,
+            width: 2.0,
+            height: 2.0,
+        };
+        for shape in [
+            Shape::Rect {
+                rect: corner,
+                fill: Fill::Solid,
+            },
+            Shape::Spotlight(spotlight),
+        ] {
+            history.apply(Command::Add { shape, style: red }).unwrap();
+        }
+
+        let flat = flatten(history.document(), &TextMasks::default())
+            .unwrap()
+            .image()
+            .clone();
+        assert_eq!(pixel(&flat, 0, 0), [255, 0, 0, 255]);
+        assert_eq!(pixel(&flat, 3, 2), [250, 250, 250, 255]);
+        assert_eq!(pixel(&flat, 1, 1), [100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn d78_a_redaction_outside_the_spotlight_exports_dimmed_like_the_capture() {
+        let mut history = history(uniform([250, 250, 250, 255]));
+        let style = Style {
+            color: Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            stroke_width: 1.0,
+        };
+        let spotlight = Shape::Spotlight(RectF {
+            x: 3.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        });
+        let redaction = Shape::Redact {
+            rect: RectF {
+                x: 0.0,
+                y: 1.0,
+                width: 2.0,
+                height: 2.0,
+            },
+            mode: cleanshot_core::RedactMode::Pixelate,
+        };
+        for shape in [spotlight, redaction] {
+            history.apply(Command::Add { shape, style }).unwrap();
+        }
+
+        let flat = flatten(history.document(), &TextMasks::default())
+            .unwrap()
+            .image()
+            .clone();
+        assert_eq!(pixel(&flat, 0, 1), [100, 100, 100, 255]);
+        assert_eq!(pixel(&flat, 1, 2), [100, 100, 100, 255]);
     }
 }

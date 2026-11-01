@@ -308,6 +308,31 @@ mod tests {
     }
 
     #[test]
+    fn c22_a_redaction_in_a_dimmed_area_keeps_no_original_pixel_dimmed_or_not() {
+        let spotlight = (
+            Shape::Spotlight(RectF {
+                x: 40.0,
+                y: 30.0,
+                width: 20.0,
+                height: 10.0,
+            }),
+            style(MAGENTA),
+        );
+        let dimmed = flatten_with(vec![spotlight.clone()]);
+        for mode in [RedactMode::Pixelate, RedactMode::Blur] {
+            let flat = flatten_with(vec![spotlight.clone(), redaction(mode)]);
+            for ((x, y, pixel), (_, _, dimmed_original)) in pixels(&flat).zip(pixels(&dimmed)) {
+                if in_area(x, y) {
+                    assert!(
+                        ![MAGENTA, GREEN, dimmed_original].contains(&pixel),
+                        "{mode:?} kept ({x}, {y}) as {pixel:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn c22_blur_keeps_nothing_finer_than_the_cell_averages() {
         let whole_cells = RectF {
             x: 0.0,

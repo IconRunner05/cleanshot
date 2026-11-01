@@ -4,8 +4,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, PointF, RectF, RedactMode, RgbaImage, Shape, ShapeId, Style,
-    arrow_head, handles,
+    Color, Command, Document, Fill, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM, Shape,
+    ShapeId, Style, arrow_head, dimmed_areas, handles,
 };
 use cleanshot_render::{Redacted, redacted};
 use gpui::{
@@ -206,19 +206,23 @@ pub(crate) fn document_canvas(
                 Some(Command::Add { shape, style }) => (None, Some((shape, style))),
                 Some(Command::Remove(_) | Command::SetCrop(_)) | None => (None, None),
             };
+            let shown: Vec<_> = document
+                .shapes()
+                .iter()
+                .map(|entry| match replaced {
+                    Some((id, shape, style)) if id == entry.id => (Some(entry.id), shape, style),
+                    Some(_) | None => (Some(entry.id), &entry.shape, &entry.style),
+                })
+                .chain(added.map(|(shape, style)| (None, shape, style)))
+                .collect();
+            let dimmed = dimmed_areas(image, shown.iter().map(|(_, shape, _)| *shape));
+            paint_dim(&dimmed, fit.image_bounds, &fit, window);
             let mut selected_shape = None;
-            for entry in document.shapes() {
-                let (shape, style) = match replaced {
-                    Some((id, shape, style)) if id == entry.id => (shape, style),
-                    Some(_) | None => (&entry.shape, &entry.style),
-                };
-                paint_shape(shape, *style, &fit, &redactions, window, cx);
-                if overlay.selected == Some(entry.id) {
+            for (id, shape, style) in shown {
+                paint_shape(shape, *style, &fit, &redactions, &dimmed, window, cx);
+                if id.is_some() && overlay.selected == id {
                     selected_shape = Some(shape);
                 }
-            }
-            if let Some((shape, style)) = added {
-                paint_shape(shape, *style, &fit, &redactions, window, cx);
             }
             if let Some(Command::SetCrop(Some(crop))) = &overlay.preview {
                 paint_outline(fit.bounds(*crop), window);
@@ -338,6 +342,7 @@ fn paint_shape(
     style: Style,
     fit: &Fit,
     redactions: &RedactionPreviews,
+    dimmed: &[RectF],
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -398,7 +403,23 @@ fn paint_shape(
             paint_polygon(window, stroke, &points, false, color);
         }
         Shape::Text(block) => paint_text(block, color, fit, window, cx),
-        Shape::Redact { rect, mode } => redactions.paint(*rect, *mode, fit, window),
+        Shape::Redact { rect, mode } => {
+            redactions.paint(*rect, *mode, fit, window);
+            // D-78: a redaction is the capture with its pixels destroyed, so it dims like the capture.
+            paint_dim(dimmed, fit.bounds(*rect), fit, window);
+        }
+        // F-43: the canvas dims around every spotlight before it paints any shape.
+        Shape::Spotlight(_) => {}
+    }
+}
+
+/// Lays the spotlight dim over each of `areas`, cut to `within` (F-43, D-78).
+fn paint_dim(areas: &[RectF], within: Bounds<Pixels>, fit: &Fit, window: &mut Window) {
+    for area in areas {
+        let bounds = fit.bounds(*area).intersect(&within);
+        if !bounds.is_empty() {
+            window.paint_quad(fill(bounds, rgba(SPOTLIGHT_DIM)));
+        }
     }
 }
 
