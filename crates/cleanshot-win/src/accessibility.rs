@@ -9,8 +9,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationInvokePattern, TreeScope_Subtree,
-    UIA_ButtonControlTypeId, UIA_ImageControlTypeId, UIA_InvokePatternId,
-    UIA_RadioButtonControlTypeId, UIA_ToolBarControlTypeId,
+    UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ImageControlTypeId,
+    UIA_InvokePatternId, UIA_RadioButtonControlTypeId, UIA_ToolBarControlTypeId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId};
 use windows::core::BOOL;
@@ -31,6 +31,7 @@ pub enum ControlKind {
     ToolBar,
     Button,
     RadioButton,
+    CheckBox,
     Image,
     /// Any other `UIA_*ControlTypeId`.
     Other(i32),
@@ -191,6 +192,7 @@ fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
                 (UIA_ToolBarControlTypeId, ControlKind::ToolBar),
                 (UIA_ButtonControlTypeId, ControlKind::Button),
                 (UIA_RadioButtonControlTypeId, ControlKind::RadioButton),
+                (UIA_CheckBoxControlTypeId, ControlKind::CheckBox),
                 (UIA_ImageControlTypeId, ControlKind::Image),
             ]
             .into_iter()
