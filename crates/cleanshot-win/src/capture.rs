@@ -9,9 +9,13 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_ROTATION_IDENTITY,
+};
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
-    IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
+    CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC,
+    DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
+    IDXGIOutputDuplication, IDXGIResource,
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
@@ -448,7 +452,9 @@ fn duplicate_output(
     // SAFETY: `device` belongs to this output's adapter.
     let duplication = unsafe { output.DuplicateOutput(device) }.map_err(Error::Capture)?;
     // SAFETY: a read of the duplication's own description.
-    let format = unsafe { duplication.GetDesc() }.ModeDesc.Format.0;
+    let description = unsafe { duplication.GetDesc() };
+    copyable(&description, width, height)?;
+    let format = description.ModeDesc.Format.0;
     let (frame_info, resource) = desktop_frame(&duplication)?;
     *frame = Some(FrameReport {
         format,
@@ -460,15 +466,37 @@ fn duplicate_output(
     });
     let copied = resource
         .cast::<ID3D11Texture2D>()
+        .map_err(Error::Capture)
         .and_then(|frame| copy_to_cpu(device, context, &frame, width, height));
     // SAFETY: the frame acquired above is released once, after its last use.
     let released = unsafe { duplication.ReleaseFrame() };
     debug_assert!(released.is_ok(), "an acquired frame releases");
-    let mut pixels = copied.map_err(Error::Capture)?;
+    let mut pixels = copied?;
     bgra_to_rgba(&mut pixels);
     Ok(MonitorImage {
         bounds,
         image: RgbaImage::new(width, height, pixels)?,
+    })
+}
+
+/// D-28: `copy_to_cpu` reads upright 8-bit BGRA frames `width` x `height`; GDI copies the rest.
+fn copyable(description: &DXGI_OUTDUPL_DESC, width: u32, height: u32) -> Result<(), Error> {
+    let mode = &description.ModeDesc;
+    if (mode.Format, description.Rotation, mode.Width, mode.Height)
+        == (
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_MODE_ROTATION_IDENTITY,
+            width,
+            height,
+        )
+    {
+        return Ok(());
+    }
+    Err(Error::DuplicationNotCopyable {
+        format: mode.Format.0,
+        rotation: description.Rotation.0,
+        width: mode.Width,
+        height: mode.Height,
     })
 }
 
@@ -530,24 +558,39 @@ fn copy_to_cpu(
     frame: &ID3D11Texture2D,
     width: u32,
     height: u32,
-) -> windows::core::Result<Vec<u8>> {
+) -> Result<Vec<u8>, Error> {
     let mut description = D3D11_TEXTURE2D_DESC::default();
     // SAFETY: `frame` is live and `description` writable.
     unsafe { frame.GetDesc(&raw mut description) };
+    // A frame can arrive at a new size mid mode change; reading it as `width` x `height`
+    // would run past it.
+    if (description.Width, description.Height) != (width, height)
+        || description.Format != DXGI_FORMAT_B8G8R8A8_UNORM
+    {
+        return Err(Error::DuplicationNotCopyable {
+            format: description.Format.0,
+            rotation: DXGI_MODE_ROTATION_IDENTITY.0,
+            width: description.Width,
+            height: description.Height,
+        });
+    }
     description.Usage = D3D11_USAGE_STAGING;
     description.BindFlags = 0;
     description.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0.cast_unsigned();
     description.MiscFlags = 0;
     let mut staging = None;
     // SAFETY: `description` is a valid staging copy of the frame's description.
-    unsafe { device.CreateTexture2D(&raw const description, None, Some(&raw mut staging)) }?;
+    unsafe { device.CreateTexture2D(&raw const description, None, Some(&raw mut staging)) }
+        .map_err(Error::Capture)?;
     let staging: ID3D11Texture2D = staging.expect("CreateTexture2D returned a texture on success");
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     // SAFETY: both textures share size and format; the map is read only up to each row's
     // width, by RowPitch, and unmapped before return.
     unsafe {
         context.CopyResource(&staging, frame);
-        context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped))?;
+        context
+            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped))
+            .map_err(Error::Capture)?;
         let row = width as usize * 4;
         let pitch = mapped.RowPitch as usize;
         let mut pixels = Vec::with_capacity(row * height as usize);
@@ -569,7 +612,9 @@ fn bgra_to_rgba(pixels: &mut [u8]) {
 
 #[cfg(test)]
 mod tests {
-    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_MODE_DESC, DXGI_MODE_ROTATION_ROTATE90,
+    };
     use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_UNSUPPORTED};
 
     use super::*;
@@ -712,6 +757,57 @@ mod tests {
     #[test]
     fn d28_no_outputs_sends_every_monitor_to_gdi() {
         assert!(matches!(choose(Vec::new()), Err(Error::NothingDuplicated)));
+    }
+
+    #[test]
+    fn d28_only_an_upright_8_bit_bgra_frame_the_size_of_its_monitor_is_duplicated() {
+        let description = |format, rotation, width, height| DXGI_OUTDUPL_DESC {
+            ModeDesc: DXGI_MODE_DESC {
+                Width: width,
+                Height: height,
+                Format: format,
+                ..Default::default()
+            },
+            Rotation: rotation,
+            ..Default::default()
+        };
+        let upright = description(
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_MODE_ROTATION_IDENTITY,
+            1920,
+            1080,
+        );
+        assert!(copyable(&upright, 1920, 1080).is_ok());
+        for refused in [
+            description(
+                DXGI_FORMAT_R16G16B16A16_FLOAT,
+                DXGI_MODE_ROTATION_IDENTITY,
+                1920,
+                1080,
+            ),
+            description(
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_MODE_ROTATION_ROTATE90,
+                1080,
+                1920,
+            ),
+            description(
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_MODE_ROTATION_IDENTITY,
+                2560,
+                1440,
+            ),
+        ] {
+            assert!(
+                matches!(
+                    copyable(&refused, 1920, 1080),
+                    Err(Error::DuplicationNotCopyable { .. })
+                ),
+                "{:?} {:?}",
+                refused.ModeDesc,
+                refused.Rotation
+            );
+        }
     }
 
     #[test]

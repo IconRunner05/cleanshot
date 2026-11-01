@@ -79,6 +79,15 @@ pub enum Error {
         "duplication gave no desktop image in time, after {pointer_only_frames} frames that held only the pointer"
     )]
     NoDesktopImage { pointer_only_frames: u32 },
+    #[error(
+        "duplication gave a {width} x {height} frame in DXGI format {format} at rotation {rotation}, which only GDI can copy"
+    )]
+    DuplicationNotCopyable {
+        format: i32,
+        rotation: i32,
+        width: u32,
+        height: u32,
+    },
     #[error("DirectWrite could not lay out or draw the text")]
     Text(#[source] windows::core::Error),
     #[error("a glyph mask has an impossible size")]
