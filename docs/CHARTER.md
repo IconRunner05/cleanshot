@@ -393,7 +393,7 @@ Notes for agents:
 
 ## 10. Milestones and backlog
 
-Milestones end at gates, not dates. Do them in order, and do not start a milestone's tasks until the previous gate has passed, except that M3 starts during the M2 trial (D-59).
+Milestones end at gates, not dates. Do them in order, and do not start a milestone's tasks until the previous gate has passed, except that M3 starts during the M2 trial (D-59) and M4 starts before the M3 gate (D-77).
 
 ```mermaid
 flowchart TD
@@ -455,6 +455,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-77 | 2026-11-01 | M4 work starts before the M3 gate has passed. No v1.0 release is tagged until the M3 gate passes | decided (owner, 2026-11-01) | M3 waits on the reference-machine budget run and on code signing, neither of which M4 features change; the gate still stands before v1.0 |
 | D-75 | 2026-11-01 | On a hosted CI runner, P-01 fails only when its p95 is over 1.5 times the budget (150 ms); the judge still reports it against the 100 ms budget. On the reference machine the 100 ms budget is the gate. The factor applies to P-01 alone | assumed | Owner's direction, orchestrator's call. The runner is a floor, not the reference machine (CHARTER 7): its P-01 p95 moves past 100 ms with no code change, so a 100 ms gate there fails on the runner's load, not on Cleanshot. Same reasoning as D-57 |
 | D-74 | 2026-10-31 | Code-signing route: SignPath Foundation's free open-source signing, through SignPath's GitHub action in the release workflow; the Foundation holds the certificate, and the owner approves each signing request | decided (owner, 2026-10-31) | Free for an OSI-licensed project, and signs on GitHub-hosted runners from the workflow that builds the exe, so no certificate or key is held by the project. Its terms require a code signing policy on the project's home page, product metadata in the signed exe and multi-factor sign-in for the team |
 | D-73 | 2026-10-31 | Cleanshot opens the clipboard on a message-only window of its own, never on no window, and while another program holds it tries 10 times, 10 ms apart, before the copy fails and the user is told as before | decided (orchestrator, 2026-10-31) | Opened on no window, the clipboard has no owner after EmptyClipboard, so a program reading it on every change, as Win+V clipboard history and clipboard managers do, can open it mid-write and make the copy fail. 90 ms of waiting stays inside P-02's 150 ms |
