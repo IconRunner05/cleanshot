@@ -42,8 +42,8 @@ impl Flattened {
 
 /// The document's final pixels: the base image with every shape drawn on it in order, cut to
 /// the crop (F-37), outside any spotlight dimmed first (F-43), then framed by its border and
-/// shadow (F-44). Copy and save both export these pixels (F-24). Text shapes are painted from `masks`, their glyph coverage as DirectWrite
-/// rasterised it (F-34).
+/// shadow (F-44). Copy and save both export these pixels (F-24). Text shapes are painted from
+/// `masks`, their glyph coverage as DirectWrite rasterised it (F-34).
 ///
 /// # Errors
 ///
