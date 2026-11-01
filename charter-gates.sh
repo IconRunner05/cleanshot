@@ -123,6 +123,11 @@ done
 grep -q "Subsystem: IMAGE_SUBSYSTEM_WINDOWS_GUI " <<<"$headers" ||
     fail "CHARTER 7 gate 3: the $kind is not a Windows GUI exe, so a console window opens beside the tray."
 
+manifest=$("$llvm_bin/llvm-readobj" --coff-resources "$exe" |
+    awk '/^  Type: / { in_manifest = /\(ID 24\)/ } in_manifest && /\|.*\|$/ { sub(/^[^|]*\|/, ""); sub(/\|$/, ""); printf "%s", $0 }')
+[[ $manifest == *">PerMonitorV2</dpiAwareness>"* ]] ||
+    fail "D-71: the $kind's embedded manifest does not declare PerMonitorV2 DPI awareness."
+
 if [[ $kind == "release exe" ]]; then
     strings=$("$llvm_bin/llvm-strings" "$exe")
     host_paths=$(printf '%s\n' "$strings" | grep -i -F -e /Users/ -e /home/ -e 'C:\Users\' -e '\.cargo\' || [[ $? -eq 1 ]])
