@@ -9,9 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::RgbaImage;
-use cleanshot_win::accessibility::{
-    Control, ControlKind, controls_in_own_windows, invoke_in_own_windows,
-};
+use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_toolbar};
 use cleanshot_win::capture::{MonitorImage, RECT};
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
@@ -26,23 +24,27 @@ const SELECTED: RECT = RECT {
 const PATIENCE: Duration = Duration::from_secs(10);
 
 fn main() {
+    let start = Instant::now();
     let (chosen, choice) = mpsc::channel();
+    let (painted, shown) = mpsc::channel();
     thread::spawn(move || {
-        let verdict = toolbar_buttons().and_then(|buttons| {
-            if buttons != BUTTONS {
-                return Err(format!("buttons {buttons:?}, expected {BUTTONS:?}"));
-            }
-            match invoke_in_own_windows("Copy") {
-                Ok(true) => {}
-                Ok(false) => return Err(String::from("no button named Copy to invoke")),
-                Err(error) => return Err(format!("Copy could not be invoked: {error}")),
-            }
-            match choice.recv_timeout(PATIENCE) {
-                Ok(Some(selected)) if selected == SELECTED => Ok(()),
-                Ok(other) => Err(format!("the overlay sent {other:?} for Copy")),
-                Err(error) => Err(format!("the overlay sent nothing for Copy: {error}")),
-            }
-        });
+        let verdict = wait_for_toolbar("Capture", ControlKind::Button, start, &shown, PATIENCE)
+            .map_err(|missing| format!("{missing:?}"))
+            .and_then(|buttons| {
+                if buttons != BUTTONS {
+                    return Err(format!("buttons {buttons:?}, expected {BUTTONS:?}"));
+                }
+                match invoke_in_own_windows("Copy") {
+                    Ok(true) => {}
+                    Ok(false) => return Err(String::from("no button named Copy to invoke")),
+                    Err(error) => return Err(format!("Copy could not be invoked: {error}")),
+                }
+                match choice.recv_timeout(PATIENCE) {
+                    Ok(Some(selected)) if selected == SELECTED => Ok(()),
+                    Ok(other) => Err(format!("the overlay sent {other:?} for Copy")),
+                    Err(error) => Err(format!("the overlay sent nothing for Copy: {error}")),
+                }
+            });
         match verdict {
             Ok(()) => {
                 println!("{TEST} ... ok");
@@ -80,7 +82,12 @@ fn main() {
         });
         match shown {
             // The overlay stays up until the walk ends the process.
-            Ok(overlay) => std::mem::forget(overlay),
+            Ok(overlay) => {
+                painted
+                    .send(Instant::now())
+                    .expect("the walk thread waits for the overlay");
+                std::mem::forget(overlay);
+            }
             Err(error) => {
                 println!("{TEST} ... FAILED");
                 println!("the overlay did not open: {error}");
@@ -90,31 +97,4 @@ fn main() {
     });
     println!("GPUI stopped before the walk finished: {ran:?}");
     exit(1);
-}
-
-/// The buttons UI Automation reports, in order, once a toolbar named "Capture" appears.
-fn toolbar_buttons() -> Result<Vec<String>, String> {
-    let deadline = Instant::now() + PATIENCE;
-    let mut last = String::from("no window of this process was found");
-    while Instant::now() < deadline {
-        match controls_in_own_windows() {
-            Ok(controls) if has_toolbar(&controls) => {
-                return Ok(controls
-                    .into_iter()
-                    .filter(|control| control.kind == ControlKind::Button)
-                    .map(|control| control.name)
-                    .collect());
-            }
-            Ok(controls) => last = format!("no toolbar named Capture among {controls:?}"),
-            Err(error) => last = format!("UI Automation failed: {error}"),
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
-    Err(format!("after {PATIENCE:?}, {last}"))
-}
-
-fn has_toolbar(controls: &[Control]) -> bool {
-    controls
-        .iter()
-        .any(|control| control.kind == ControlKind::ToolBar && control.name == "Capture")
 }
