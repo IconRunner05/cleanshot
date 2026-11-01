@@ -31,8 +31,8 @@ pub use selection::{
     resized_box, shape_at,
 };
 pub use settings::{
-    AfterCapture, Hotkey, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers, SaveFormat, Settings,
-    SettingsProblem,
+    AfterCapture, Hotkey, HotkeyAction, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers, SaveFormat,
+    Settings, SettingsProblem,
 };
 pub use text::{
     DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,

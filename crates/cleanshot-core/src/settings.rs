@@ -55,6 +55,19 @@ pub struct Hotkeys {
     pub capture_panel: Hotkey,
 }
 
+/// A capture action whose hotkey the tray registers and the settings window edits (F-51, F-55).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HotkeyAction {
+    Region,
+    FullScreen,
+    LastRegion,
+}
+
+impl HotkeyAction {
+    /// Every action, in the order the settings window lists them.
+    pub const ALL: [Self; 3] = [Self::Region, Self::FullScreen, Self::LastRegion];
+}
+
 /// A key with its modifiers, written as `Ctrl+Shift+4`. Built only by [`Hotkey::parse`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hotkey {
@@ -139,6 +152,22 @@ impl Default for Hotkeys {
 }
 
 impl Settings {
+    /// `self`, if a settings file holding it reads back with no problem; else the problems that
+    /// file's reader would report, so nothing is kept that the next start would refuse (F-54,
+    /// F-55).
+    ///
+    /// # Errors
+    ///
+    /// Every [`SettingsProblem`] [`Settings::from_toml`] finds in [`Settings::to_toml`]'s text.
+    pub fn checked(self) -> Result<Self, Vec<SettingsProblem>> {
+        let (_, problems) = Self::from_toml(self.to_toml().as_bytes());
+        if problems.is_empty() {
+            Ok(self)
+        } else {
+            Err(problems)
+        }
+    }
+
     /// The settings in `bytes`, with every unusable part at its default and reported. Unknown
     /// keys are ignored (F-54); input over [`MAX_SETTINGS_BYTES`] is not parsed (C-13).
     #[must_use]
@@ -235,6 +264,34 @@ impl Settings {
 }
 
 impl Hotkeys {
+    /// The hotkey `action` is captured by.
+    #[must_use]
+    pub fn get(&self, action: HotkeyAction) -> Hotkey {
+        match action {
+            HotkeyAction::Region => self.region,
+            HotkeyAction::FullScreen => self.full_screen,
+            HotkeyAction::LastRegion => self.last_region,
+        }
+    }
+
+    /// Makes `hotkey` capture `action`.
+    pub fn set(&mut self, action: HotkeyAction, hotkey: Hotkey) {
+        let slot = match action {
+            HotkeyAction::Region => &mut self.region,
+            HotkeyAction::FullScreen => &mut self.full_screen,
+            HotkeyAction::LastRegion => &mut self.last_region,
+        };
+        *slot = hotkey;
+    }
+
+    /// The other action `hotkey` already captures, if any: no two actions share a hotkey.
+    #[must_use]
+    pub fn used_by_another(&self, action: HotkeyAction, hotkey: Hotkey) -> Option<HotkeyAction> {
+        HotkeyAction::ALL
+            .into_iter()
+            .find(|&other| other != action && self.get(other) == hotkey)
+    }
+
     fn named(&self) -> [(&'static str, Hotkey); 5] {
         [
             ("region", self.region),
@@ -483,6 +540,41 @@ mod tests {
         let (read_back, problems) = Settings::from_toml(settings.to_toml().as_bytes());
         assert_eq!(problems, []);
         assert_eq!(read_back, settings);
+    }
+
+    #[test]
+    fn f55_a_setting_the_next_start_would_refuse_is_refused_now_with_its_problem() {
+        let folder = |folder: String| Settings {
+            save_folder: Some(folder),
+            ..Settings::default()
+        };
+        let longest = folder("x".repeat(MAX_SAVE_FOLDER_BYTES));
+        assert_eq!(longest.clone().checked(), Ok(longest));
+        let invalid = vec![SettingsProblem::InvalidValue {
+            key: "save_folder".into(),
+        }];
+        assert_eq!(
+            folder("x".repeat(MAX_SAVE_FOLDER_BYTES + 1)).checked(),
+            Err(invalid.clone())
+        );
+        assert_eq!(folder(String::new()).checked(), Err(invalid));
+    }
+
+    #[test]
+    fn f55_no_two_actions_share_a_hotkey() {
+        let mut hotkeys = Hotkeys::default();
+        let screen = hotkeys.get(HotkeyAction::FullScreen);
+        assert_eq!(
+            hotkeys.used_by_another(HotkeyAction::Region, screen),
+            Some(HotkeyAction::FullScreen)
+        );
+        assert_eq!(
+            hotkeys.used_by_another(HotkeyAction::FullScreen, screen),
+            None
+        );
+        hotkeys.set(HotkeyAction::FullScreen, hotkey("Ctrl+F9"));
+        assert_eq!(hotkeys.full_screen, hotkey("Ctrl+F9"));
+        assert_eq!(hotkeys.used_by_another(HotkeyAction::Region, screen), None);
     }
 
     #[test]
