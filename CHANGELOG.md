@@ -9,6 +9,23 @@ section exists.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-01
+
+A fix for copying while clipboard history is on. Still an unsigned pre-release.
+
+### Fixed
+
+- Copy no longer fails when Windows clipboard history (Win+V) or a clipboard manager reads
+  the clipboard while Cleanshot is writing it (F-20). Before, such a reader could make a copy
+  fail with "the clipboard refused the image"; now Cleanshot holds the clipboard until the
+  image is written, and waits briefly if another program has it open.
+
+### Added
+
+- The exe's Properties, Details tab, shows its product name and version (Cleanshot, 0.1.1).
+- `cleanshot.exe --log` also records how long the editor takes to show its first frame
+  after you press Edit.
+
 ## [0.1.0] - 2026-10-31
 
 The first public build: a pre-release for trying Cleanshot day to day. It is not code-signed
