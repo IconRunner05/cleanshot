@@ -9,11 +9,28 @@ section exists.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-01
+
+Fixes for black or garbled captures on some PCs, and the spotlight tool. Still an unsigned
+pre-release.
+
+### Fixed
+
+- A capture could come out black on some PCs, often laptops or PCs with several monitors,
+  when Windows handed over a frame with no image in it (F-01). Cleanshot now waits for a
+  frame that holds the desktop, and otherwise captures the screen another way (D-28).
+- A capture of an HDR monitor could come out garbled and dark, and one of a portrait
+  (rotated) monitor could read past the end of the captured image. Both are now captured
+  correctly (D-28).
+- The first hotkey press after Cleanshot starts is no longer slow to show the overlay
+  (P-01, D-76).
+
 ### Added
 
 - Spotlight (F-43): S, or the Spotlight button, draws a box that keeps its area bright and
   dims the rest of the capture. Several spotlights share one bright area, and arrows, text
   and other shapes are never dimmed.
+- `cleanshot.exe --log` also records how each screen was captured (D-79).
 
 ## [0.1.1] - 2026-11-01
 

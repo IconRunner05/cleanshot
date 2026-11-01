@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "cleanshot-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cleanshot-core",
  "cleanshot-editor",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "cleanshot-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "thiserror",
  "toml",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "cleanshot-editor"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cleanshot-core",
  "cleanshot-render",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "cleanshot-fieldtest"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cleanshot-editor",
  "cleanshot-win",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "cleanshot-render"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cleanshot-core",
  "image",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "cleanshot-win"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cleanshot-core",
  "thiserror",
