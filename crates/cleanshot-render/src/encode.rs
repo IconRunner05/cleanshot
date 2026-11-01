@@ -10,10 +10,12 @@ use crate::{Error, Flattened};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Png,
-    /// Quality 90 (F-21); the alpha channel is dropped.
+    /// Quality 90 (F-21), over white (D-80).
     Jpeg,
+    /// Opaque, over white (D-80).
     Bmp,
-    /// A packed `CF_DIBV5`: the bitmap a BMP file holds, without the file header (F-20).
+    /// A packed `CF_DIBV5`: the bitmap a BMP file holds, without the file header (F-20); opaque,
+    /// over white, since many programs read it as `CF_DIB` and ignore its alpha (D-80).
     ClipboardBitmap,
 }
 
@@ -37,7 +39,7 @@ pub fn encode(flattened: &Flattened, format: Format) -> Result<Vec<u8>, Error> {
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .flat_map(|&[r, g, b, _]| [r, g, b])
+                .flat_map(|&pixel| over_white(pixel))
                 .collect();
             JpegEncoder::new_with_quality(&mut bytes, 90)
                 .write_image(&rgb, width, height, ExtendedColorType::Rgb8)
@@ -67,7 +69,7 @@ const BI_BITFIELDS: u32 = 3;
 const LCS_SRGB: u32 = u32::from_be_bytes(*b"sRGB");
 const LCS_GM_IMAGES: u32 = 4;
 
-/// A BITMAPV5HEADER, then 32-bit BGRA rows bottom-up with straight alpha. Layout:
+/// A BITMAPV5HEADER, then 32-bit BGRA rows bottom-up, every pixel opaque. Layout:
 /// <https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapv5header>
 fn clipboard_bitmap(image: &RgbaImage) -> Result<Vec<u8>, Error> {
     let too_large = || Error::TooLarge {
@@ -97,11 +99,24 @@ fn clipboard_bitmap(image: &RgbaImage) -> Result<Vec<u8>, Error> {
 
     let row_length = image.width() as usize * 4;
     for row in image.pixels().chunks_exact(row_length).rev() {
-        for &[r, g, b, a] in row.as_chunks::<4>().0 {
-            bytes.extend([b, g, r, a]);
+        for &pixel in row.as_chunks::<4>().0 {
+            let [r, g, b] = over_white(pixel);
+            bytes.extend([b, g, r, 255]);
         }
     }
     Ok(bytes)
+}
+
+/// A straight RGBA pixel laid over opaque white.
+fn over_white([r, g, b, a]: [u8; 4]) -> [u8; 3] {
+    if a == u8::MAX {
+        return [r, g, b];
+    }
+    let mix = |channel: u8| {
+        let lit = u16::from(channel) * u16::from(a) + 255 * (255 - u16::from(a));
+        u8::try_from((lit + 127) / 255).expect("a mix of two bytes is at most 255")
+    };
+    [mix(r), mix(g), mix(b)]
 }
 
 #[cfg(test)]
@@ -144,8 +159,8 @@ mod tests {
     }
 
     #[test]
-    fn f20_the_clipboard_bitmap_is_a_v5_header_then_bottom_up_bgra_with_straight_alpha() {
-        let top = [200, 10, 20, 128];
+    fn f20_the_clipboard_bitmap_is_a_v5_header_then_bottom_up_opaque_bgra() {
+        let top = [200, 10, 20, 255];
         let bottom = [1, 2, 3, 255];
         let image = RgbaImage::new(1, 2, [top, bottom].concat()).unwrap();
         let bitmap = encode(&Flattened::fixture(image.clone()), Format::ClipboardBitmap).unwrap();
@@ -167,16 +182,51 @@ mod tests {
         assert_eq!(field(108), 4, "bV5Intent LCS_GM_IMAGES");
         assert_eq!(
             bitmap[124..],
-            [3, 2, 1, 255, 20, 10, 200, 128],
+            [3, 2, 1, 255, 20, 10, 200, 255],
             "bottom row first, BGRA"
         );
     }
 
     #[test]
-    fn f21_bmp_keeps_every_pixel_and_its_alpha() {
-        let image = sample();
+    fn f21_bmp_keeps_every_opaque_pixel() {
+        let pixels = sample()
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b, _]| [r, g, b, 255])
+            .collect();
+        let image = RgbaImage::new(3, 2, pixels).unwrap();
         let file = encode(&Flattened::fixture(image.clone()), Format::Bmp).unwrap();
         assert_eq!(decoded(&file, ImageFormat::Bmp).as_raw(), image.pixels());
+    }
+
+    #[test]
+    fn d80_formats_without_alpha_lay_a_translucent_pixel_over_white_and_png_keeps_it() {
+        let shadow = [0, 0, 0, 64];
+        let image = RgbaImage::new(16, 16, shadow.repeat(256)).unwrap();
+        let flattened = Flattened::fixture(image);
+        let grey = [191, 191, 191, 255];
+        for format in [Format::Bmp, Format::Jpeg] {
+            let bytes = encode(&flattened, format).unwrap();
+            let kind = if format == Format::Bmp {
+                ImageFormat::Bmp
+            } else {
+                ImageFormat::Jpeg
+            };
+            let first = decoded(&bytes, kind).get_pixel(0, 0).0;
+            assert!(
+                first
+                    .iter()
+                    .zip(grey)
+                    .all(|(got, want)| got.abs_diff(want) <= 2),
+                "{format:?} {first:?}"
+            );
+        }
+        let bitmap = encode(&flattened, Format::ClipboardBitmap).unwrap();
+        assert_eq!(bitmap[124..128], grey);
+        let png = encode(&flattened, Format::Png).unwrap();
+        assert_eq!(decoded(&png, ImageFormat::Png).get_pixel(0, 0).0, shadow);
     }
 
     #[test]

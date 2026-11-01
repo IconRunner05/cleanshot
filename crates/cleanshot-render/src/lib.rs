@@ -5,6 +5,7 @@
 
 mod encode;
 mod flatten;
+mod frame;
 mod gamma;
 mod redact;
 
