@@ -10,16 +10,18 @@ pub struct Document {
     pub(crate) base: Arc<RgbaImage>,
     pub(crate) shapes: Vec<ShapeEntry>,
     pub(crate) crop: Option<RectF>,
+    pub(crate) frame: Frame,
 }
 
 impl Document {
-    /// A document showing `base` with no shapes and no crop.
+    /// A document showing `base` with no shapes, no crop and no frame.
     #[must_use]
     pub fn new(base: Arc<RgbaImage>) -> Self {
         Self {
             base,
             shapes: Vec::new(),
             crop: None,
+            frame: Frame::default(),
         }
     }
 
@@ -52,6 +54,12 @@ impl Document {
     #[must_use]
     pub fn crop(&self) -> Option<RectF> {
         self.crop
+    }
+
+    /// The border and shadow an export draws around the image (F-44).
+    #[must_use]
+    pub fn frame(&self) -> Frame {
+        self.frame
     }
 }
 
@@ -118,6 +126,13 @@ fn cell(left: f64, top: f64, right: f64, bottom: f64) -> RectF {
         width: (right - left) as f32,
         height: (bottom - top) as f32,
     }
+}
+
+/// Whole-image effects an export draws around the image, outside every capture pixel (F-44).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    pub border: bool,
+    pub shadow: bool,
 }
 
 /// Names one shape for the life of its [`crate::History`]; never reused.

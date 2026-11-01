@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::document::{Document, RectF, Shape, ShapeEntry, ShapeId, Style};
+use crate::document::{Document, Frame, RectF, Shape, ShapeEntry, ShapeId, Style};
 
 /// One edit to a document (F-38: every edit is a command).
 #[derive(Clone, Debug, PartialEq)]
@@ -19,6 +19,7 @@ pub enum Command {
     },
     /// `None` exports the whole image (F-37).
     SetCrop(Option<RectF>),
+    SetFrame(Frame),
 }
 
 /// Why [`History::apply`] refused a command.
@@ -46,6 +47,7 @@ enum Edit {
     Remove(ShapeId),
     Replace(ShapeEntry),
     SetCrop(Option<RectF>),
+    SetFrame(Frame),
 }
 
 impl History {
@@ -92,6 +94,7 @@ impl History {
             Command::Remove(id) => Edit::Remove(id),
             Command::Replace { id, shape, style } => Edit::Replace(ShapeEntry { id, shape, style }),
             Command::SetCrop(crop) => Edit::SetCrop(crop),
+            Command::SetFrame(frame) => Edit::SetFrame(frame),
         };
         let inverse = edit.apply(&mut self.document)?;
         self.undo.push(inverse);
@@ -159,6 +162,7 @@ impl Edit {
                 }
                 Ok(Edit::SetCrop(mem::replace(&mut document.crop, crop)))
             }
+            Edit::SetFrame(frame) => Ok(Edit::SetFrame(mem::replace(&mut document.frame, frame))),
         }
     }
 }
@@ -400,5 +404,21 @@ mod tests {
         assert!(!history.document().contains(id));
         assert_eq!(history.redo(), Ok(true));
         assert!(history.document().contains(id));
+    }
+
+    #[test]
+    fn f44_a_new_document_has_no_frame_and_setting_one_is_an_edit_to_undo() {
+        let mut history = history();
+        assert_eq!(history.document().frame(), Frame::default());
+        let framed = Frame {
+            border: true,
+            shadow: true,
+        };
+        history.apply(Command::SetFrame(framed)).unwrap();
+        assert_eq!(history.document().frame(), framed);
+        assert_eq!(history.undo(), Ok(true));
+        assert_eq!(history.document().frame(), Frame::default());
+        assert_eq!(history.redo(), Ok(true));
+        assert_eq!(history.document().frame(), framed);
     }
 }

@@ -18,8 +18,8 @@ mod tool;
 
 pub use delivery::{Delivered, DeliveryError, Output, delivery_notice, save_as_notice};
 pub use document::{
-    Color, Document, Fill, ImageError, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM, Shape,
-    ShapeEntry, ShapeId, Style, arrow_head, dimmed_areas,
+    Color, Document, Fill, Frame, ImageError, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM,
+    Shape, ShapeEntry, ShapeId, Style, arrow_head, dimmed_areas,
 };
 pub use drag::{Drag, Press, Start};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};

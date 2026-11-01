@@ -204,7 +204,9 @@ pub(crate) fn document_canvas(
             let (replaced, added) = match &overlay.preview {
                 Some(Command::Replace { id, shape, style }) => (Some((*id, shape, style)), None),
                 Some(Command::Add { shape, style }) => (None, Some((shape, style))),
-                Some(Command::Remove(_) | Command::SetCrop(_)) | None => (None, None),
+                Some(Command::Remove(_) | Command::SetCrop(_) | Command::SetFrame(_)) | None => {
+                    (None, None)
+                }
             };
             let shown: Vec<_> = document
                 .shapes()
