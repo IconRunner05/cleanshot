@@ -94,8 +94,7 @@ pub(crate) fn framed(image: Pixmap, frame: Frame) -> Result<Pixmap, Error> {
 
 /// Black whose alpha at (x, y) is the box `columns` x `rows` blurred by a Gaussian of standard
 /// deviation half of [`Frame::SHADOW_BLUR`]. A blurred box is one blurred edge profile per axis,
-/// multiplied.
-/// Pixels under `image` are left alone, since the image covers them.
+/// multiplied. Pixels under `image` are left alone, since the image covers them.
 fn cast_shadow(
     pixmap: &mut Pixmap,
     columns: (u32, u32),
