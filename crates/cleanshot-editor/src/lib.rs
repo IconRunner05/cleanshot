@@ -5,6 +5,7 @@ mod canvas;
 mod editor_window;
 mod placement;
 mod restricted_platform;
+mod settings_window;
 mod strip;
 mod text;
 mod text_box;
@@ -21,6 +22,7 @@ use gpui_windows::WindowsPlatform;
 pub use crate::bench::{BenchReport, bench};
 pub use crate::editor_window::{EditorWindow, ask_save_path, open};
 use crate::restricted_platform::RestrictedPlatform;
+pub use crate::settings_window::open_settings;
 #[cfg(feature = "drift-test")]
 pub use crate::text::em_widths;
 use crate::toolbar::Icons;

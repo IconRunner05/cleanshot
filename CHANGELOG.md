@@ -9,6 +9,12 @@ section exists.
 
 ## [Unreleased]
 
+### Added
+
+- Settings window (F-55): what happens after a capture, the save folder, the save format
+  and the three capture hotkeys, each change saved at once. A hotkey another program holds
+  is named, and the old one stays.
+
 ## [0.1.2] - 2026-11-01
 
 Fixes for black or garbled captures on some PCs, and the spotlight tool. Still an unsigned

@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
-use crate::settings::{Hotkey, HotkeyAction, HotkeyRefusal, SettingsProblem};
+use crate::settings::{Hotkey, HotkeyAction, HotkeyRefusal, Settings, SettingsProblem};
 
 /// What applying a change from the settings window did (F-55).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9,6 +9,33 @@ pub struct Applied {
     pub saved: Result<(), SettingsSaveError>,
     /// The actions whose new hotkey another program holds; each keeps its old one.
     pub taken: Vec<HotkeyAction>,
+}
+
+impl Applied {
+    /// The settings in force once `changed` was applied over `before`: each taken hotkey back at
+    /// its key in `before`. With them, what the settings window tells the user, if anything.
+    #[must_use]
+    pub fn outcome(
+        self,
+        before: &Settings,
+        changed: Settings,
+    ) -> (Settings, Option<SettingsNotice>) {
+        let wanted = changed.hotkeys;
+        let mut kept = changed;
+        for &action in &self.taken {
+            kept.hotkeys.set(action, before.hotkeys.get(action));
+        }
+        let notice = match (self.taken.first(), self.saved) {
+            (Some(&action), _) => Some(SettingsNotice::HotkeyTaken {
+                action,
+                wanted: wanted.get(action),
+                kept: kept.hotkeys.get(action),
+            }),
+            (None, Err(error)) => Some(SettingsNotice::NotSaved(error)),
+            (None, Ok(())) => None,
+        };
+        (kept, notice)
+    }
 }
 
 /// Why changed settings were not written to the settings file. They still apply until
@@ -99,6 +126,52 @@ fn refusal(problem: &SettingsProblem) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f55_a_hotkey_another_program_holds_keeps_its_old_key_and_is_told_before_a_failed_save() {
+        let before = Settings::default();
+        let mut changed = before.clone();
+        let wanted = Hotkey::parse("Ctrl+F9").unwrap();
+        changed.hotkeys.set(HotkeyAction::Region, wanted);
+        changed
+            .hotkeys
+            .set(HotkeyAction::LastRegion, Hotkey::parse("Ctrl+F10").unwrap());
+        let not_written = SettingsSaveError::NotWritten {
+            path: PathBuf::from("cleanshot.toml"),
+            kind: ErrorKind::PermissionDenied,
+        };
+        let applied = Applied {
+            saved: Err(not_written.clone()),
+            taken: vec![HotkeyAction::Region],
+        };
+        let (kept, notice) = applied.outcome(&before, changed.clone());
+        let mut expected = changed.clone();
+        expected
+            .hotkeys
+            .set(HotkeyAction::Region, before.hotkeys.region);
+        assert_eq!(kept, expected);
+        assert_eq!(
+            notice,
+            Some(SettingsNotice::HotkeyTaken {
+                action: HotkeyAction::Region,
+                wanted,
+                kept: before.hotkeys.region,
+            })
+        );
+        let unsaved = Applied {
+            saved: Err(not_written.clone()),
+            taken: Vec::new(),
+        };
+        assert_eq!(
+            unsaved.outcome(&before, changed.clone()),
+            (changed.clone(), Some(SettingsNotice::NotSaved(not_written)))
+        );
+        let applied = Applied {
+            saved: Ok(()),
+            taken: Vec::new(),
+        };
+        assert_eq!(applied.outcome(&before, changed.clone()), (changed, None));
+    }
 
     #[test]
     fn f55_each_notice_says_what_happened_and_what_to_do() {
