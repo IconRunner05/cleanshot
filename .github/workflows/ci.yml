@@ -71,6 +71,21 @@ jobs:
           LLVM_BIN: C:/Program Files/LLVM/bin
         run: ./charter-gates.sh --release-exe target/x86_64-pc-windows-msvc/release/cleanshot.exe
 
+      - name: Release exe names the product and carries the package version (D-74)
+        shell: pwsh
+        run: |
+          $expected = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'cleanshot-app' | ForEach-Object version
+          $info = (Get-Item target/x86_64-pc-windows-msvc/release/cleanshot.exe).VersionInfo
+          $fixed = '{0}.{1}.{2}' -f $info.ProductMajorPart, $info.ProductMinorPart, $info.ProductBuildPart
+          $found = "ProductName=$($info.ProductName) FileDescription=$($info.FileDescription) ProductVersion=$($info.ProductVersion) FileVersion=$($info.FileVersion) fixed=$fixed"
+          $wanted = "ProductName=Cleanshot FileDescription=Cleanshot ProductVersion=$expected FileVersion=$expected fixed=$expected"
+          if ($found -ne $wanted) {
+            Write-Output "FAIL D-74: the exe says $found, expected $wanted"
+            exit 1
+          }
+          Write-Output "D-74: $found"
+
       - name: Release exe starts and stays up until stopped (C-02)
         shell: bash
         run: |
