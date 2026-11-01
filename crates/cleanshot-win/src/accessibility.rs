@@ -18,6 +18,8 @@ use crate::Error;
 pub struct Control {
     pub kind: ControlKind,
     pub name: String,
+    /// Who answers UI Automation for it, as `ProviderDescription` names them.
+    pub provider: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,9 +114,13 @@ fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
         for index in 0..unsafe { found.Length() }? {
             // SAFETY: `index` is below the array's length, and the reads are plain properties
             // of a live element.
-            let (kind, name) = unsafe {
+            let (kind, name, provider) = unsafe {
                 let element = found.GetElement(index)?;
-                (element.CurrentControlType()?, element.CurrentName()?)
+                (
+                    element.CurrentControlType()?,
+                    element.CurrentName()?,
+                    element.CurrentProviderDescription()?,
+                )
             };
             let kind = [
                 (UIA_ToolBarControlTypeId, ControlKind::ToolBar),
@@ -128,6 +134,7 @@ fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
             controls.push(Control {
                 kind,
                 name: name.to_string(),
+                provider: provider.to_string(),
             });
         }
     }

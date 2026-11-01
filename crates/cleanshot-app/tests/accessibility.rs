@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 use std::process::exit;
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,7 +27,9 @@ const TOOLS: [&str; 10] = [
 const PATIENCE: Duration = Duration::from_secs(10);
 
 fn main() {
-    thread::spawn(|| match toolbar_buttons() {
+    let start = Instant::now();
+    let (first_frame, drawn) = mpsc::channel();
+    thread::spawn(move || match toolbar_buttons(start, &drawn) {
         Ok(buttons) if buttons == TOOLS => {
             println!("f58_the_editor_toolbar_names_every_tool_to_ui_automation ... ok");
             exit(0);
@@ -50,7 +53,11 @@ fn main() {
             |_, _| Err(DeliveryError::ClipboardBusy),
             || (PathBuf::new(), String::new()),
             |_, _| Err(DeliveryError::ClipboardBusy),
-            |_| {},
+            move |at| {
+                first_frame
+                    .send(at)
+                    .expect("the walk thread waits for the first frame");
+            },
         );
         if let Err(error) = opened {
             println!("the editor did not open: {error}");
@@ -62,10 +69,17 @@ fn main() {
 }
 
 /// The radio buttons UI Automation reports, in order, once a toolbar named "Tools" appears.
-fn toolbar_buttons() -> Result<Vec<String>, String> {
+/// The first walk waits for the editor's first frame, as no user reaches the toolbar before it.
+fn toolbar_buttons(start: Instant, first_frame: &Receiver<Instant>) -> Result<Vec<String>, String> {
+    let drawn = first_frame
+        .recv_timeout(PATIENCE)
+        .map_err(|error| format!("the editor drew no first frame within {PATIENCE:?}: {error}"))?;
     let deadline = Instant::now() + PATIENCE;
+    let mut walks = 0;
+    let mut window_seen = None;
     let mut last = String::from("no window of this process was found");
     while Instant::now() < deadline {
+        walks += 1;
         match controls_in_own_windows() {
             Ok(controls) if has_tools(&controls) => {
                 return Ok(controls
@@ -74,12 +88,21 @@ fn toolbar_buttons() -> Result<Vec<String>, String> {
                     .map(|control| control.name)
                     .collect());
             }
-            Ok(controls) => last = format!("no toolbar named Tools among {controls:?}"),
+            Ok(controls) => {
+                if !controls.is_empty() {
+                    window_seen.get_or_insert(start.elapsed());
+                }
+                last = format!("no toolbar named Tools among {controls:?}");
+            }
             Err(error) => last = format!("UI Automation failed: {error}"),
         }
         thread::sleep(Duration::from_millis(250));
     }
-    Err(format!("after {PATIENCE:?}, {last}"))
+    Err(format!(
+        "{walks} walks over {PATIENCE:?}; from the start, the first frame came at {:?} and a \
+         window was first seen at {window_seen:?}; {last}",
+        drawn - start
+    ))
 }
 
 fn has_tools(controls: &[Control]) -> bool {
