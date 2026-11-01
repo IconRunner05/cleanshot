@@ -331,7 +331,7 @@ Gates 5–7 are judged by `cleanshot-fieldtest --budgets`, the one place the sec
 4. `unsafe` scan: fail if a crate root other than `cleanshot-win`'s lacks `#![forbid(unsafe_code)]`, or `unsafe` appears outside `crates/cleanshot-win` (C-16).
 5. Size check of the release exe: the release-exe job fails it at 15 MB or above (P-06).
 6. Idle budgets: the release exe runs with `--log` for 15 s, and the job prints its `perf` lines and fails if P-03, P-04 or P-05 is over budget or its line is missing (D-62). A hosted runner is not the reference machine, so a pass here is a floor, not the release measurement.
-7. Hotkey latency: the probe job runs the release exe with `--log` and Ctrl+Shift+4 as the region hotkey, `cleanshot-fieldtest --overlays <log>` opens and cancels the overlay 20 times, each press waiting up to 5 s for the last overlay's `P-01` line and for its windows to close, then 500 ms more, and the job fails unless every press shows and closes in time, all 20 `P-01` lines are there, and their p95 (the 19th fastest) is at most 150 ms, 1.5 times the P-01 budget, with the 100 ms verdict reported beside it (D-62, D-75). The first overlay after start is also reported on its own. The same floor rule applies.
+7. Hotkey latency: the probe job runs the release exe with `--log` and Ctrl+Shift+4 as the region hotkey, `cleanshot-fieldtest --overlays <log>` opens and cancels the overlay 20 times, each press waiting up to 5 s for the last overlay's `P-01` line and for its windows to close, then 500 ms more, and the job fails unless every press shows and closes in time, all 20 `P-01` lines are there, and their p95 (the 19th fastest) is at most 150 ms, 1.5 times the P-01 budget, with the 100 ms verdict reported beside it (D-62, D-75). The first overlay after start is held to the same limits, the 100 ms verdict and the 150 ms floor (D-76).
 8. Copy latency: the probe job runs `cargo test --release -p cleanshot-app p02_`, which copies a synthetic 3840 x 2160 capture to the clipboard five times through the same `deliver` the overlay uses, and fails if the median is 150 ms or more (P-02). The same floor rule applies. With `--log`, every copy from the overlay or the last-region hotkey also logs `perf P-02 copied_ms=N`, timed from the press that asked for it.
 
 ### Definition of Done (every task)
@@ -349,7 +349,7 @@ Must budgets are release gates. Measure on the reference machine: a mid-range Wi
 
 | ID | Metric | Budget | Priority |
 | --- | --- | --- | --- |
-| P-01 | Hotkey → overlay visible | < 100 ms p95 | Must |
+| P-01 | Hotkey → overlay visible | < 100 ms p95, and on the first press after start (D-76) | Must |
 | P-02 | Release → image on clipboard, 4K region | < 150 ms | Must |
 | P-03 | Process start → tray ready | < 300 ms | Must |
 | P-04 | Idle memory, tray only | < 25 MB working set | Must |

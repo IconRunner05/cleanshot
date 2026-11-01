@@ -41,7 +41,8 @@ pub(crate) enum Machine {
 }
 
 /// P-01 from a log of [`OVERLAY_PRESSES`] overlays: the p95 (nearest rank) of their
-/// `overlay_visible_ms`, which fails unless every press logged one.
+/// `overlay_visible_ms` and the first press, each held to the budget (D-76); it fails unless
+/// every press logged one.
 pub(crate) fn overlay_visible(log: &str, machine: Machine) -> Verdict {
     let mut times = perf_values(log, "P-01", "overlay_visible_ms");
     let Some(&first) = times.first() else {
@@ -61,16 +62,17 @@ pub(crate) fn overlay_visible(log: &str, machine: Machine) -> Verdict {
     let p95 = times[(times.len() * 95).div_ceil(100) - 1];
     let measured = format!(
         "overlay visible p95 {p95} ms over {OVERLAY_PRESSES} hotkeys, first {first} ms \
-         (budget under {OVERLAY_VISIBLE_BUDGET_MS} ms"
+         (budget under {OVERLAY_VISIBLE_BUDGET_MS} ms for each"
     );
-    let within_budget = p95 < OVERLAY_VISIBLE_BUDGET_MS;
+    let slowest = p95.max(first);
+    let within_budget = slowest < OVERLAY_VISIBLE_BUDGET_MS;
     let (met, detail) = match machine {
         Machine::Reference => (within_budget, format!("{measured}); sorted {times:?}")),
         Machine::Runner => {
             let floor = OVERLAY_VISIBLE_BUDGET_MS * 3 / 2;
             let budget = if within_budget { "within" } else { "over" };
             (
-                p95 <= floor,
+                slowest <= floor,
                 format!(
                     "{measured}, {budget} it; a runner fails only over {floor} ms); \
                      sorted {times:?}"
@@ -269,6 +271,19 @@ mod tests {
         assert!(!overlay_visible(&overlay_log(&times), Machine::Reference).met);
         times[18..].fill(151);
         assert!(!overlay_visible(&overlay_log(&times), Machine::Runner).met);
+    }
+
+    #[test]
+    fn d76_the_first_press_is_held_to_the_p01_budget_like_the_p95() {
+        let after_a_first = |first| {
+            let mut times = vec![first];
+            times.extend([5; 19]);
+            overlay_log(&times)
+        };
+        assert!(overlay_visible(&after_a_first(99), Machine::Reference).met);
+        assert!(!overlay_visible(&after_a_first(100), Machine::Reference).met);
+        assert!(overlay_visible(&after_a_first(150), Machine::Runner).met);
+        assert!(!overlay_visible(&after_a_first(151), Machine::Runner).met);
     }
 
     #[test]
