@@ -154,8 +154,8 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 | F-53 | Single instance | M1 | Obeys C-14; a second launch triggers region capture in the first instance. |
 | F-54 | Settings file | M1 | Obeys C-05 and C-13; unknown keys ignored; invalid values fall back to defaults with one warning. A `save_folder` over 10,752 UTF-8 bytes is an invalid value, so a file written back from what was read stays under the C-13 cap. |
 | F-55 | Settings window | M4 | Hotkeys, save folder, format, after-capture default, thumbnail, start with Windows. |
-| F-56 | Start with Windows | M4 | Per-user `HKCU\…\Run` entry, only when the user turns it on. |
-| F-57 | Admin policy | M4 | Reads `HKLM\SOFTWARE\Policies\Cleanshot` (read-only): lock save folder, disable save (clipboard only), force PNG, hide settings. |
+| F-56 | Start with Windows | M4 | Per-user `HKCU\…\Run` entry, only when the user turns it on. Adds its row to `docs/security.md`. |
+| F-57 | Admin policy | M4 | Reads `HKLM\SOFTWARE\Policies\Cleanshot` (read-only): lock save folder, disable save (clipboard only), force PNG, hide settings. Adds its row to `docs/security.md`. |
 | F-58 | Themes and accessibility | M2 | Follows system light/dark; all controls keyboard-reachable and labelled. |
 
 **Default global hotkeys:** PrtSc (fallback Ctrl+Shift+4) = region · Shift+PrtSc = last region · Ctrl+PrtSc = full screen · Alt+PrtSc = window (M4) · Ctrl+Shift+5 = capture panel (M4).
@@ -389,7 +389,7 @@ Notes for agents:
 
 - winget installs portable apps per user and adds a `cleanshot` command alias. Settings still resolve per C-05 (normally `%APPDATA%`), so `winget upgrade` keeps them.
 - Validate locally before a PR: `winget validate` on the manifest, then a clean install in Windows Sandbox.
-- Repo files: `LICENSE-MIT`, `LICENSE-APACHE`, `SECURITY.md` (private disclosure, 90-day policy, GitHub Security Advisories), `CHANGELOG.md` (Keep a Changelog format).
+- Repo files: `LICENSE-MIT`, `LICENSE-APACHE`, `SECURITY.md` (private disclosure, 90-day policy, GitHub Security Advisories), `CHANGELOG.md` (Keep a Changelog format), `docs/security.md` (the IT reviewers' overview: what the exe does and never does, and which gate, test or review holds each row; a change to what Cleanshot reads, writes or starts updates its row in the same commit).
 
 ## 10. Milestones and backlog
 
@@ -442,7 +442,7 @@ flowchart TD
 - [ ] F-08–F-12: window capture, thumbnail, timer, capture panel, options menu.
 - [ ] F-41–F-44: numbered steps, speech bubble, spotlight, border/shadow.
 - [ ] F-55–F-57: settings window, start with Windows, admin policy.
-- [ ] One-page security whitepaper for IT reviewers (what the binary does and does not do, with the CI evidence).
+- [x] One-page security whitepaper for IT reviewers (what the binary does and does not do, with the CI evidence): `docs/security.md`.
 - [ ] Tag v1.0.0; first winget-pkgs submission by hand.
 
 **After v1.0 (not scheduled):** ARM64 release, rotate, paste/drop images (decoded under C-13 limits), torn-edge effect, translations.

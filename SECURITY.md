@@ -23,6 +23,11 @@ the problem. A screenshot or a proof-of-concept file helps.
 - After 90 days, or once the fix is released if that is sooner, you are free to publish your
   findings. We credit you in the advisory unless you ask us not to.
 
+## What Cleanshot does and never does
+
+For IT reviewers, [`docs/security.md`](docs/security.md) lists what the exe does and never does,
+and which CI gate, test or review holds each claim.
+
 ## Checking a download
 
 Each release lists `SHA256SUMS` beside the exe, a CycloneDX SBOM of what it was built from, and

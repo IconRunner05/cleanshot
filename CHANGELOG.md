@@ -11,6 +11,8 @@ section exists.
 
 ### Added
 
+- A security overview for IT reviewers, [`docs/security.md`](docs/security.md): what
+  Cleanshot does and never does, and which CI gate, test or review holds each claim.
 - Settings window (F-55): what happens after a capture, the save folder, the save format
   and the three capture hotkeys, each change saved at once. A hotkey another program holds
   is named, and the old one stays.
