@@ -87,19 +87,31 @@ impl RedactionPreviews {
         self.0 = kept;
     }
 
-    fn paint(&self, rect: RectF, mode: RedactMode, fit: &Fit, window: &mut Window) {
-        let hide = |window: &mut Window| window.paint_quad(fill(fit.bounds(rect), gpui::black()));
+    /// Paints the redaction at `rect` and returns where it painted, `None` if nowhere.
+    fn paint(
+        &self,
+        rect: RectF,
+        mode: RedactMode,
+        fit: &Fit,
+        window: &mut Window,
+    ) -> Option<Bounds<Pixels>> {
+        let hide = |window: &mut Window| {
+            let bounds = fit.bounds(rect);
+            window.paint_quad(fill(bounds, gpui::black()));
+            Some(bounds)
+        };
         match self.0.get(&RedactionKey::new(rect, mode)) {
             Some(RedactionPreview::Pixels { bounds, image }) => {
                 let bounds = fit.bounds(*bounds);
-                if let Err(error) =
-                    window.paint_image(bounds, bounds, 0.0.into(), Arc::clone(image), 0, false)
-                {
-                    eprintln!("the redaction preview could not be drawn: {error:#}");
-                    hide(window);
+                match window.paint_image(bounds, bounds, 0.0.into(), Arc::clone(image), 0, false) {
+                    Ok(()) => Some(bounds),
+                    Err(error) => {
+                        eprintln!("the redaction preview could not be drawn: {error:#}");
+                        hide(window)
+                    }
                 }
             }
-            Some(RedactionPreview::CoversNoPixel) => {}
+            Some(RedactionPreview::CoversNoPixel) => None,
             Some(RedactionPreview::Failed) | None => hide(window),
         }
     }
@@ -442,9 +454,10 @@ fn paint_shape(
         }
         Shape::Text(block) => paint_text(block, color, fit, window, cx),
         Shape::Redact { rect, mode } => {
-            redactions.paint(*rect, *mode, fit, window);
             // D-78: a redaction is the capture with its pixels destroyed, so it dims like the capture.
-            paint_dim(dimmed, fit.bounds(*rect), fit, window);
+            if let Some(painted) = redactions.paint(*rect, *mode, fit, window) {
+                paint_dim(dimmed, painted, fit, window);
+            }
         }
         // F-43: the canvas dims around every spotlight before it paints any shape.
         Shape::Spotlight(_) => {}
