@@ -210,6 +210,21 @@ mod tests {
     }
 
     #[test]
+    fn f04_on_a_monitor_above_the_primary_the_loupe_stays_on_it() {
+        let above = RECT {
+            left: 0,
+            top: -1080,
+            right: 1920,
+            bottom: 0,
+        };
+        let corner = source(POINT { x: 0, y: -1080 }, above);
+        assert_eq!((corner.left, corner.top), (0, -1080));
+        let placed = place(POINT { x: 10, y: -5 }, above, 136, 158, 24);
+        assert_eq!(placed.top, -5 - 24 - 158);
+        assert!(placed.bottom <= 0, "{placed:?}");
+    }
+
+    #[test]
     fn f04_the_caption_names_the_pointer_and_the_colour_under_it() {
         let mut bgra = vec![0; 3 * 2 * 4];
         bgra[(3 + 2) * 4..(3 + 2) * 4 + 4].copy_from_slice(&[0x56, 0x34, 0x12, 0xFF]);

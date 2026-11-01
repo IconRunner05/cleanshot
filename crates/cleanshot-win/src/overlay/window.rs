@@ -285,7 +285,8 @@ fn surface(
     }
 }
 
-fn cursor(lparam: LPARAM) -> POINT {
+/// The desktop point of a mouse message's `lparam` on a window whose top-left is `origin`.
+fn desktop_point(lparam: LPARAM, origin: POINT) -> POINT {
     // Client coordinates are signed 16-bit halves of lparam; captured drags go negative.
     let bytes = lparam.0.to_le_bytes();
     let (x, y) = (
@@ -293,18 +294,8 @@ fn cursor(lparam: LPARAM) -> POINT {
         i16::from_le_bytes([bytes[2], bytes[3]]),
     );
     POINT {
-        x: i32::from(x),
-        y: i32::from(y),
-    }
-}
-
-impl Surface {
-    fn virtual_point(&self, lparam: LPARAM) -> POINT {
-        let local = cursor(lparam);
-        POINT {
-            x: local.x + self.origin.x,
-            y: local.y + self.origin.y,
-        }
+        x: i32::from(x) + origin.x,
+        y: i32::from(y) + origin.y,
     }
 }
 
@@ -348,7 +339,7 @@ unsafe extern "system" fn window_procedure(
         WM_LBUTTONDOWN => {
             // SAFETY: a non-null pointer is live until WM_NCDESTROY.
             let surface = unsafe { &*surface };
-            let at = surface.virtual_point(lparam);
+            let at = desktop_point(lparam, surface.origin);
             if let Some(control) = surface
                 .shared
                 .toolbar()
@@ -376,7 +367,7 @@ unsafe extern "system" fn window_procedure(
             // SAFETY: GetCapture only reads this thread's state.
             let dragging = unsafe { GetCapture() } == window;
             if let (Some(gesture), true) = (surface.shared.gesture.get(), dragging) {
-                let now = surface.virtual_point(lparam);
+                let now = desktop_point(lparam, surface.origin);
                 surface.shared.gesture.set(Some(Gesture {
                     pointer: now,
                     ..gesture
@@ -435,5 +426,20 @@ unsafe extern "system" fn window_procedure(
         }
         // SAFETY: forwarding an unhandled message to the default procedure.
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f03_a_press_on_a_monitor_left_of_and_above_the_primary_reads_in_desktop_pixels() {
+        let origin = POINT { x: -1920, y: -1080 };
+        let inside = LPARAM(20 * 0x1_0000 + 10);
+        assert_eq!(desktop_point(inside, origin), POINT { x: -1910, y: -1060 });
+        // A captured drag past the window's top-left: client x -5, y -3.
+        let past = LPARAM(0xFFFD * 0x1_0000 + 0xFFFB);
+        assert_eq!(desktop_point(past, origin), POINT { x: -1925, y: -1083 });
     }
 }

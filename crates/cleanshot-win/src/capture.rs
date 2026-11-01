@@ -461,6 +461,24 @@ mod tests {
     /// A 3840x2160 monitor at 200% left of a 1920x1080 one at 100%, as a per-monitor-aware
     /// process sees them: both in physical pixels, so neither side is scaled to the other.
     #[test]
+    fn f01_a_region_across_a_monitor_above_the_primary_takes_each_side_from_its_own_monitor() {
+        let captures = [
+            numbered(rect(0, -2, 4, 0), 10),
+            numbered(rect(0, 0, 4, 2), 30),
+        ];
+        let image = region(&captures, rect(1, -1, 3, 1)).expect("the region has an area");
+        assert_eq!((image.width(), image.height()), (2, 2));
+        assert_eq!(
+            image.pixels(),
+            [[15; 4], [16; 4], [31; 4], [32; 4]].concat()
+        );
+        assert_eq!(
+            monitor_containing(&captures, POINT { x: 0, y: -1 }),
+            Some(rect(0, -2, 4, 0))
+        );
+    }
+
+    #[test]
     fn d71_a_region_across_a_200_percent_monitor_and_a_100_percent_one_keeps_physical_pixels() {
         let shade =
             |x: i32, y: i32| [u8::try_from((x * 3 + y * 7).rem_euclid(251)).expect("< 251"); 4];

@@ -170,6 +170,28 @@ mod tests {
     }
 
     #[test]
+    fn f02_on_a_monitor_left_of_and_above_the_primary_the_pill_keeps_its_places() {
+        let monitor = rect(-1920, -1080, 0, 0);
+        let under = place(rect(-1820, -980, -1620, -880), monitor, 80, 20, 8);
+        assert_eq!(under, rect(-1760, -872, -1680, -852));
+        let above = place(rect(-1820, -80, -1620, -10), monitor, 80, 20, 8);
+        assert_eq!(above, rect(-1760, -108, -1680, -88));
+        let inside = place(monitor, monitor, 80, 20, 8);
+        assert_eq!(inside, rect(-1000, -28, -920, -8));
+        let at_edge = place(rect(-1920, -980, -1900, -880), monitor, 80, 20, 8);
+        assert_eq!(at_edge.left, -1920, "the pill stays on the monitor");
+    }
+
+    #[test]
+    fn f02_of_a_monitor_and_the_one_above_it_one_draws_the_pill() {
+        let above = rect(0, -1080, 1920, 0);
+        let lower_half = rect(100, -50, 300, 50);
+        assert!(belongs_to(lower_half, MONITOR) && !belongs_to(lower_half, above));
+        let upper = rect(100, -60, 300, -1);
+        assert!(belongs_to(upper, above) && !belongs_to(upper, MONITOR));
+    }
+
+    #[test]
     fn f02_one_monitor_draws_the_pill() {
         let right = rect(1920, 0, 3840, 1080);
         let selected = rect(1800, 100, 2000, 300);

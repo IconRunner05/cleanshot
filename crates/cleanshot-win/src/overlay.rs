@@ -325,7 +325,8 @@ mod tests {
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW, WM_HOTKEY,
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SendMessageW, WM_HOTKEY,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
 
     use super::*;
@@ -492,6 +493,53 @@ mod tests {
         pump(Duration::from_millis(200));
         drop(overlay);
         assert_eq!(copied.get(), Some(screen));
+    }
+
+    #[test]
+    fn f03_a_drag_on_a_monitor_left_of_and_above_the_primary_selects_in_desktop_pixels() {
+        let _screen = screen();
+        let above_left = MonitorImage {
+            bounds: RECT {
+                left: -64,
+                top: -48,
+                right: 0,
+                bottom: 0,
+            },
+            image: monitor().image,
+        };
+        let copied = Rc::new(Cell::new(None));
+        let sink = Rc::clone(&copied);
+        let overlay = Overlay::show(&[monitor(), above_left], None, move |event| {
+            if let OverlayEvent::Copy(selected) = event {
+                sink.set(Some(selected));
+            }
+        })
+        .expect("the overlay opens");
+        let window = overlay.windows[1];
+        let client = |x: isize, y: isize| Some(LPARAM(y * 0x1_0000 + x));
+        // SAFETY: each message is handled on this thread by a window created above, and none
+        // carries a pointer.
+        unsafe {
+            SendMessageW(window, WM_LBUTTONDOWN, None, client(10, 8));
+            SendMessageW(window, WM_MOUSEMOVE, None, client(30, 20));
+            SendMessageW(window, WM_LBUTTONUP, None, client(30, 20));
+        }
+        let enter = KEYS
+            .iter()
+            .position(|&(_, _, key)| matches!(key, Key::Press))
+            .expect("Enter is one of the overlay's keys");
+        // SAFETY: posting copies no memory, and the window belongs to this thread.
+        unsafe { PostMessageW(Some(window), WM_HOTKEY, WPARAM(enter), LPARAM(0)) }
+            .expect("the overlay window takes the message");
+        pump(Duration::from_millis(200));
+        drop(overlay);
+        let expected = RECT {
+            left: -54,
+            top: -40,
+            right: -34,
+            bottom: -28,
+        };
+        assert_eq!(copied.get(), Some(expected));
     }
 
     #[test]

@@ -341,6 +341,25 @@ mod tests {
     }
 
     #[test]
+    fn f05_on_a_monitor_above_the_primary_the_toolbar_keeps_its_edges() {
+        let above = RECT {
+            left: 0,
+            top: -1080,
+            right: 1920,
+            bottom: 0,
+        };
+        let placed = |selected| layout(above, selected, 1.0).expect("a 1080p monitor holds it");
+        assert_eq!(placed(None).pill.bottom, -24);
+        let low = RECT {
+            left: 900,
+            top: -100,
+            right: 1000,
+            bottom: -10,
+        };
+        assert_eq!(placed(Some(low)).pill.top, -1080 + 24);
+    }
+
+    #[test]
     fn f05_a_click_lands_on_the_control_drawn_there_and_tab_wraps() {
         let placed = layout_at(None);
         for &(control, at) in &placed.controls {
