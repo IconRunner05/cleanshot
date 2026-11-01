@@ -36,3 +36,9 @@ clean, well organised, and written by a human for a human.
   fails; a red stopped earlier (formatting, clippy, build) proves nothing.
 - **Decisions log order.** Rows stay in descending D-id order, and a new row goes in its id
   position, never at the top or the end of the table.
+- **A head conflict is the steward's to resolve.** When the only thing keeping a commit from
+  merging onto main is two new Decisions-log rows at the head, or a CHARTER checklist line both
+  sides touched, the steward rebases the commit onto main, keeps the rows in descending order
+  (charter-gates checks it), pins the rebased commit, and says so in the notes. CHANGES only when
+  the conflict touches a row's content. (Orchestrator's rule, 2026-10-31, after five round trips
+  under `decision-row-head-conflict`.)
