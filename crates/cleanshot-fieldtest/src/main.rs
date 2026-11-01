@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod budgets;
+
 use std::cell::RefCell;
 use std::fmt::{Display, Write as _};
 use std::num::NonZeroU32;
@@ -16,6 +18,8 @@ use cleanshot_win::field_test::{
     windows_version,
 };
 
+use budgets::Machine;
+
 const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIPBOARD_MARKER: &str = "cleanshot field test";
 const CAPTURE_ATTEMPTS: u32 = 3;
@@ -30,15 +34,15 @@ const COPY_TIMEOUT: Duration = Duration::from_secs(2);
 fn main() {
     let report_path = match std::env::args().collect::<Vec<_>>().as_slice() {
         [_, flag, path] if flag == "--report" => path.clone(),
-        [_, flag, times, log] if flag == "--overlays" => {
-            let Ok(times) = times.parse() else {
-                eprintln!("--overlays takes a count, not {times:?}");
-                std::process::exit(2);
-            };
+        [_, flag, inputs @ ..] if flag == "--budgets" => std::process::exit(judge(inputs)),
+        [_, flag, log] if flag == "--overlays" => {
             let shown = |press| perf_lines(Path::new(log), "P-01") >= press;
-            if let Err(error) =
-                open_and_cancel_overlays(times, OVERLAY_TIMEOUT, OVERLAY_SETTLE, shown)
-            {
+            if let Err(error) = open_and_cancel_overlays(
+                budgets::OVERLAY_PRESSES,
+                OVERLAY_TIMEOUT,
+                OVERLAY_SETTLE,
+                shown,
+            ) {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
@@ -89,7 +93,8 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: cleanshot-fieldtest --report PATH | --overlays COUNT LOG \
+                "usage: cleanshot-fieldtest --report PATH | --overlays LOG \
+                 | --budgets [--runner] [--exe EXE] [--idle LOG] [--overlays LOG] \
                  | --set-scale WIDTH HEIGHT STEP DPI | --copy-at-scale WIDTH HEIGHT DPI LOG \
                  | --copies-while-watched COUNT LOG"
             );
@@ -120,6 +125,52 @@ fn main() {
         &report[report.rfind("## GPUI editor bench").unwrap_or(0)..]
     );
     std::fs::write(&report_path, report).expect("the report path is writable");
+}
+
+/// Judges the budgets whose inputs `inputs` names in pairs (`--exe EXE`, `--idle LOG`,
+/// `--overlays LOG`), after `--runner` for a CI runner, and prints one verdict a line. Returns
+/// the exit code: 0 when every budget judged is met, 1 when one is not, 2 for bad arguments.
+fn judge(inputs: &[String]) -> i32 {
+    let (machine, inputs) = match inputs {
+        [flag, rest @ ..] if flag == "--runner" => (Machine::Runner, rest),
+        _ => (Machine::Reference, inputs),
+    };
+    let mut verdicts = Vec::new();
+    for pair in inputs.chunks(2) {
+        let [input, path] = pair else {
+            eprintln!("--budgets takes --exe, --idle or --overlays, each with a path");
+            return 2;
+        };
+        match input.as_str() {
+            "--exe" => verdicts.push(budgets::exe_size(
+                path,
+                std::fs::metadata(path).map(|exe| exe.len()),
+            )),
+            "--idle" => verdicts.extend(budgets::idle(&log_text(path))),
+            "--overlays" => verdicts.push(budgets::overlay_visible(&log_text(path), machine)),
+            _ => {
+                eprintln!("--budgets does not take {input:?}");
+                return 2;
+            }
+        }
+    }
+    if verdicts.is_empty() {
+        eprintln!("--budgets takes at least one input to judge");
+        return 2;
+    }
+    for verdict in &verdicts {
+        println!("{verdict}");
+    }
+    i32::from(!verdicts.iter().all(|verdict| verdict.met))
+}
+
+/// The log at `path`, or no text when it cannot be read: each budget it holds then fails as
+/// missing, and the reason is printed.
+fn log_text(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|error| {
+        eprintln!("{path}: {error}");
+        String::new()
+    })
 }
 
 /// How many `budget` perf lines (P-01 for an overlay shown, P-02 for a copy) cleanshot.exe

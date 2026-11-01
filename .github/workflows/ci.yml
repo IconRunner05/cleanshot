@@ -65,7 +65,7 @@ jobs:
           cargo build --release --locked -p cleanshot-app
           --config "target.x86_64-pc-windows-msvc.rustflags = ['--remap-path-prefix=$USERPROFILE=~', '--remap-path-prefix=${CARGO_HOME:-$USERPROFILE\.cargo}=cargo']"
 
-      - name: Release exe passes the binary scan, the unsafe scan and the size budget (C-02 C-10 C-11 C-16 C-17 P-06)
+      - name: Release exe passes the binary scan and the unsafe scan (C-02 C-10 C-11 C-16 C-17)
         shell: bash
         env:
           LLVM_BIN: C:/Program Files/LLVM/bin
@@ -100,7 +100,10 @@ jobs:
           fi
           taskkill //F //IM cleanshot.exe
 
-      - name: Release exe meets P-03, P-04 and P-05 from its own --log lines (D-62)
+      - name: Budget judge builds
+        run: cargo build --release --locked -p cleanshot-fieldtest
+
+      - name: Release exe meets P-03 to P-06, judged from its size and its own --log lines (D-62)
         shell: bash
         run: |
           run="$RUNNER_TEMP/perf"
@@ -121,17 +124,8 @@ jobs:
           sleep 15
           taskkill //F //IM cleanshot.exe
           cat "$run/cleanshot.log"
-          value() { sed -n "s/^[0-9]* perf $1 $2=\([0-9]*\).*/\1/p" "$run/cleanshot.log"; }
-          tray=$(value P-03 tray_ready_ms)
-          memory=$(value P-04 working_set_bytes)
-          cpu=$(value P-05 cpu_ms)
-          [[ -n $tray && -n $memory && -n $cpu ]] || { echo "FAIL D-62: a perf line is missing from cleanshot.log"; exit 1; }
-          echo "P-03 tray ready ${tray} ms (budget 300); P-04 working set ${memory} bytes (budget 26214400); P-05 ${cpu} ms of CPU over 10 s idle (budget 100)"
-          status=0
-          (( tray < 300 )) || { echo "FAIL P-03: the tray was ready after ${tray} ms"; status=1; }
-          (( memory < 26214400 )) || { echo "FAIL P-04: the idle working set is ${memory} bytes"; status=1; }
-          (( cpu < 100 )) || { echo "FAIL P-05: ${cpu} ms of CPU in 10 s idle"; status=1; }
-          exit "$status"
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner \
+            --idle "$run/cleanshot.log" --exe target/x86_64-pc-windows-msvc/release/cleanshot.exe
 
       - name: Upload cleanshot.exe
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -159,7 +153,7 @@ jobs:
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --report probe.md
           cat probe.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Release exe meets P-01 over 20 hotkeys from its own --log lines (D-62)
+      - name: Release exe meets P-01 over the probe's hotkeys, judged from its own --log lines (D-62)
         shell: bash
         run: |
           run="$RUNNER_TEMP/p01"
@@ -171,18 +165,11 @@ jobs:
           sleep 3
           # Each press waits for the last overlay's P-01 line and for it to close, so a slow
           # overlay is measured, not raced; one that never shows or closes fails the run.
-          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --overlays 20 "$run/cleanshot.log" || failed=$?
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --overlays "$run/cleanshot.log" || failed=$?
           taskkill //F //IM cleanshot.exe
           cat "$run/cleanshot.log"
           (( ${failed:-0} == 0 )) || { echo "FAIL D-62: the overlay run stopped (exit ${failed})"; exit 1; }
-          logged=$(sed -n 's/^[0-9]* perf P-01 overlay_visible_ms=\([0-9]*\).*/\1/p' "$run/cleanshot.log")
-          echo "P-01 first_ms=$(printf '%s\n' "$logged" | head -n 1) (the first overlay after start, also in the samples)"
-          times=$(printf '%s\n' "$logged" | sort -n)
-          count=$(printf '%s\n' "$times" | grep -c .)
-          (( count == 20 )) || { echo "FAIL D-62: ${count} of 20 hotkeys logged a P-01 line"; exit 1; }
-          p95=$(printf '%s\n' "$times" | sed -n 19p)
-          echo "P-01 overlay visible p95 ${p95} ms over 20 hotkeys (budget 100): $(echo $times)"
-          (( p95 < 100 )) || { echo "FAIL P-01: p95 ${p95} ms"; exit 1; }
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner --overlays "$run/cleanshot.log"
 
       - name: Upload the probe report
         if: always()

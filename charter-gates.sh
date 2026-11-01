@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# CHARTER 7 gates 3-5 on cleanshot.exe, and the CHARTER 11 Decisions log.
+# CHARTER 7 gates 3 and 4 on cleanshot.exe, and the CHARTER 11 Decisions log.
 #   ./charter-gates.sh                     Mac or Linux fold bar: builds a scan-only exe with
 #                                          cargo-xwin and scans its imports and headers.
-#   ./charter-gates.sh --release-exe PATH  CI on windows-latest: scans the shipped exe, size too.
+#   ./charter-gates.sh --release-exe PATH  CI on windows-latest: scans the shipped exe.
 # D-21: the scan-only exe is never shipped and cannot render.
 set -euo pipefail
 shopt -s nullglob
@@ -10,7 +10,6 @@ cd "$(dirname "$0")"
 
 llvm_bin=${LLVM_BIN:-/opt/homebrew/opt/llvm@22/bin}
 lld_link=${LLD_LINK:-/opt/homebrew/opt/lld@22/bin/lld-link}
-size_budget_bytes=15000000
 release_inputs=(Cargo.lock Cargo.toml .cargo rust-toolchain.toml crates charter-gates.sh)
 system_dlls=(
     advapi32.dll bcryptprimitives.dll combase.dll comctl32.dll d2d1.dll d3d11.dll dcomp.dll
@@ -133,8 +132,5 @@ fi
 
 size=$(wc -c <"$exe" | tr -d ' ')
 echo "The $kind: $size bytes, $(printf '%s\n' "$dlls" | wc -l | tr -d ' ') DLLs, $(printf '%s\n' "$functions" | wc -l | tr -d ' ') imported functions."
-if [[ $kind == "release exe" && $size -ge $size_budget_bytes ]]; then
-    fail "P-06: the release exe is $size bytes; the budget is under $size_budget_bytes bytes (15 MB)."
-fi
 
 exit "$failed"
