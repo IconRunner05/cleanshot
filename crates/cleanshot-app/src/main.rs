@@ -15,7 +15,8 @@ use cleanshot_core::{
 };
 use cleanshot_editor::ask_save_path;
 use cleanshot_win::capture::{
-    Desktop, MonitorImage, RECT, capture_desktop, monitor_under_cursor, region,
+    Copied, Desktop, MonitorImage, OutputReport, RECT, black_share, capture_desktop,
+    monitor_under_cursor, region,
 };
 use cleanshot_win::instance::Launch;
 use cleanshot_win::log::{Log, Usage, since_start, usage};
@@ -190,12 +191,41 @@ impl Session {
         });
     }
 
-    /// Logs a `perf` line under `--log`, made from the time since the process started. A log
-    /// that fails is closed, and the tray says so once.
+    /// Logs a `perf` line under `--log`, made from the time since the process started.
     fn perf(&self, line: impl FnOnce(Duration) -> String) {
+        self.log_line("perf", line);
+    }
+
+    /// Under `--log`, how the desktop was copied, what DXGI said of each output, and how much
+    /// of each monitor came out black.
+    fn log_capture(&self, copied: &Copied, outputs: &[OutputReport], monitors: &[MonitorImage]) {
+        if self.log.borrow().is_none() {
+            return;
+        }
+        self.log_line("capture", |_| match copied {
+            Copied::Duplication => String::from("copied=duplication"),
+            Copied::Gdi { because } => format!("copied=gdi because={because:?}"),
+        });
+        for output in outputs {
+            self.log_line("capture", |_| format!("output {output:?}"));
+        }
+        for monitor in monitors {
+            self.log_line("capture", |_| {
+                format!(
+                    "monitor bounds={:?} black_share={:.3}",
+                    monitor.bounds,
+                    black_share(&monitor.image)
+                )
+            });
+        }
+    }
+
+    /// Logs a `kind` line under `--log`, made from the time since the process started. A log
+    /// that fails is closed, and the tray says so once.
+    fn log_line(&self, kind: &str, line: impl FnOnce(Duration) -> String) {
         let written = match &*self.log.borrow() {
             Some(log) => {
-                since_start().and_then(|since| log.write(&format!("perf {}", line(since))))
+                since_start().and_then(|since| log.write(&format!("{kind} {}", line(since))))
             }
             None => return,
         };
@@ -270,12 +300,12 @@ fn capture(
     if session.overlay.borrow().is_some() {
         return;
     }
-    let captures = match capture_desktop() {
-        Ok(Desktop::Duplicated(monitors)) => monitors,
-        Ok(Desktop::CopiedWithGdi { monitors, because }) => {
-            eprintln!("Desktop Duplication was refused, so GDI copied the screen: {because}");
-            monitors
-        }
+    let Desktop {
+        monitors: captures,
+        copied,
+        outputs,
+    } = match capture_desktop() {
+        Ok(desktop) => desktop,
         Err(error) => return session.warn(&format!("The screen could not be captured: {error}.")),
     };
     let pointer_monitor = || match monitor_under_cursor(&captures) {
@@ -289,10 +319,11 @@ fn capture(
     };
     let last = session.last_selection.get();
     let selected = match plan(kind, session.settings.after_capture, last, pointer_monitor) {
-        None => return,
+        None => return session.log_capture(&copied, &outputs, &captures),
         Some(Plan::Overlay(selected)) => selected,
         Some(Plan::Copy(selected)) => {
-            return finish(session, &captures, selected, Output::Copy);
+            finish(session, &captures, selected, Output::Copy);
+            return session.log_capture(&copied, &outputs, &captures);
         }
     };
     let captures = Rc::new(captures);
@@ -357,6 +388,8 @@ fn capture(
         }
         Err(error) => session.warn(&format!("The overlay could not open: {error}.")),
     }
+    // P-01: the black-share pass runs after the overlay is visible.
+    session.log_capture(&copied, &outputs, &captures);
 }
 
 // The selection becomes a document with nothing drawn on it, so the overlay delivers through

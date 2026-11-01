@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter1,
-    IDXGIFactory1, IDXGIOutput1, IDXGIResource,
+    IDXGIFactory1, IDXGIOutput, IDXGIOutput1, IDXGIResource,
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
@@ -48,7 +48,7 @@ pub struct MonitorImage {
 pub fn capture_all(method: Method) -> Result<Vec<MonitorImage>, Error> {
     match method {
         Method::GdiBitBlt => monitor_bounds()?.into_iter().map(bitblt).collect(),
-        Method::DesktopDuplication => duplicate_all().into_iter().collect(),
+        Method::DesktopDuplication => duplicate_all().results.into_iter().collect(),
     }
 }
 
@@ -75,15 +75,45 @@ fn monitor_containing(captures: &[MonitorImage], point: POINT) -> Option<RECT> {
         })
 }
 
-/// What the hotkey path copied (D-28).
+/// What the hotkey path copied (D-28), and what each output's duplication did, for `--log`.
 #[derive(Debug)]
-pub enum Desktop {
-    Duplicated(Vec<MonitorImage>),
+pub struct Desktop {
+    pub monitors: Vec<MonitorImage>,
+    pub copied: Copied,
+    pub outputs: Vec<OutputReport>,
+}
+
+/// How [`Desktop::monitors`] were copied.
+#[derive(Debug)]
+pub enum Copied {
+    Duplication,
     /// Duplication was refused for `because`, so GDI copied every monitor.
-    CopiedWithGdi {
-        monitors: Vec<MonitorImage>,
+    Gdi {
         because: Error,
     },
+}
+
+/// One output as DXGI described it, and the first frame its duplication gave, if any.
+#[derive(Debug)]
+pub struct OutputReport {
+    pub adapter: String,
+    pub vendor: u32,
+    pub output: String,
+    pub attached: bool,
+    pub bounds: RECT,
+    pub rotation: i32,
+    pub frame: Option<FrameReport>,
+}
+
+/// The facts DXGI gave about a duplicated frame.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameReport {
+    /// The duplication's `DXGI_FORMAT`.
+    pub format: i32,
+    pub accumulated_frames: u32,
+    pub desktop_updated: bool,
+    pub pointer_updated: bool,
+    pub protected_content_masked: bool,
 }
 
 /// Copies every monitor with Desktop Duplication, or with GDI `BitBlt` when any output
@@ -93,13 +123,37 @@ pub enum Desktop {
 ///
 /// The GDI copy's error when duplication was refused and GDI failed too.
 pub fn capture_desktop() -> Result<Desktop, Error> {
-    match choose(duplicate_all()) {
-        Ok(monitors) => Ok(Desktop::Duplicated(monitors)),
-        Err(because) => Ok(Desktop::CopiedWithGdi {
+    let Duplicates {
+        reports: outputs,
+        results,
+    } = duplicate_all();
+    match choose(results) {
+        Ok(monitors) => Ok(Desktop {
+            monitors,
+            copied: Copied::Duplication,
+            outputs,
+        }),
+        Err(because) => Ok(Desktop {
             monitors: capture_all(Method::GdiBitBlt)?,
-            because,
+            copied: Copied::Gdi { because },
+            outputs,
         }),
     }
+}
+
+/// The share of `image`'s pixels whose red, green and blue are all 0.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a share for a log line, where a few lost bits do not matter"
+)]
+#[must_use]
+pub fn black_share(image: &RgbaImage) -> f64 {
+    let pixels = image.pixels().as_chunks::<4>().0;
+    let black = pixels
+        .iter()
+        .filter(|pixel| pixel[..3] == [0, 0, 0])
+        .count();
+    black as f64 / pixels.len().max(1) as f64
 }
 
 /// The pixels of `selected`, a rectangle on the virtual desktop, cut from `captures`. A
@@ -251,30 +305,44 @@ fn bitblt(bounds: RECT) -> Result<MonitorImage, Error> {
     }
 }
 
-/// One result per output, or one error for an adapter or factory that fails before its
-/// outputs can be listed.
-fn duplicate_all() -> Vec<Result<MonitorImage, Error>> {
+/// Every listed output's report, and one result per output, or one error for a factory,
+/// adapter or output that fails before it can be duplicated.
+#[derive(Default)]
+struct Duplicates {
+    reports: Vec<OutputReport>,
+    results: Vec<Result<MonitorImage, Error>>,
+}
+
+fn duplicate_all() -> Duplicates {
+    let mut duplicates = Duplicates::default();
     // SAFETY: CreateDXGIFactory1 has no preconditions.
     let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
         Ok(factory) => factory,
-        Err(error) => return vec![Err(Error::Capture(error))],
+        Err(error) => {
+            duplicates.results.push(Err(Error::Capture(error)));
+            return duplicates;
+        }
     };
-    let mut results = Vec::new();
     for adapter_index in 0.. {
         // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
         match unsafe { factory.EnumAdapters1(adapter_index) } {
-            Ok(adapter) => duplicate_adapter(&adapter, &mut results),
+            Ok(adapter) => duplicate_adapter(&adapter, &mut duplicates),
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
             Err(error) => {
-                results.push(Err(Error::Capture(error)));
+                duplicates.results.push(Err(Error::Capture(error)));
                 break;
             }
         }
     }
-    results
+    duplicates
 }
 
-fn duplicate_adapter(adapter: &IDXGIAdapter1, results: &mut Vec<Result<MonitorImage, Error>>) {
+fn duplicate_adapter(adapter: &IDXGIAdapter1, duplicates: &mut Duplicates) {
+    // SAFETY: a read of the adapter's own description.
+    let (name, vendor) = match unsafe { adapter.GetDesc1() } {
+        Ok(description) => (wide(&description.Description), description.VendorId),
+        Err(error) => return duplicates.results.push(Err(Error::Capture(error))),
+    };
     let mut device = None;
     let mut context = None;
     // SAFETY: the device is created on `adapter`, as DuplicateOutput requires; outputs are
@@ -293,7 +361,7 @@ fn duplicate_adapter(adapter: &IDXGIAdapter1, results: &mut Vec<Result<MonitorIm
         )
     };
     if let Err(error) = created {
-        return results.push(Err(Error::Capture(error)));
+        return duplicates.results.push(Err(Error::Capture(error)));
     }
     let device: ID3D11Device = device.expect("D3D11CreateDevice returned a device on success");
     let context: ID3D11DeviceContext =
@@ -301,15 +369,10 @@ fn duplicate_adapter(adapter: &IDXGIAdapter1, results: &mut Vec<Result<MonitorIm
     for output_index in 0.. {
         // SAFETY: an index past the last output returns DXGI_ERROR_NOT_FOUND.
         match unsafe { adapter.EnumOutputs(output_index) } {
-            Ok(output) => results.push(
-                output
-                    .cast::<IDXGIOutput1>()
-                    .map_err(Error::Capture)
-                    .and_then(|output| duplicate_output(&device, &context, &output)),
-            ),
+            Ok(output) => duplicate_listed(&device, &context, &output, &name, vendor, duplicates),
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
             Err(error) => {
-                results.push(Err(Error::Capture(error)));
+                duplicates.results.push(Err(Error::Capture(error)));
                 break;
             }
         }
@@ -325,18 +388,59 @@ fn choose(duplicated: Vec<Result<MonitorImage, Error>>) -> Result<Vec<MonitorIma
     duplicated.into_iter().collect()
 }
 
+fn duplicate_listed(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    output: &IDXGIOutput,
+    adapter: &str,
+    vendor: u32,
+    duplicates: &mut Duplicates,
+) {
+    // SAFETY: a read of the output's own description.
+    let description = match unsafe { output.GetDesc() } {
+        Ok(description) => description,
+        Err(error) => return duplicates.results.push(Err(Error::Capture(error))),
+    };
+    let mut report = OutputReport {
+        adapter: adapter.to_owned(),
+        vendor,
+        output: wide(&description.DeviceName),
+        attached: description.AttachedToDesktop.as_bool(),
+        bounds: description.DesktopCoordinates,
+        rotation: description.Rotation.0,
+        frame: None,
+    };
+    let image = output
+        .cast::<IDXGIOutput1>()
+        .map_err(Error::Capture)
+        .and_then(|output| {
+            duplicate_output(device, context, &output, report.bounds, &mut report.frame)
+        });
+    duplicates.reports.push(report);
+    duplicates.results.push(image);
+}
+
+/// The text of a NUL-terminated UTF-16 buffer.
+fn wide(buffer: &[u16]) -> String {
+    let end = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf16_lossy(&buffer[..end])
+}
+
 fn duplicate_output(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
     output: &IDXGIOutput1,
+    bounds: RECT,
+    frame: &mut Option<FrameReport>,
 ) -> Result<MonitorImage, Error> {
-    // SAFETY: `output` and `device` are live and on the same adapter.
-    let bounds = unsafe { output.GetDesc() }
-        .map_err(Error::Capture)?
-        .DesktopCoordinates;
     let (width, height) = size_of_rect(bounds)?;
     // SAFETY: `device` belongs to this output's adapter.
     let duplication = unsafe { output.DuplicateOutput(device) }.map_err(Error::Capture)?;
+    // SAFETY: a read of the duplication's own description.
+    let format = unsafe { duplication.GetDesc() }.ModeDesc.Format.0;
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
     let mut resource: Option<IDXGIResource> = None;
     // SAFETY: both outputs are writable; the frame is released below before returning.
@@ -348,6 +452,13 @@ fn duplicate_output(
         )
     }
     .map_err(Error::Capture)?;
+    *frame = Some(FrameReport {
+        format,
+        accumulated_frames: frame_info.AccumulatedFrames,
+        desktop_updated: frame_info.LastPresentTime != 0,
+        pointer_updated: frame_info.LastMouseUpdateTime != 0,
+        protected_content_masked: frame_info.ProtectedContentMaskedOut.as_bool(),
+    });
     let copied = resource
         .expect("AcquireNextFrame returned a resource on success")
         .cast::<ID3D11Texture2D>()
@@ -408,6 +519,7 @@ fn bgra_to_rgba(pixels: &mut [u8]) {
 
 #[cfg(test)]
 mod tests {
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
     use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_UNSUPPORTED};
 
     use super::*;
@@ -550,6 +662,32 @@ mod tests {
     #[test]
     fn d28_no_outputs_sends_every_monitor_to_gdi() {
         assert!(matches!(choose(Vec::new()), Err(Error::NothingDuplicated)));
+    }
+
+    #[test]
+    fn f02_black_share_counts_pixels_with_no_red_green_or_blue() {
+        let mut pixels = [[0, 0, 0, 255], [0, 0, 1, 255], [7, 0, 0, 255], [0, 0, 0, 0]].concat();
+        let image = RgbaImage::new(2, 2, pixels.clone()).expect("2x2 RGBA");
+        assert!((black_share(&image) - 0.5).abs() < f64::EPSILON);
+        pixels.fill(9);
+        let image = RgbaImage::new(2, 2, pixels).expect("2x2 RGBA");
+        assert!(black_share(&image).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn d28_a_duplicated_desktop_reports_each_output_and_its_first_frame() {
+        let desktop = capture_desktop().expect("the desktop is copied");
+        assert!(matches!(desktop.copied, Copied::Duplication), "{desktop:?}");
+        assert_eq!(desktop.outputs.len(), desktop.monitors.len());
+        for (output, monitor) in desktop.outputs.iter().zip(&desktop.monitors) {
+            assert_eq!(output.bounds, monitor.bounds);
+            assert!(
+                !output.adapter.is_empty() && !output.output.is_empty(),
+                "{output:?}"
+            );
+            let frame = output.frame.expect("a duplicated output names its frame");
+            assert_eq!(frame.format, DXGI_FORMAT_B8G8R8A8_UNORM.0, "{output:?}");
+        }
     }
 
     #[test]
