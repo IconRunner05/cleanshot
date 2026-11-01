@@ -26,9 +26,9 @@ use cleanshot_win::tray::{
     snipping_tool_holds_print_screen,
 };
 
-use delivery::{deliver, save_as_start, save_to};
-
 mod delivery;
+
+use delivery::{deliver, save_as_start, save_to};
 
 fn main() {
     cleanshot_win::load_dlls_from_system32_only().expect("the DLL search path is restricted");
