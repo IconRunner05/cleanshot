@@ -12,6 +12,9 @@ const IDLE_WORKING_SET_BUDGET_BYTES: u64 = 25 * 1024 * 1024;
 // P-05's "~0%": under 1% of one core over the 10 s the exe logs.
 const IDLE_CPU_BUDGET_MS: u64 = 100;
 const EXE_SIZE_BUDGET_BYTES: u64 = 15_000_000;
+const EDITOR_FIRST_FRAME_BUDGET_US: u64 = 400_000;
+// D-57: P-08's 60 fps is met when the p95 frame interval is at most 1.5 refresh periods.
+const MOST_INTERVAL_US_TIMES_HZ: u64 = 1_500_000;
 
 /// One budget's outcome: its P-id, whether it is met, and the measurement against the budget.
 #[derive(Debug, PartialEq, Eq)]
@@ -110,6 +113,68 @@ pub(crate) fn idle(log: &str) -> [Verdict; 3] {
             "ms",
         ),
     ]
+}
+
+/// P-02 as its `p02_` test judged it, from the test binary's `--nocapture` output.
+pub(crate) fn copy(test_output: &str) -> Verdict {
+    let passed = test_output.contains("test result: ok. 1 passed");
+    let Some(median) = test_output
+        .lines()
+        .find(|line| line.starts_with("P-02 median copy"))
+    else {
+        return Verdict {
+            budget: "P-02",
+            met: false,
+            detail: "the p02_ test printed no median copy time".to_owned(),
+        };
+    };
+    Verdict {
+        budget: "P-02",
+        met: passed,
+        detail: format!("{median} (judged by the p02_ test)"),
+    }
+}
+
+/// P-07 and P-08 from the probe report's bench lines; P-08 by D-57, against the refresh rate
+/// of the monitor the bench ran on.
+pub(crate) fn editor(report: &str) -> [Verdict; 2] {
+    let first_frame = under(
+        report,
+        "P-07",
+        "first_frame_us",
+        EDITOR_FIRST_FRAME_BUDGET_US,
+        "editor first frame after",
+        "us",
+    );
+    let Some(&p95) = perf_values(report, "P-08", "p95_us").first() else {
+        return [first_frame, missing("P-08", "p95_us")];
+    };
+    let Some(&hertz) = perf_values(report, "P-08", "refresh_hz")
+        .iter()
+        .find(|hertz| **hertz > 0)
+    else {
+        return [
+            first_frame,
+            Verdict {
+                budget: "P-08",
+                met: false,
+                detail: format!(
+                    "frame interval p95 {p95} us, but the bench monitor's refresh rate is \
+                     unknown, so D-57 has no bound"
+                ),
+            },
+        ];
+    };
+    let bound = MOST_INTERVAL_US_TIMES_HZ / hertz;
+    let frames = Verdict {
+        budget: "P-08",
+        met: p95 * hertz <= MOST_INTERVAL_US_TIMES_HZ,
+        detail: format!(
+            "frame interval p95 {p95} us at {hertz} Hz (D-57: at most 1.5 refresh periods, \
+             {bound} us)"
+        ),
+    };
+    [first_frame, frames]
 }
 
 /// P-06 from the release exe's size.
@@ -239,6 +304,38 @@ mod tests {
             cpu.to_string(),
             "P-05 FAIL: no `perf P-05 cpu_ms=` line in the log"
         );
+    }
+
+    #[test]
+    fn p02_is_the_verdict_of_its_test() {
+        let median = "P-02 median copy of a 4K region 61.2ms, all [60ms, 61.2ms]\n";
+        assert!(copy(&format!("{median}test result: ok. 1 passed; 0 failed")).met);
+        assert!(!copy(&format!("{median}test result: FAILED. 0 passed; 1 failed")).met);
+        assert!(!copy("test result: ok. 0 passed; 0 failed").met);
+    }
+
+    #[test]
+    fn p07_holds_under_400_ms() {
+        let report = |us: u64| format!("- perf P-07 first_frame_us={us}\n");
+        assert!(editor(&report(399_999))[0].met);
+        assert!(!editor(&report(400_000))[0].met);
+    }
+
+    #[test]
+    fn d57_p08_holds_at_most_one_and_a_half_refresh_periods() {
+        let report =
+            |p95: u64, hertz: u64| format!("- perf P-08 p95_us={p95} refresh_hz={hertz}\n");
+        assert!(editor(&report(25_000, 60))[1].met);
+        assert!(!editor(&report(25_001, 60))[1].met);
+        assert!(editor(&report(10_416, 144))[1].met);
+        assert!(!editor(&report(10_417, 144))[1].met);
+    }
+
+    #[test]
+    fn p08_fails_without_the_bench_monitors_refresh_rate() {
+        assert!(!editor("- perf P-08 p95_us=1000\n")[1].met);
+        assert!(!editor("- perf P-08 p95_us=1000 refresh_hz=0\n")[1].met);
+        assert!(!editor("")[1].met);
     }
 
     #[test]

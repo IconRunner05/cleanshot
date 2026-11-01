@@ -95,6 +95,7 @@ fn main() {
             eprintln!(
                 "usage: cleanshot-fieldtest --report PATH | --overlays LOG \
                  | --budgets [--runner] [--exe EXE] [--idle LOG] [--overlays LOG] \
+                 [--copy P02_OUTPUT] [--bench REPORT] \
                  | --set-scale WIDTH HEIGHT STEP DPI | --copy-at-scale WIDTH HEIGHT DPI LOG \
                  | --copies-while-watched COUNT LOG"
             );
@@ -128,8 +129,9 @@ fn main() {
 }
 
 /// Judges the budgets whose inputs `inputs` names in pairs (`--exe EXE`, `--idle LOG`,
-/// `--overlays LOG`), after `--runner` for a CI runner, and prints one verdict a line. Returns
-/// the exit code: 0 when every budget judged is met, 1 when one is not, 2 for bad arguments.
+/// `--overlays LOG`, `--copy P02_OUTPUT`, `--bench REPORT`), after `--runner` for a CI
+/// runner, and prints one verdict a line. Returns the exit code: 0 when every budget judged
+/// is met, 1 when one is not, 2 for bad arguments.
 fn judge(inputs: &[String]) -> i32 {
     let (machine, inputs) = match inputs {
         [flag, rest @ ..] if flag == "--runner" => (Machine::Runner, rest),
@@ -138,7 +140,9 @@ fn judge(inputs: &[String]) -> i32 {
     let mut verdicts = Vec::new();
     for pair in inputs.chunks(2) {
         let [input, path] = pair else {
-            eprintln!("--budgets takes --exe, --idle or --overlays, each with a path");
+            eprintln!(
+                "--budgets takes --exe, --idle, --overlays, --copy or --bench, each with a path"
+            );
             return 2;
         };
         match input.as_str() {
@@ -148,6 +152,8 @@ fn judge(inputs: &[String]) -> i32 {
             )),
             "--idle" => verdicts.extend(budgets::idle(&log_text(path))),
             "--overlays" => verdicts.push(budgets::overlay_visible(&log_text(path), machine)),
+            "--copy" => verdicts.push(budgets::copy(&log_text(path))),
+            "--bench" => verdicts.extend(budgets::editor(&log_text(path))),
             _ => {
                 eprintln!("--budgets does not take {input:?}");
                 return 2;
@@ -164,7 +170,7 @@ fn judge(inputs: &[String]) -> i32 {
     i32::from(!verdicts.iter().all(|verdict| verdict.met))
 }
 
-/// The log at `path`, or no text when it cannot be read: each budget it holds then fails as
+/// The text at `path`, or no text when it cannot be read: each budget it holds then fails as
 /// missing, and the reason is printed.
 fn log_text(path: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|error| {
@@ -209,6 +215,38 @@ fn report_bench(report: &mut String, timings: BenchReport) {
         "fps at p50",
         format!("{:.1}", 1.0 / timings.p50.as_secs_f64()),
     );
+    // D-41: the bench opens on the primary monitor, which Windows puts at (0, 0).
+    let primary = monitors().map(|monitors| {
+        monitors
+            .into_iter()
+            .find(|monitor| monitor.bounds.left == 0 && monitor.bounds.top == 0)
+    });
+    let refresh = match primary {
+        Ok(Some(monitor)) => {
+            line(
+                report,
+                "Bench monitor",
+                format!("{} (primary)", monitor.device),
+            );
+            monitor.refresh_hertz
+        }
+        Ok(None) => {
+            line(report, "Bench monitor", "no monitor at (0, 0)");
+            None
+        }
+        Err(error) => {
+            line(report, "Bench monitor", format!("error: {error}"));
+            None
+        }
+    };
+    let refresh = refresh.map_or_else(String::new, |hertz| format!(" refresh_hz={hertz}"));
+    writeln!(
+        report,
+        "- perf P-07 first_frame_us={}\n- perf P-08 p95_us={}{refresh}",
+        timings.first_frame.as_micros(),
+        timings.p95.as_micros()
+    )
+    .expect("writing to a String succeeds");
 }
 
 fn probe() -> String {
