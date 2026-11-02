@@ -1,1 +1,3 @@
 *.bat text eol=crlf
+# Rows are only appended, so two branches that each add one merge with both kept.
+docs/decisions.md merge=union
