@@ -185,8 +185,6 @@ fn log_text(path: &str) -> String {
     })
 }
 
-/// How many `budget` perf lines (P-01 for an overlay shown, P-02 for a copy) cleanshot.exe
-/// has logged in its `--log` file so far.
 /// `--overlays LOG`: once the exe's tray is ready and settled (D-88), opens and cancels
 /// [`budgets::OVERLAY_PRESSES`] overlays, then waits for the after-use P-04 sample.
 fn open_overlays_after_start(log: &Path) -> Result<(), String> {
@@ -218,6 +216,8 @@ fn open_overlays_after_start(log: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// How many `budget` perf lines (P-01 for an overlay shown, P-02 for a copy) cleanshot.exe
+/// has logged in its `--log` file so far.
 fn perf_lines(log: &Path, budget: &str, key: &str) -> u32 {
     let log = std::fs::read_to_string(log).expect("cleanshot.exe was started with --log here");
     let shown = log
