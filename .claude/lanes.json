@@ -12,7 +12,7 @@
   "suites": {
     "crates/cleanshot-core/**": "cargo test --target host-tuple -p cleanshot-core",
     "crates/cleanshot-render/**": "cargo test --target host-tuple -p cleanshot-render",
-    "crates/**": "cargo clippy --workspace --all-targets -- -D warnings",
+    "crates/**": "cargo clippy --workspace --all-targets -- -D warnings && cargo clippy -p cleanshot-win --all-targets -- -D warnings && cargo clippy -p cleanshot-editor --all-targets -- -D warnings",
     "Cargo.toml": "cargo clippy --workspace --all-targets -- -D warnings && cargo deny check",
     "deny.toml": "cargo deny check",
     "charter-gates.sh": "./charter-gates.sh"
@@ -24,6 +24,8 @@
       "ast-grep scan",
       "cargo clippy --workspace --all-targets -- -D warnings",
       "cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings",
+      "cargo clippy -p cleanshot-win --all-targets -- -D warnings",
+      "cargo clippy -p cleanshot-editor --all-targets -- -D warnings",
       "cargo test --target host-tuple -p cleanshot-core -p cleanshot-render",
       "cargo deny check",
       "cargo audit",
