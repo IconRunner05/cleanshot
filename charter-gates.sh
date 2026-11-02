@@ -129,10 +129,18 @@ manifest=$("$llvm_bin/llvm-readobj" --coff-resources "$exe" |
     fail "D-71: the $kind's embedded manifest does not declare PerMonitorV2 DPI awareness."
 
 if [[ $kind == "release exe" ]]; then
-    strings=$("$llvm_bin/llvm-strings" "$exe")
-    host_paths=$(printf '%s\n' "$strings" | grep -i -F -e /Users/ -e /home/ -e 'C:\Users\' -e '\.cargo\' || [[ $? -eq 1 ]])
+    # Windows keeps many strings as UTF-16, which llvm-strings does not read, so the exe is
+    # also decoded as UTF-16LE at both byte alignments.
+    strings=$(
+        "$llvm_bin/llvm-strings" "$exe"
+        # iconv fails on the half character an odd length leaves at the end; the rest is read.
+        { iconv -f UTF-16LE -t UTF-8 -c "$exe" 2>/dev/null || true
+          tail -c +2 "$exe" | iconv -f UTF-16LE -t UTF-8 -c 2>/dev/null || true; } |
+            LC_ALL=C tr -c '[:print:]' '\n' | LC_ALL=C grep -a -E '.{4}'
+    )
+    host_paths=$(printf '%s\n' "$strings" | grep -a -i -F -e /Users/ -e /home/ -e '\Users\' -e '\.cargo\' -e ':\a\' || [[ $? -eq 1 ]])
     [[ -z $host_paths ]] ||
-        fail "C-20: the release exe holds $(printf '%s\n' "$host_paths" | wc -l | tr -d ' ') build-host paths, such as $(printf '%s\n' "$host_paths" | head -1)."
+        fail "CHARTER 7 gate 3: the release exe holds $(printf '%s\n' "$host_paths" | wc -l | tr -d ' ') build-host paths, such as $(printf '%s\n' "$host_paths" | head -1)."
 fi
 
 size=$(wc -c <"$exe" | tr -d ' ')

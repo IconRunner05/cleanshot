@@ -108,9 +108,6 @@ changes in the commit that closes it.
   server, and depending on the PC's network policy sign in to it with the user's Windows
   credentials. A `cleanshot.toml` beside the exe takes precedence over the one in `%APPDATA%`,
   so a crafted file placed next to the exe can set such a folder.
-- **D-24, build paths.** The release build hides the runner's home and Cargo folders, and the
-  gate fails on `/Users/`, `/home/`, `C:\Users\` or `\.cargo\` in the exe's ASCII strings.
-  Neither covers the runner's checkout folder or UTF-16 strings.
 
 ## Supply chain and evidence
 
@@ -119,6 +116,9 @@ changes in the commit that closes it.
   in `deny.toml`, each for a crate that is unmaintained but not vulnerable (`paste`,
   `ttf-parser`, `rustybuzz`, pulled in by GPUI). Dependencies are chosen from the allow-list in
   CHARTER section 6 (review).
+- The release build replaces the runner's checkout, home and Cargo folders in the paths it
+  embeds, and the gate fails if the exe's ASCII or UTF-16 strings hold `/Users/`, `/home/`,
+  `\Users\`, `\.cargo\` or `:\a\` (D-24; gate).
 - A release publishes the exe that the CI gates scanned in the same workflow run, with a
   CycloneDX SBOM, `SHA256SUMS` and a GitHub build-provenance attestation.
 - The evidence for every gate above is that release's run on the repository's Actions tab
