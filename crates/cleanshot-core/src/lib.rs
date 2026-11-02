@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod bubble;
+mod capture_mode;
 mod delivery;
 mod document;
 mod drag;
@@ -21,9 +22,9 @@ mod text;
 mod text_edit;
 mod timer;
 mod tool;
-mod toolbar;
 
 pub use bubble::{BUBBLE_PADDING, Bubble};
+pub use capture_mode::CaptureMode;
 pub use delivery::{Delivered, DeliveryError, Output, delivery_notice, save_as_notice};
 pub use document::{
     Color, Document, Fill, Frame, ImageError, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM,
@@ -58,4 +59,3 @@ pub use text_edit::{
 };
 pub use timer::Timer;
 pub use tool::Tool;
-pub use toolbar::CaptureMode;
