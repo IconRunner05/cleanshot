@@ -8,6 +8,7 @@ mod flatten;
 mod frame;
 mod gamma;
 mod redact;
+mod thumbnail;
 
 use cleanshot_core::{ImageError, RectF, ShapeId};
 
@@ -15,6 +16,7 @@ pub use encode::{Format, encode};
 pub use flatten::{Flattened, flatten};
 pub use gamma::TEXT_GAMMA_RATIOS;
 pub use redact::{Redacted, redacted};
+pub use thumbnail::thumbnail;
 
 /// Why an export failed.
 #[derive(Debug, thiserror::Error)]
