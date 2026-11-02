@@ -1,6 +1,5 @@
 use crate::bubble::Bubble;
-use crate::document::Style;
-use crate::document::{Document, PointF, Shape, ShapeEntry, ShapeId};
+use crate::document::{Document, PointF, Shape, ShapeEntry, ShapeId, Style};
 use crate::drawing::{snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::look::Look;
