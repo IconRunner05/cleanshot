@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use crate::{
-    Activity, Command, LineStep, PointF, Shape, ShapeId, Style, TextBlock, TextBlockError,
+    Activity, Bubble, Color, Command, LineStep, PointF, Shape, ShapeId, Style, TextBlock,
+    TextBlockError, Tool, text_on,
 };
 
 /// The text box being typed into (F-34): its text, caret and selection, and the IME's
@@ -361,20 +362,70 @@ pub enum BoxPress {
     Ignore,
 }
 
+/// What a text box's text is shown in once committed: plain text (F-34) or a speech bubble
+/// whose tail points at `tail` (F-42).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextFrame {
+    Plain,
+    Bubble { tail: PointF },
+}
+
+impl TextFrame {
+    /// The tool that draws text in this frame.
+    #[must_use]
+    pub fn tool(self) -> Tool {
+        match self {
+            Self::Plain => Tool::Text,
+            Self::Bubble { .. } => Tool::Bubble,
+        }
+    }
+
+    /// The colour text in this frame is drawn in, for a shape in `color`: its own, or on a
+    /// bubble filled with it, black or white as reads (D-87).
+    #[must_use]
+    pub fn text_color(self, color: Color) -> Color {
+        match self {
+            Self::Plain => color,
+            Self::Bubble { .. } => text_on(color),
+        }
+    }
+
+    /// `block` shown in this frame.
+    #[must_use]
+    pub fn around(self, block: TextBlock) -> Shape {
+        match self {
+            Self::Plain => Shape::Text(block),
+            Self::Bubble { tail } => Shape::Bubble(Bubble::new(block, tail)),
+        }
+    }
+}
+
 /// Where a text box came from: opened on empty canvas with the current tool's style, or on a
-/// text shape already there, which keeps its own style.
+/// text or bubble already there, which keeps its own style.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TextOrigin {
     New {
         at: PointF,
         size: f32,
         style: Style,
+        frame: TextFrame,
     },
     Existing {
         id: ShapeId,
         block: TextBlock,
         style: Style,
+        frame: TextFrame,
     },
+}
+
+impl TextOrigin {
+    /// What the box's text is shown in once committed.
+    #[must_use]
+    pub fn frame(&self) -> TextFrame {
+        match self {
+            Self::New { frame, .. } | Self::Existing { frame, .. } => *frame,
+        }
+    }
 }
 
 /// The one command that commits `edit` (F-34, F-38: one undo step per text edit), with
@@ -394,15 +445,25 @@ pub fn commit_text(
     let text = edit.text();
     Ok(match origin {
         TextOrigin::New { .. } if text.is_empty() => None,
-        TextOrigin::New { at, size, style } => Some(Command::Add {
-            shape: Shape::Text(TextBlock::new(*at, text.to_owned(), *size, em_width)?),
+        TextOrigin::New {
+            at,
+            size,
+            style,
+            frame,
+        } => Some(Command::Add {
+            shape: frame.around(TextBlock::new(*at, text.to_owned(), *size, em_width)?),
             style: *style,
         }),
         TextOrigin::Existing { block, .. } if block.text() == text => None,
         TextOrigin::Existing { id, .. } if text.is_empty() => Some(Command::Remove(*id)),
-        TextOrigin::Existing { id, block, style } => Some(Command::Replace {
+        TextOrigin::Existing {
+            id,
+            block,
+            style,
+            frame,
+        } => Some(Command::Replace {
             id: *id,
-            shape: Shape::Text(TextBlock::new(
+            shape: frame.around(TextBlock::new(
                 block.at(),
                 text.to_owned(),
                 block.size(),
@@ -574,6 +635,7 @@ mod tests {
             id: ShapeId(7),
             block: TextBlock::new(AT, text.into(), 30.0, 1.0).unwrap(),
             style: OWN_STYLE,
+            frame: TextFrame::Plain,
         }
     }
 
@@ -587,6 +649,7 @@ mod tests {
             at: AT,
             size: 24.0,
             style: STYLE,
+            frame: TextFrame::Plain,
         };
         assert_eq!(
             commit(&new, "hi"),
@@ -617,11 +680,57 @@ mod tests {
     }
 
     #[test]
+    fn f42_a_bubbles_text_commits_as_a_bubble_keeping_its_tail() {
+        let tail = PointF { x: 0.0, y: 50.0 };
+        let frame = TextFrame::Bubble { tail };
+        let new = TextOrigin::New {
+            at: AT,
+            size: 24.0,
+            style: STYLE,
+            frame,
+        };
+        let bubble = |text: &str, size| {
+            Shape::Bubble(Bubble::new(
+                TextBlock::new(AT, text.into(), size, 2.5).unwrap(),
+                tail,
+            ))
+        };
+        assert_eq!(
+            commit(&new, "hi"),
+            Some(Command::Add {
+                shape: bubble("hi", 24.0),
+                style: STYLE,
+            })
+        );
+        let TextOrigin::Existing {
+            id, block, style, ..
+        } = existing("old")
+        else {
+            panic!("an existing text");
+        };
+        let reopened = TextOrigin::Existing {
+            id,
+            block,
+            style,
+            frame,
+        };
+        assert_eq!(
+            commit(&reopened, "new"),
+            Some(Command::Replace {
+                id: ShapeId(7),
+                shape: bubble("new", 30.0),
+                style: OWN_STYLE,
+            })
+        );
+    }
+
+    #[test]
     fn f34_a_commit_with_an_unmeasured_width_is_refused() {
         let new = TextOrigin::New {
             at: AT,
             size: 24.0,
             style: STYLE,
+            frame: TextFrame::Plain,
         };
         let edit = TextEdit::new("hi".into());
         assert!(matches!(
@@ -701,6 +810,7 @@ mod tests {
             at: AT,
             size: 24.0,
             style: STYLE,
+            frame: TextFrame::Plain,
         };
         let mut edit = TextEdit::new("a".into());
         edit.replace_and_mark(None, "ni", None);

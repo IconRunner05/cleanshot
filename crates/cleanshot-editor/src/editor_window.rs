@@ -388,7 +388,7 @@ impl EditorView {
             });
         };
         let (strip_tool, look) = if let Some(text_box) = &self.text_box {
-            (Tool::Text, text_box.look(&self.looks))
+            (text_box.tool(), text_box.look(&self.looks))
         } else {
             let selected = self.selected.and_then(|id| self.document.shape(id));
             self.looks.shown(self.tool, selected)

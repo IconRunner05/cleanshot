@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::document::{Color, Fill, RedactMode, Shape, ShapeEntry, ShapeId, Style};
 use crate::history::Command;
 use crate::text::{DEFAULT_TEXT_SIZE, TextBlock};
-use crate::text_edit::TextOrigin;
+use crate::text_edit::{TextFrame, TextOrigin};
 use crate::tool::Tool;
 
 const ANNOTATION_RED: Color = Color {
@@ -367,20 +367,25 @@ impl Looks {
         }
     }
 
-    /// The look an open text box shows: the text tool's for a new box, or the text's own.
+    /// The look an open text box shows: its tool's for a new box, or the shape's own.
     #[must_use]
     pub fn text_look(&self, origin: &TextOrigin) -> Look {
         match origin {
-            TextOrigin::New { .. } => self.look(Tool::Text),
-            TextOrigin::Existing { id, block, style } => {
-                self.shown(Tool::Text, Some(&text_entry(*id, block, *style)))
+            TextOrigin::New { frame, .. } => self.look(frame.tool()),
+            TextOrigin::Existing {
+                id,
+                block,
+                style,
+                frame,
+            } => {
+                self.shown(frame.tool(), Some(&text_entry(*id, block, *style, *frame)))
                     .1
             }
         }
     }
 
-    /// Sets `property` while a text box is open, as on a selection: a new box takes the text
-    /// tool's look as it now is, and an existing text is restyled at once by the returned
+    /// Sets `property` while a text box is open, as on a selection: a new box takes its tool's
+    /// look as it now is, and an existing text or bubble is restyled at once by the returned
     /// command, one undo step (F-38), which `origin` then follows.
     ///
     /// # Errors
@@ -392,16 +397,23 @@ impl Looks {
         origin: &mut TextOrigin,
     ) -> Result<Option<Command>, PropertyError> {
         match origin {
-            TextOrigin::New { size, style, .. } => {
-                self.set(property, Tool::Text, None)?;
-                let look = self.look(Tool::Text);
+            TextOrigin::New {
+                size, style, frame, ..
+            } => {
+                self.set(property, frame.tool(), None)?;
+                let look = self.look(frame.tool());
                 (*size, *style) = (look.text_size, look.style);
                 Ok(None)
             }
-            TextOrigin::Existing { id, block, style } => {
-                let entry = text_entry(*id, block, *style);
-                let restyled = self.set(property, Tool::Text, Some(&entry))?;
-                let look = Look::of(&entry, self.look(Tool::Text)).with(property)?;
+            TextOrigin::Existing {
+                id,
+                block,
+                style,
+                frame,
+            } => {
+                let entry = text_entry(*id, block, *style, *frame);
+                let restyled = self.set(property, frame.tool(), Some(&entry))?;
+                let look = Look::of(&entry, self.look(frame.tool())).with(property)?;
                 (*block, *style) = (look.dress_text(block), look.style);
                 Ok(restyled)
             }
@@ -409,10 +421,10 @@ impl Looks {
     }
 }
 
-fn text_entry(id: ShapeId, block: &TextBlock, style: Style) -> ShapeEntry {
+fn text_entry(id: ShapeId, block: &TextBlock, style: Style, frame: TextFrame) -> ShapeEntry {
     ShapeEntry {
         id,
-        shape: Shape::Text(block.clone()),
+        shape: frame.around(block.clone()),
         style,
     }
 }
@@ -664,6 +676,7 @@ mod tests {
             at,
             size: DEFAULT_TEXT_SIZE,
             style: Look::default_for(Tool::Text).style(),
+            frame: TextFrame::Plain,
         };
         let added = looks.restyle_text(Property::TextSize(40.0), &mut new);
         assert_eq!(added, Ok(None));
@@ -675,6 +688,7 @@ mod tests {
             id: ShapeId(7),
             block: block.clone(),
             style,
+            frame: TextFrame::Plain,
         };
         let restyled = looks.restyle_text(Property::Color(BLUE), &mut existing);
         assert!(

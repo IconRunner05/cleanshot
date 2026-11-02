@@ -18,6 +18,9 @@ section exists.
 - Numbered steps (F-41): N, or the Numbered step button, places a filled circle with its
   number where you click. Steps count 1, 2, 3 in the order they were placed, and removing
   one renumbers the rest.
+- Speech bubbles (F-42): B, or the Speech bubble button, opens a text box like the text
+  tool, and the text sits in a filled rounded box with a tail. Drag the tail's tip to point
+  it; T or B on a bubble edits its text.
 
 ## [0.1.2] - 2026-11-02
 

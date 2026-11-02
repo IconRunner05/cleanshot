@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use cleanshot_core::{
-    BoxPress, Command, LineMove, LinePosition, LineStep, Look, Looks, PointF, Property,
-    PropertyError, Shape, Style, TextBlock, TextBlockError, TextEdit, TextKey, TextOrigin,
+    BoxPress, Color, Command, LineMove, LinePosition, LineStep, Look, Looks, PointF, Property,
+    PropertyError, Style, TextBlock, TextBlockError, TextEdit, TextKey, TextOrigin, Tool,
     commit_text, hits,
 };
 use gpui::{
@@ -55,6 +55,11 @@ impl TextBox {
         &mut self.edit
     }
 
+    /// The tool whose settings the property strip shows for the box: text or bubble.
+    pub fn tool(&self) -> Tool {
+        self.origin.frame().tool()
+    }
+
     /// How the box draws, as the property strip shows it.
     pub fn look(&self, looks: &Looks) -> Look {
         looks.text_look(&self.origin)
@@ -85,7 +90,7 @@ impl TextBox {
     /// What the canvas draws while the box is open: its text as the shape it would become, in
     /// place of the shape it reopened.
     pub fn preview(&self, window: &Window) -> Command {
-        let shape = Shape::Text(self.block(window));
+        let shape = self.origin.frame().around(self.block(window));
         match &self.origin {
             TextOrigin::New { style, .. } => Command::Add {
                 shape,
@@ -103,7 +108,7 @@ impl TextBox {
     /// Inside the box it moves the caret to the character nearest `at`, and a drag from there
     /// selects up to the pointer until the button comes up.
     pub fn press(&mut self, at: PointF, reach: f32, window: &Window) -> BoxPress {
-        let inside = hits(&Shape::Text(self.block(window)), at, reach);
+        let inside = hits(&self.origin.frame().around(self.block(window)), at, reach);
         let press = self.edit.press(inside);
         if press == BoxPress::PlaceCaret {
             let offset = self.offset_at(at, window);
@@ -188,7 +193,11 @@ impl TextBox {
             }
         }
         let head = self.edit.position(self.edit.caret());
-        window.paint_quad(fill(caret(&lines, head), rgba(self.style().color)));
+        window.paint_quad(fill(caret(&lines, head), rgba(self.text_color())));
+    }
+
+    fn text_color(&self) -> Color {
+        self.origin.frame().text_color(self.style().color)
     }
 
     fn style(&self) -> Style {
@@ -209,7 +218,7 @@ impl TextBox {
     }
 
     fn screen_lines(&self, fit: &Fit, window: &Window) -> Vec<LaidLine> {
-        let color = rgba(self.style().color);
+        let color = rgba(self.text_color());
         lay_out(
             &self.block(window),
             color,
@@ -221,7 +230,7 @@ impl TextBox {
 
     /// Laid out at one pixel per image pixel, where Up, Down and a press measure.
     fn image_lines(&self, window: &Window) -> Vec<LaidLine> {
-        let color = rgba(self.style().color);
+        let color = rgba(self.text_color());
         lay_out(
             &self.block(window),
             color,

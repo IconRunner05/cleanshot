@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use cleanshot_core::{DeliveryError, RgbaImage};
 use cleanshot_win::accessibility::{ControlKind, wait_for_toolbar};
 
-const TOOLS: [&str; 12] = [
+const TOOLS: [&str; 13] = [
     "Select",
     "Arrow",
     "Line",
@@ -21,6 +21,7 @@ const TOOLS: [&str; 12] = [
     "Highlighter",
     "Text",
     "Numbered step",
+    "Speech bubble",
     "Redact",
     "Spotlight",
     "Crop",

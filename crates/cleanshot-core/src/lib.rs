@@ -50,6 +50,6 @@ pub use text::{
     text_on,
 };
 pub use text_edit::{
-    BoxPress, CaretMove, LineMove, LinePosition, TextEdit, TextOrigin, commit_text,
+    BoxPress, CaretMove, LineMove, LinePosition, TextEdit, TextFrame, TextOrigin, commit_text,
 };
 pub use tool::Tool;

@@ -1,9 +1,12 @@
+use crate::bubble::Bubble;
+use crate::document::Style;
 use crate::document::{Document, PointF, Shape, ShapeEntry, ShapeId};
 use crate::drawing::{snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::look::Look;
 use crate::selection::{BoxHandle, Handle, handle_at, handles, moved, resized, shape_at};
-use crate::text_edit::TextOrigin;
+use crate::text::TextBlock;
+use crate::text_edit::{TextFrame, TextOrigin};
 use crate::tool::Tool;
 
 /// A pointer drag on the canvas, from press to release. Its edit is one [`Command`], made on
@@ -49,8 +52,9 @@ impl Drag {
     /// A press at `at` with `tool`, while `selected` is selected (F-30). With the select tool, a
     /// handle of the selected shape resizes it, otherwise the topmost shape under the pointer is
     /// selected and moved, and empty canvas clears the selection. A drawing tool clears the
-    /// selection and starts drawing. The text tool clears the selection and opens a text box: on
-    /// the topmost shape under the pointer if that is text, otherwise a new one at `at` (F-34).
+    /// selection and starts drawing. The text and bubble tools clear the selection and open a text
+    /// box: on the topmost shape under the pointer if that is a text or bubble, otherwise a new
+    /// one at `at` (F-34, F-42).
     /// `look` is how `tool` draws, and `tolerance` is the reach of the pointer in image pixels.
     #[must_use]
     pub fn press(
@@ -62,13 +66,17 @@ impl Drag {
         tolerance: f32,
     ) -> Press {
         let entry = |id| document.shapes().iter().find(|entry| entry.id == id);
+        let hit = || shape_at(document, at, tolerance).and_then(entry);
         let start = match tool {
-            // D-87: typing into a bubble waits for the B tool, until the export draws its text.
-            Tool::Select | Tool::Bubble => None,
-            Tool::Text => Some(Start::Type(text_origin(
-                shape_at(document, at, tolerance).and_then(entry),
+            Tool::Select => None,
+            Tool::Text => Some(Start::Type(text_origin(hit(), at, look, TextFrame::Plain))),
+            Tool::Bubble => Some(Start::Type(text_origin(
+                hit(),
                 at,
                 look,
+                TextFrame::Bubble {
+                    tail: Bubble::first_tail(at, look.text_size()),
+                },
             ))),
             Tool::Arrow
             | Tool::Line
@@ -207,22 +215,31 @@ fn opposite_corner(shape: &Shape, corner: BoxHandle) -> Option<PointF> {
         .map(|(_, at)| at)
 }
 
-/// The text box a text-tool press at `at` opens, with `hit` the topmost shape under it.
-fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look) -> TextOrigin {
-    match hit {
-        Some(ShapeEntry {
+/// The text box a text or bubble press at `at` opens, with `hit` the topmost shape under it: a
+/// text or bubble there reopens, whichever tool pressed it, and anywhere else a new box opens
+/// in `new`.
+fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look, new: TextFrame) -> TextOrigin {
+    let existing = |id: ShapeId, block: &TextBlock, style: Style, frame| TextOrigin::Existing {
+        id,
+        block: block.clone(),
+        style,
+        frame,
+    };
+    match hit.map(|entry| (entry.id, &entry.shape, entry.style)) {
+        Some((id, Shape::Text(block), style)) => existing(id, block, style, TextFrame::Plain),
+        Some((id, Shape::Bubble(bubble), style)) => existing(
             id,
-            shape: Shape::Text(block),
+            bubble.block(),
             style,
-        }) => TextOrigin::Existing {
-            id: *id,
-            block: block.clone(),
-            style: *style,
-        },
+            TextFrame::Bubble {
+                tail: bubble.tail(),
+            },
+        ),
         Some(_) | None => TextOrigin::New {
             at,
             size: look.text_size(),
             style: look.style(),
+            frame: new,
         },
     }
 }
@@ -499,7 +516,8 @@ mod tests {
             Some(Start::Type(TextOrigin::Existing {
                 id: text_id,
                 block,
-                style
+                style,
+                frame: TextFrame::Plain,
             }))
         );
         let new_box = |at| {
@@ -507,9 +525,46 @@ mod tests {
                 at,
                 size: DEFAULT_TEXT_SIZE,
                 style: Look::default_for(Tool::Text).style(),
+                frame: TextFrame::Plain,
             }))
         };
         assert_eq!(press(point(30.0, 20.0)).start, new_box(point(30.0, 20.0)));
         assert_eq!(press(point(190.0, 10.0)).start, new_box(point(190.0, 10.0)));
+    }
+
+    #[test]
+    fn f42_the_bubble_tool_opens_a_bubble_anywhere_and_either_text_tool_reopens_a_bubble() {
+        let (document, _, _) = document();
+        let mut history = History::new(document);
+        let block = TextBlock::new(point(300.0, 300.0), "hi".into(), 20.0, 2.0).unwrap();
+        let tail = point(250.0, 400.0);
+        let style = Look::default_for(Tool::Bubble).style();
+        let shape = Shape::Bubble(Bubble::new(block.clone(), tail));
+        history.apply(Command::Add { shape, style }).unwrap();
+        let document = history.document();
+        let bubble_id = document.shapes().last().unwrap().id;
+        let press =
+            |tool, at| Drag::press(document, tool, Look::default_for(tool), None, at, 4.0).start;
+
+        let reopened = Some(Start::Type(TextOrigin::Existing {
+            id: bubble_id,
+            block,
+            style,
+            frame: TextFrame::Bubble { tail },
+        }));
+        assert_eq!(press(Tool::Bubble, point(310.0, 305.0)), reopened);
+        assert_eq!(press(Tool::Text, point(310.0, 305.0)), reopened);
+        let at = point(30.0, 20.0);
+        assert_eq!(
+            press(Tool::Bubble, at),
+            Some(Start::Type(TextOrigin::New {
+                at,
+                size: DEFAULT_TEXT_SIZE,
+                style,
+                frame: TextFrame::Bubble {
+                    tail: Bubble::first_tail(at, DEFAULT_TEXT_SIZE),
+                },
+            }))
+        );
     }
 }

@@ -1,5 +1,5 @@
 use crate::document::{PointF, RectF};
-use crate::text::TextBlock;
+use crate::text::{LINE_HEIGHT, TextBlock};
 
 /// The space between a bubble's text and its edge, and its corners' radius, as a multiple of
 /// its text size (F-42, D-87).
@@ -18,6 +18,16 @@ impl Bubble {
     #[must_use]
     pub fn new(block: TextBlock, tail: PointF) -> Self {
         Self { block, tail }
+    }
+
+    /// Where a new bubble's tail points when its text starts at `at` in `size` pixels per em:
+    /// left of the box, level with the middle of its first line, so the text grows away from it.
+    #[must_use]
+    pub fn first_tail(at: PointF, size: f32) -> PointF {
+        PointF {
+            x: at.x - 2.0 * size,
+            y: at.y + LINE_HEIGHT * size / 2.0,
+        }
     }
 
     #[must_use]
@@ -154,6 +164,22 @@ mod tests {
         // Text at (100, 100), 20 px, 4 ems: one line 80 x 25, so a 100 x 45 box at (90, 90).
         let block = TextBlock::new(PointF { x: 100.0, y: 100.0 }, "Hi".into(), 20.0, 4.0).unwrap();
         Bubble::new(block, tail)
+    }
+
+    #[test]
+    fn f42_a_new_bubbles_tail_points_left_of_its_box_from_its_first_line() {
+        let at = PointF { x: 100.0, y: 100.0 };
+        let new = Bubble::new(
+            TextBlock::new(at, "Hi\nthere".into(), 20.0, 4.0).unwrap(),
+            Bubble::first_tail(at, 20.0),
+        );
+        let outline = new.outline();
+        let [_, tip, _] = new.tail_triangle().expect("the tail is drawn");
+        assert!(tip.x < outline.x, "the tip {tip:?} is left of the box");
+        assert!(
+            (outline.y..outline.y + LINE_HEIGHT * 20.0 + BUBBLE_PADDING * 20.0).contains(&tip.y),
+            "the tip {tip:?} is level with the first line"
+        );
     }
 
     #[test]

@@ -42,7 +42,7 @@ impl Tool {
         }
     }
 
-    /// The tool a single key picks, as in the CHARTER feature table: V, A, L, R, O, P, H, X, C, T, S, N.
+    /// The tool a single key picks, as in the CHARTER feature table: V, A, L, R, O, P, H, X, C, T, S, N, B.
     /// Case is ignored.
     #[must_use]
     pub fn for_key(key: char) -> Option<Self> {
@@ -59,6 +59,7 @@ impl Tool {
             't' => Self::Text,
             's' => Self::Spotlight,
             'n' => Self::Step,
+            'b' => Self::Bubble,
             _ => return None,
         };
         Some(tool)
@@ -136,7 +137,7 @@ mod tests {
 
     #[test]
     fn f30_each_tool_has_its_key_from_the_charter_table() {
-        let tools: Vec<_> = "VALROPHXCTSN".chars().map(Tool::for_key).collect();
+        let tools: Vec<_> = "VALROPHXCTSNB".chars().map(Tool::for_key).collect();
         assert_eq!(
             tools,
             [
@@ -152,6 +153,7 @@ mod tests {
                 Tool::Text,
                 Tool::Spotlight,
                 Tool::Step,
+                Tool::Bubble,
             ]
             .map(Some)
         );
