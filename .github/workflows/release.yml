@@ -127,8 +127,13 @@ jobs:
           cd "$RUNNER_TEMP/trial"
           cmd //c "budgets.bat < nul"
           cat results.txt
-          verdicts=$(grep -cE '^P-0[1-8] (PASS|FAIL): ' results.txt || true)
-          (( verdicts == 8 )) || { echo "FAIL: results.txt holds ${verdicts} of 8 budget verdicts"; exit 1; }
+          missing=()
+          for verdict in 'P-01 (PASS|FAIL): ' 'P-02 (PASS|FAIL): ' 'P-03 (PASS|FAIL): ' \
+            'P-04 (PASS|FAIL): idle working set ' 'P-04 (PASS|FAIL): private working set ' \
+            'P-05 (PASS|FAIL): ' 'P-06 (PASS|FAIL): ' 'P-07 (PASS|FAIL): ' 'P-08 (PASS|FAIL): '; do
+            grep -qE "^$verdict" results.txt || missing+=("$verdict")
+          done
+          (( ${#missing[@]} == 0 )) || { printf 'FAIL: results.txt has no verdict for %s\n' "${missing[@]}"; exit 1; }
           left=$(ls -A | LC_ALL=C sort | tr '\n' ' ')
           expected="budgets.bat cleanshot-fieldtest.exe cleanshot.exe p02.exe results.txt "
           [[ $left == "$expected" ]] || { echo "FAIL C-21: the kit folder holds ${left}"; exit 1; }
