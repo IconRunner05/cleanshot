@@ -29,30 +29,22 @@ fn main() {
         .into_string()
         .expect("the test's path is Unicode");
     let file = PathBuf::from(&exe).with_file_name("settings_automation.toml");
-    remove_left_over(&file);
-    let run_before = run_value().expect("the HKCU Run key reads");
+    if let Err(problem) = remove_left_over(&file) {
+        println!("{TEST} ... FAILED: {problem}");
+        exit(1);
+    }
+    let left_as_found = LeftAsFound {
+        file: file.clone(),
+        run_value: run_value().expect("the HKCU Run key reads"),
+    };
     let start = Instant::now();
     let (opened, shown) = mpsc::channel();
-    let walked_file = file.clone();
-    let walked_exe = exe.clone();
+    let walked = (file.clone(), exe.clone(), left_as_found.clone());
     thread::spawn(move || {
-        let verdict = walk(&walked_file, &walked_exe, start, &shown);
-        remove_left_over(&walked_file);
-        let restored = match &run_before {
-            Some(command) => set_run_value(command),
-            None => remove_run_value(),
-        };
-        match (verdict, restored) {
-            (Ok(()), Ok(())) => {
-                println!("{TEST} ... ok");
-                exit(0);
-            }
-            (verdict, restored) => {
-                println!("{TEST} ... FAILED: {verdict:?}, Run value restored: {restored:?}");
-                exit(1);
-            }
-        }
+        let (file, exe, left_as_found) = walked;
+        left_as_found.finish(walk(&file, &exe, start, &shown));
     });
+    let stopped = left_as_found.clone();
     let ran = cleanshot_editor::run(move |cx| {
         let (hidden, _) = Policy::from_values(
             PolicyValue::Missing,
@@ -60,18 +52,20 @@ fn main() {
             PolicyValue::Missing,
             PolicyValue::Number(1),
         );
+        let applied_while_hidden = left_as_found.clone();
         // F-57: under HideSettings the window does not open; the tray's half is win's f57 test.
         let refused = cleanshot_editor::open_settings(
             cx,
             Settings::default(),
             hidden,
-            |_| unreachable_apply(),
+            move |_| -> Applied {
+                applied_while_hidden.finish(Err("a hidden settings window applied a change".into()))
+            },
             false,
             |_| Ok(()),
         );
         if !matches!(refused, Err(cleanshot_editor::Error::SettingsHidden)) {
-            println!("{TEST} ... FAILED: HideSettings opened the window: {refused:?}");
-            exit(1);
+            left_as_found.finish(Err(format!("HideSettings opened the window: {refused:?}")));
         }
         let opened_now = cleanshot_editor::open_settings(
             cx,
@@ -95,35 +89,53 @@ fn main() {
                 .send(Instant::now())
                 .expect("the walk thread waits for the window"),
             Err(error) => {
-                println!("{TEST} ... FAILED: the settings window did not open: {error}");
-                exit(1);
+                left_as_found.finish(Err(format!("the settings window did not open: {error}")))
             }
         }
     });
-    println!("{TEST} ... FAILED: GPUI stopped before the walk finished: {ran:?}");
-    exit(1);
+    stopped.finish(Err(format!(
+        "GPUI stopped before the walk finished: {ran:?}"
+    )));
 }
 
-// A file from an earlier run would pass the thumbnail check before any press.
-fn remove_left_over(file: &Path) {
-    match std::fs::remove_file(file) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            println!(
-                "{TEST} ... FAILED: {} could not be removed: {error}",
-                file.display()
-            );
-            exit(1);
+/// The settings file and HKCU Run value as the run found them, put back on every exit.
+#[derive(Clone)]
+struct LeftAsFound {
+    file: PathBuf,
+    run_value: Option<String>,
+}
+
+impl LeftAsFound {
+    fn finish(&self, verdict: Result<(), String>) -> ! {
+        let removed = remove_left_over(&self.file);
+        let restored = match &self.run_value {
+            Some(command) => set_run_value(command),
+            None => remove_run_value(),
+        };
+        match (verdict, removed, restored) {
+            (Ok(()), Ok(()), Ok(())) => {
+                println!("{TEST} ... ok");
+                exit(0);
+            }
+            (verdict, removed, restored) => {
+                println!(
+                    "{TEST} ... FAILED: {verdict:?}, file removed: {removed:?}, \
+                     Run value restored: {restored:?}"
+                );
+                exit(1);
+            }
         }
     }
 }
 
-fn unreachable_apply() -> Applied {
-    println!("{TEST} ... FAILED: a hidden settings window applied a change");
-    exit(1);
+// A file from an earlier run would pass the thumbnail check before any press.
+fn remove_left_over(file: &Path) -> Result<(), String> {
+    match std::fs::remove_file(file) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("{} could not be removed: {error}", file.display())),
+    }
 }
-
 fn walk(
     file: &Path,
     exe: &str,
@@ -146,18 +158,16 @@ fn walk(
     press(THUMBNAIL)?;
     wait_until("the file to turn the thumbnail off", || {
         read_settings(file, MAX_SETTINGS_BYTES)
-            .ok()
-            .flatten()
-            .is_some_and(|text| !Settings::from_toml(&text).0.show_thumbnail)
+            .map(|text| text.is_some_and(|text| !Settings::from_toml(&text).0.show_thumbnail))
     })?;
 
     press(START_WITH_WINDOWS)?;
     wait_until("the Run value to start this exe", || {
-        run_value().is_ok_and(|command| command.is_some_and(|command| starts(&command, exe)))
+        run_value().map(|command| command.is_some_and(|command| starts(&command, exe)))
     })?;
     press(START_WITH_WINDOWS)?;
     wait_until("the Run value to go", || {
-        run_value().is_ok_and(|command| command.is_none())
+        run_value().map(|command| command.is_none())
     })
 }
 
@@ -169,13 +179,21 @@ fn press(name: &str) -> Result<(), String> {
     }
 }
 
-fn wait_until(what: &str, holds: impl Fn() -> bool) -> Result<(), String> {
+fn wait_until<E: std::fmt::Debug>(
+    what: &str,
+    holds: impl Fn() -> Result<bool, E>,
+) -> Result<(), String> {
     let deadline = Instant::now() + PATIENCE;
+    let mut last_error = None;
     while Instant::now() < deadline {
-        if holds() {
-            return Ok(());
+        match holds() {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => last_error = Some(error),
         }
         thread::sleep(Duration::from_millis(100));
     }
-    Err(format!("waited {PATIENCE:?} for {what}"))
+    Err(format!(
+        "waited {PATIENCE:?} for {what}; last read error: {last_error:?}"
+    ))
 }
