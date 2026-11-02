@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# CHARTER 7 gates 3 and 4 on cleanshot.exe, and the CHARTER 11 Decisions log.
+# CHARTER 7 gates 3 and 4 on cleanshot.exe, the CHARTER 9 winget manifest, and the CHARTER 11
+# Decisions log.
 #   ./charter-gates.sh                     Mac or Linux fold bar: builds a scan-only exe with
 #                                          cargo-xwin and scans its imports and headers.
 #   ./charter-gates.sh --release-exe PATH  CI on windows-latest: scans the shipped exe.
@@ -75,6 +76,29 @@ done < <(awk '
     }
     END { if (!rows) print "no Decisions log rows were found in docs/CHARTER.md, so the log was not checked." }
 ' docs/CHARTER.md)
+
+# CHARTER 9, D-98: only @VERSION@ and @SHA256@ are left for a release to fill, so the rest of each winget
+# file must already hold what the charter and Cargo.toml say.
+winget_line() {
+    grep -qxF -- "$2" "winget/Cleanshot.Cleanshot.$1" || fail "CHARTER 9: winget/Cleanshot.Cleanshot.$1 lacks the line \"$2\"."
+}
+license=$(sed -n 's/^license = "\(.*\)"$/\1/p' Cargo.toml)
+for file in yaml installer.yaml locale.en-US.yaml; do
+    winget_line "$file" 'PackageIdentifier: Cleanshot.Cleanshot'
+    winget_line "$file" 'PackageVersion: "@VERSION@"'
+    winget_line "$file" 'ManifestVersion: 1.12.0'
+done
+winget_line installer.yaml 'InstallerType: portable'
+winget_line installer.yaml '  - cleanshot'
+# C-01: Windows 11 22H2.
+winget_line installer.yaml 'MinimumOSVersion: 10.0.22621.0'
+winget_line installer.yaml '  - Architecture: x64'
+winget_line installer.yaml '    InstallerUrl: https://github.com/IconRunner05/cleanshot/releases/download/v@VERSION@/cleanshot-@VERSION@-x64.exe'
+winget_line installer.yaml '    InstallerSha256: "@SHA256@"'
+grep -qF 'cp "$RUNNER_TEMP/exe/cleanshot.exe" "dist/cleanshot-$VERSION-x64.exe"' .github/workflows/release.yml ||
+    fail "CHARTER 9: release.yml no longer names the exe cleanshot-\$VERSION-x64.exe, the name the winget InstallerUrl downloads."
+winget_line locale.en-US.yaml 'Publisher: Cleanshot'
+winget_line locale.en-US.yaml "License: $license"
 
 cargo tree --locked -p cleanshot-app --target x86_64-pc-windows-msvc -e features -i cleanshot-win | grep -qF 'cleanshot-win feature "field-test"' &&
     fail "CHARTER 5: cleanshot-app turns on cleanshot-win's field-test feature, so field-test code could ship in cleanshot.exe."

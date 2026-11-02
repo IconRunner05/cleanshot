@@ -370,25 +370,23 @@ Releases ship as a bare, signed `cleanshot.exe` on GitHub Releases. A winget **p
 4. Publish to GitHub Releases: `cleanshot-X.Y.Z-x64.exe`, the F-57 Group Policy template (`Cleanshot.admx`, `Cleanshot.adml`), `SHA256SUMS`, CycloneDX SBOM, and a GitHub build-provenance attestation. `.github/workflows/release.yml` does steps 1, 2 and 4 on a tag, taking the release notes from the version's `CHANGELOG.md` section; run by hand, it builds and checks the same files and uploads them without publishing.
 5. Open or update the winget-pkgs PR with a winget releaser action, such as `winget-releaser` (Komac). These tools update an existing package, so **v1.0.0 is submitted to `microsoft/winget-pkgs` by hand once**.
 
-### winget manifest shape
+### winget manifest
 
-```yaml
-PackageIdentifier: <Publisher>.Cleanshot   # open question
-PackageVersion: 1.0.0
-InstallerType: portable
-Installers:
-  - Architecture: x64
-    InstallerUrl: https://github.com/<owner>/cleanshot/releases/download/v1.0.0/cleanshot-1.0.0-x64.exe
-    InstallerSha256: <sha256>
-Commands: [ cleanshot ]
-MinimumOSVersion: 10.0.22621.0
-License: MIT OR Apache-2.0
-```
+The manifest is the three files in `winget/`, in winget-pkgs' multi-file layout (schema 1.12.0): `Cleanshot.Cleanshot.yaml`, `.installer.yaml` and `.locale.en-US.yaml`. PackageIdentifier `Cleanshot.Cleanshot`, publisher `Cleanshot` (D-98); a portable x64 installer with the `cleanshot` command, `MinimumOSVersion` 10.0.22621.0 (C-01), the licence `Cargo.toml` names, and homepage and release notes on the GitHub repository. Only `@VERSION@` and `@SHA256@` are left for a release to fill; `charter-gates.sh` holds the rest to this section and `Cargo.toml`.
+
+### v1.0.0 checklist
+
+1. The M3 gate has passed (D-77): every Must budget met on the reference machine, and the release workflow signs the exe (D-74).
+2. Every M4 row is ticked.
+3. `Cargo.toml` is version 1.0.0 and `CHANGELOG.md` has its `[1.0.0]` section.
+4. Tag `v1.0.0`; the release workflow publishes a signed release that is not a pre-release.
+5. On the owner's Windows PC: `winget validate` on the filled manifest, then in Windows Sandbox a clean `winget install --manifest`, the `cleanshot` command, and an uninstall.
+6. The owner opens the microsoft/winget-pkgs pull request by hand. Agents never push to or open pull requests on another repository.
+7. After it merges, a releaser action for later versions is its own decision.
 
 Notes for agents:
 
 - winget installs portable apps per user and adds a `cleanshot` command alias. Settings still resolve per C-05 (normally `%APPDATA%`), so `winget upgrade` keeps them.
-- Validate locally before a PR: `winget validate` on the manifest, then a clean install in Windows Sandbox.
 - Repo files: `LICENSE-MIT`, `LICENSE-APACHE`, `SECURITY.md` (private disclosure, 90-day policy, GitHub Security Advisories), `CHANGELOG.md` (Keep a Changelog format), `docs/security.md` (the IT reviewers' overview: what the exe does and never does, and which gate, test or review holds each row; a change to what Cleanshot reads, writes or starts updates its row in the same commit).
 
 ## 10. Milestones and backlog
@@ -455,6 +453,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-98 | 2026-11-02 | The winget package is `Cleanshot.Cleanshot`, publisher `Cleanshot`, with its homepage, support and release notes on the GitHub repository (`IconRunner05/cleanshot`). Its manifest is kept in `winget/` as the three files winget-pkgs takes, with only the version and the exe's SHA-256 left for a release to fill | decided (owner, 2026-11-02) | The owner's call on the identifier and publisher; homepage and release notes on the repository, and the generated manifest, are the design the orchestrator approved. A manifest filled from the release's own checksum cannot point at another exe |
 | D-97 | 2026-11-02 | The budget kit (`budgets.bat`) starts `cleanshot.exe` once and quits it before it measures anything, so P-03 measures Cleanshot's own start, not an antivirus scan of a newly written exe. Its phases wait for the exe's own log lines, for up to 2 minutes each, rather than for a fixed time: the warm-up for the P-03 tray-ready line, and the idle phase for the P-05 line, which the exe logs 10 s after the tray is ready. A line still missing after that wait is a FAIL, and fails the kit job (CHARTER 7) | assumed | Orchestrator's call, 2026-11-02. A just-written or downloaded unsigned exe is scanned on its first start, on the owner's PC as on a runner, and that time is not Cleanshot's. A fixed wait lost the idle sample whenever the start was slow, and a kit that drops a sample is broken |
 | D-96 | 2026-11-02 | The F-09 thumbnail's window: a topmost tool window that never activates, so a click on it leaves the focus where it was. It rests 16 DIP in from the bottom-right corner of the work area of the monitor the capture came from, rounded with a 10 DIP radius and a hairline edge. It slides in from flush with the work area's edge over 120 ms, or appears at once with Animation effects off (F-13), and fades out like the overlay rather than sliding away. It shows for 5 s; while the pointer is on it the time stands still and Save and Dismiss show along its bottom edge. A click elsewhere on it opens the capture in the editor, and a drag starts the drag-out (D-94). It cannot take the keyboard focus, so while it shows the tray menu also holds Edit last capture and Save last capture, which do what its click and Save do, for keyboard and screen-reader users alike; screen readers find the thumbnail itself by its window name, Screenshot preview. Its window and image are freed when it closes. | assumed | The orchestrator's ruling, 2026-11-02, on the keyboard route. A thumbnail that took focus would pull it from the app the user pasted into; a global hotkey alive for 5 s would be worse than a tray item. Sliding a whole width in would cross onto a monitor to the right, so it slides only the inset. |
 | D-95 | 2026-11-02 | Inside D-86 (F-57): Save As under `SaveFolder` may write anywhere in the folder or a folder under it, compared one component at a time, ignoring case, after Windows makes both paths full; the check is on the path, so a junction inside the folder is not followed. Under `Saving::Off`, Save is shown greyed with the reason, not hidden. The editor, which has no Save buttons, answers Ctrl+S and Ctrl+Shift+S with the reason, and opens no Save As dialog. `ForcePng` beats an extension typed in Save As | assumed | The orchestrator's rulings, 2026-11-02. Users sorting into subfolders stay where the administrator put the files, and a sibling such as `screenshots-other` is still outside. A junction is a deliberate setup, not something another person can plant (owner's rule, 2026-11-02). A greyed button keeps the layout and tells the user why. A policy that asks for PNG means every file |
@@ -549,7 +548,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 ### Open questions
 
-- [ ] winget `PackageIdentifier` / publisher name and the GitHub owner.
+- [x] winget `PackageIdentifier` / publisher name and the GitHub owner: `Cleanshot.Cleanshot`, publisher `Cleanshot`, on `IconRunner05/cleanshot` (D-98).
 - [x] Code-signing route (signing service and who holds the certificate): SignPath Foundation (D-74).
 - [ ] ARM64 in the v1.0 release, or after?
 

@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+
+PackageIdentifier: Cleanshot.Cleanshot
+PackageVersion: "@VERSION@"
+InstallerType: portable
+Commands:
+  - cleanshot
+MinimumOSVersion: 10.0.22621.0
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/IconRunner05/cleanshot/releases/download/v@VERSION@/cleanshot-@VERSION@-x64.exe
+    InstallerSha256: "@SHA256@"
+ManifestType: installer
+ManifestVersion: 1.12.0
