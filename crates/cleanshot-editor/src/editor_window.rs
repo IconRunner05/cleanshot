@@ -36,7 +36,7 @@ type SaveTo = Box<dyn Fn(&Path, &Document) -> Result<Delivered, DeliveryError>>;
 /// Where Copy, Save and Save As send the edited screenshot (F-20 to F-22, F-40), from the app.
 pub(crate) struct Outputs {
     deliver: Deliver,
-    save_as_start: Box<dyn Fn() -> (PathBuf, String)>,
+    save_as_start: Box<dyn Fn() -> Result<(PathBuf, String), DeliveryError>>,
     save_to: SaveTo,
 }
 
@@ -290,7 +290,13 @@ impl EditorView {
         let Some(outputs) = &self.outputs else {
             return;
         };
-        let (folder, name) = (outputs.save_as_start)();
+        let (folder, name) = match (outputs.save_as_start)() {
+            Ok(start) => start,
+            Err(error) => {
+                self.notice = Some(delivery_notice(&Err(error)).into());
+                return;
+            }
+        };
         let dialog = ask_save_path(cx, &folder, &name);
         self.save_as = Some(cx.spawn_in(window, async move |view, cx| {
             let chosen = dialog.await;
@@ -516,9 +522,9 @@ pub struct EditorWindow(WindowHandle<EditorView>);
 
 /// Opens an editor window on `capture`, with no shapes yet (F-23). Ctrl+C and Ctrl+S hand the
 /// document to `deliver` and show what it reports (F-40, D-48). Ctrl+Shift+S opens the save
-/// dialog on the folder and file name `save_as_start` gives at that moment, and hands the
-/// document and the confirmed path to `save_to` (F-22). `on_first_frame` gets the moment the
-/// frame after the window's first draw begins (P-07), as the bench times it.
+/// dialog on the folder and file name `save_as_start` gives at that moment, or shows why it
+/// cannot, and hands the document and the confirmed path to `save_to` (F-22). `on_first_frame`
+/// gets the moment the frame after the window's first draw begins (P-07), as the bench times it.
 ///
 /// # Errors
 ///
@@ -527,7 +533,7 @@ pub fn open(
     cx: &mut App,
     capture: RgbaImage,
     deliver: impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static,
-    save_as_start: impl Fn() -> (PathBuf, String) + 'static,
+    save_as_start: impl Fn() -> Result<(PathBuf, String), DeliveryError> + 'static,
     save_to: impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static,
     on_first_frame: impl FnOnce(Instant) + 'static,
 ) -> Result<EditorWindow, Error> {

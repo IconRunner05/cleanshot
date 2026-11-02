@@ -59,15 +59,22 @@ fn encoding(format: SaveFormat) -> (Format, &'static str) {
     }
 }
 
-/// F-22 (D-54): the folder Save As opens on and the name it offers, Save's own at this moment.
-pub(crate) fn save_as_start(settings: &Settings) -> (PathBuf, String) {
+/// F-22 (D-54): the folder Save As opens on and the name it offers, Save's own at this moment,
+/// or why the organisation's policy opens no dialog (F-57, D-95).
+pub(crate) fn save_as_start(
+    settings: &Settings,
+    saving: &Saving,
+) -> Result<(PathBuf, String), DeliveryError> {
+    if let Saving::Off(off) = saving {
+        return Err(DeliveryError::SavingOff(*off));
+    }
     // A folder that cannot be named leaves the dialog on its own default; the user picks one
     // there, and a save into it reports its own failure.
     let folder = save::save_folder(settings.save_folder.as_deref()).unwrap_or_default();
     let (_, extension) = encoding(settings.save_format);
     let name = save::offered_name(FILE_NAME_TEMPLATE, Stamp::now(), extension)
         .unwrap_or_else(|error| panic!("the file-name template is a safe constant: {error}"));
-    (folder, name)
+    Ok((folder, name))
 }
 
 /// F-22 (D-66): flattens `document` and writes it to `path`, the name the user confirmed in
@@ -395,6 +402,10 @@ mod tests {
         let off = Saving::Off(SavingOff::ClipboardOnly);
         assert_eq!(
             deliver(Output::Save, &document, &settings, &off),
+            Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly))
+        );
+        assert_eq!(
+            save_as_start(&settings, &off),
             Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly))
         );
         let inside = folder.join("inside.png");

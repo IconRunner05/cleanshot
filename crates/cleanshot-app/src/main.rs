@@ -91,7 +91,16 @@ fn main() {
                         .spawn(async move |cx| match to {
                             Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
                             Handoff::SaveAs => {
-                                let (folder, name) = save_as_start(&session.saving_settings());
+                                let start = save_as_start(
+                                    &session.saving_settings(),
+                                    session.policy.saving(),
+                                );
+                                let (folder, name) = match start {
+                                    Ok(start) => start,
+                                    Err(error) => {
+                                        return session.warn(&delivery_notice(&Err(error)));
+                                    }
+                                };
                                 let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
                                 save_chosen(&session, image, chosen.await);
                             }
@@ -412,9 +421,11 @@ fn editor_deliver(
     }
 }
 
-fn editor_save_as_start(session: &Rc<Session>) -> impl Fn() -> (PathBuf, String) + 'static {
+fn editor_save_as_start(
+    session: &Rc<Session>,
+) -> impl Fn() -> Result<(PathBuf, String), DeliveryError> + 'static {
     let session = Rc::clone(session);
-    move || save_as_start(&session.saving_settings())
+    move || save_as_start(&session.saving_settings(), session.policy.saving())
 }
 
 fn editor_save_to(

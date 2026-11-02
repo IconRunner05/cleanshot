@@ -80,7 +80,7 @@ fn main() {
             cx,
             capture,
             |_, _| Err(DeliveryError::ClipboardBusy),
-            || (PathBuf::new(), String::new()),
+            || Ok((PathBuf::new(), String::new())),
             |_, _| Err(DeliveryError::ClipboardBusy),
             move |at| {
                 // Each walk waits for the first frame on the same channel.
