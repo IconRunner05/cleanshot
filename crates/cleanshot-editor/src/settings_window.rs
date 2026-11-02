@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use cleanshot_core::{
-    AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, SaveFormat, Settings, SettingsNotice,
-    SettingsProblem, settings_notice,
+    AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, Policy, SaveFormat, Saving, SavingOff,
+    Settings, SettingsNotice, SettingsProblem, settings_notice,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -26,16 +26,21 @@ impl Global for OpenSettings {}
 
 /// Shows the settings window (F-55) for `current`, or brings forward the one already open.
 /// Each change is first checked as the settings file would read it, then handed to `apply`,
-/// whose outcome the window shows.
+/// whose outcome the window shows. What `policy` sets is shown, not offered (D-86).
 ///
 /// # Errors
 ///
-/// [`Error::FontLoad`] or [`Error::WindowOpen`] if the window could not open.
+/// [`Error::SettingsHidden`] if `policy` keeps the window closed; [`Error::FontLoad`] or
+/// [`Error::WindowOpen`] if the window could not open.
 pub fn open_settings(
     cx: &mut App,
     current: Settings,
+    policy: Policy,
     apply: impl Fn(Settings) -> Applied + 'static,
 ) -> Result<(), Error> {
+    if policy.settings_hidden() {
+        return Err(Error::SettingsHidden);
+    }
     let open = cx.try_global::<OpenSettings>().map(|open| open.0);
     if let Some(open) = open
         && open
@@ -61,7 +66,7 @@ pub fn open_settings(
     };
     let handle = cx
         .open_window(options, |window, cx| {
-            cx.new(|cx| SettingsView::new(current, apply, window, cx))
+            cx.new(|cx| SettingsView::new(current, policy, apply, window, cx))
         })
         .map_err(|error| Error::WindowOpen(error.into()))?;
     cx.set_global(OpenSettings(handle));
@@ -69,7 +74,9 @@ pub fn open_settings(
 }
 
 struct SettingsView {
+    /// The settings file's own values; what the policy sets is never written into it.
     settings: Settings,
+    policy: Policy,
     apply: Apply,
     /// The action whose hotkey the next key press sets.
     recording: Option<HotkeyAction>,
@@ -79,11 +86,18 @@ struct SettingsView {
 }
 
 impl SettingsView {
-    fn new(settings: Settings, apply: Apply, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        settings: Settings,
+        policy: Policy,
+        apply: Apply,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         Self {
             settings,
+            policy,
             apply,
             recording: None,
             notice: None,
@@ -213,48 +227,7 @@ impl Render for SettingsView {
             cx,
             |settings, choice| settings.after_capture = choice,
         ));
-        let folder = settings
-            .save_folder
-            .clone()
-            .unwrap_or_else(|| "Pictures\\Screenshots".to_owned());
-        let saving = section("Saving", theme)
-            .child(
-                row()
-                    .child(label("Folder", theme))
-                    .child(
-                        div()
-                            .flex_1()
-                            .truncate()
-                            .text_color(theme.text)
-                            .text_size(px(13.0))
-                            .child(folder),
-                    )
-                    .child(
-                        button("Choose folder", "Choose folder", "Choose...", false, theme)
-                            .on_click(
-                                cx.listener(|view, _, window, cx| view.choose_folder(window, cx)),
-                            ),
-                    )
-                    .child(
-                        button("Default folder", "Default folder", "Default", false, theme)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.edit(|settings| settings.save_folder = None);
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(radio_group(
-                "Format",
-                [
-                    (SaveFormat::Png, "PNG"),
-                    (SaveFormat::Jpg, "JPG"),
-                    (SaveFormat::Bmp, "BMP"),
-                ],
-                settings.save_format,
-                theme,
-                cx,
-                |settings, choice| settings.save_format = choice,
-            ));
+        let saving = self.saving_section(theme, cx);
         let hotkeys = section("Hotkeys", theme)
             .children(HotkeyAction::ALL.map(|action| self.hotkey_row(action, theme, cx)));
         div()
@@ -286,6 +259,73 @@ impl Render for SettingsView {
 }
 
 impl SettingsView {
+    /// The save folder and format, with what the organisation's policy sets shown as set and
+    /// not offered for change, and neither shown when the policy turns saving off (D-86).
+    fn saving_section(&self, theme: Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        let section = section("Saving", theme);
+        let (policy_folder, png_only) = match self.policy.saving() {
+            Saving::Off(off) => {
+                let why = match off {
+                    SavingOff::ClipboardOnly => "Your organisation has turned saving off",
+                    SavingOff::FolderNotValid => {
+                        "The save folder your organisation set is not valid, so saving is off"
+                    }
+                };
+                return section.child(set_by_policy(why, theme));
+            }
+            Saving::Allowed { folder, png_only } => (folder.clone(), *png_only),
+        };
+        let folder_row = row().child(label("Folder", theme));
+        let folder_row = match policy_folder {
+            Some(folder) => folder_row
+                .child(shown_value(folder, theme))
+                .child(set_by_policy("Set by your organisation", theme)),
+            None => folder_row
+                .child(shown_value(
+                    self.settings
+                        .save_folder
+                        .clone()
+                        .unwrap_or_else(|| "Pictures\\Screenshots".to_owned()),
+                    theme,
+                ))
+                .child(
+                    button("Choose folder", "Choose folder", "Choose...", false, theme).on_click(
+                        cx.listener(|view, _, window, cx| view.choose_folder(window, cx)),
+                    ),
+                )
+                .child(
+                    button("Default folder", "Default folder", "Default", false, theme).on_click(
+                        cx.listener(|view, _, _, cx| {
+                            view.edit(|settings| settings.save_folder = None);
+                            cx.notify();
+                        }),
+                    ),
+                ),
+        };
+        let format_row = if png_only {
+            row()
+                .child(label("Format", theme))
+                .child(shown_value("PNG".to_owned(), theme))
+                .child(set_by_policy("Set by your organisation", theme))
+                .into_any_element()
+        } else {
+            radio_group(
+                "Format",
+                [
+                    (SaveFormat::Png, "PNG"),
+                    (SaveFormat::Jpg, "JPG"),
+                    (SaveFormat::Bmp, "BMP"),
+                ],
+                self.settings.save_format,
+                theme,
+                cx,
+                |settings, choice| settings.save_format = choice,
+            )
+            .into_any_element()
+        };
+        section.child(folder_row).child(format_row)
+    }
+
     /// The action's hotkey on a button that records the next key pressed, and a reset to its
     /// default, the only way back to `PrtSc`, which never reaches a window as a key press.
     fn hotkey_row(
@@ -355,6 +395,26 @@ fn section(title: &'static str, theme: Theme) -> Stateful<Div> {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(title),
         )
+}
+
+fn shown_value(text: String, theme: Theme) -> Div {
+    div()
+        .flex_1()
+        .truncate()
+        .text_color(theme.text)
+        .text_size(px(13.0))
+        .child(text)
+}
+
+/// A sentence saying the policy decides this (D-86), read out by a screen reader.
+fn set_by_policy(text: &'static str, theme: Theme) -> Stateful<Div> {
+    div()
+        .id(text)
+        .role(Role::Label)
+        .aria_label(text)
+        .text_color(theme.text)
+        .text_size(px(12.0))
+        .child(text)
 }
 
 fn row() -> Div {

@@ -40,6 +40,8 @@ pub enum Error {
     SyntheticImage(#[source] ImageError),
     #[error("the bench shapes could not be added")]
     SyntheticShape(#[source] CommandError),
+    #[error("the organisation's policy keeps the settings window closed")]
+    SettingsHidden,
 }
 
 /// Runs the GPUI event loop on this thread until the app quits, calling `on_launch` once it
