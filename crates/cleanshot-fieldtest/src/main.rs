@@ -167,7 +167,7 @@ fn judge(inputs: &[String]) -> i32 {
                 verdicts.push(budgets::overlay_visible(&log, machine));
                 verdicts.push(budgets::after_use(&log));
             }
-            "--copy" => verdicts.push(budgets::copy(&log_text(path))),
+            "--copy" => verdicts.push(budgets::copy(&log_text(path), machine)),
             "--bench" => verdicts.extend(budgets::editor(&log_text(path))),
             _ => {
                 eprintln!("--budgets does not take {input:?}");

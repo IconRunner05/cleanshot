@@ -200,7 +200,7 @@ mod tests {
         debug_assertions,
         ignore = "P-02 budgets the release build: cargo test --release -p cleanshot-app p02_"
     )]
-    fn p02_a_4k_region_reaches_the_clipboard_within_150_ms() {
+    fn p02_a_4k_region_copy_prints_its_median_for_the_budget_judge() {
         let (width, height) = (3840, 2160);
         let pixels = (0..height)
             .flat_map(|y: u32| {
@@ -221,15 +221,9 @@ mod tests {
             })
             .collect();
         copies.sort();
-        println!(
-            "P-02 median copy of a 4K region {:?}, all {copies:?}",
-            copies[2]
-        );
-        assert!(
-            copies[2] < Duration::from_millis(150),
-            "median copy of a 4K region {:?}, all {copies:?}",
-            copies[2]
-        );
+        let median = copies[2];
+        // cleanshot-fieldtest --budgets --copy judges this line (P-02, D-90).
+        println!("perf P-02 median_us={} all={copies:?}", median.as_micros());
     }
 
     #[test]

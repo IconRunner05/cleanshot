@@ -220,8 +220,11 @@ jobs:
       - name: Field-test probe builds
         run: cargo build --release --locked -p cleanshot-fieldtest -p cleanshot-app
 
-      - name: Release build copies a 4K region within P-02
-        run: cargo test --release --locked -p cleanshot-app --bin cleanshot p02_ -- --nocapture
+      - name: Release build copies a 4K region within P-02, a runner failing only over 1.5 times it (D-90)
+        shell: bash
+        run: |
+          cargo test --release --locked -p cleanshot-app --bin cleanshot p02_ -- --nocapture | tee p02.txt
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner --copy p02.txt
 
       - name: Probe reports what this runner can do (D-25)
         shell: bash

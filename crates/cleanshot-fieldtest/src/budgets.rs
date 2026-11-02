@@ -1,5 +1,5 @@
 //! The CHARTER 8 budgets, each judged here and nowhere else, from the `perf` lines that
-//! `cleanshot.exe --log` writes (D-62). P-02 is the exception: its test holds its budget.
+//! `cleanshot.exe --log` writes (D-62), and P-02 from the `perf` line its `p02_` test prints.
 
 use std::fmt::{self, Display};
 use std::io;
@@ -10,6 +10,7 @@ const OVERLAY_VISIBLE_BUDGET_MS: u64 = 100;
 const TRAY_READY_BUDGET_MS: u64 = 300;
 const IDLE_WORKING_SET_BUDGET_BYTES: u64 = 25 * 1024 * 1024;
 const AFTER_USE_PRIVATE_BUDGET_BYTES: u64 = 10 * 1024 * 1024;
+const COPY_BUDGET_US: u64 = 150_000;
 // P-05's "~0%": under 1% of one core over the 10 s the exe logs.
 const IDLE_CPU_BUDGET_MS: u64 = 100;
 const EXE_SIZE_BUDGET_BYTES: u64 = 15_000_000;
@@ -37,8 +38,13 @@ impl Display for Verdict {
 pub(crate) enum Machine {
     /// CHARTER 8's reference machine, where every budget is a gate.
     Reference,
-    /// A hosted CI runner, a floor: P-01 fails only over its budget times 1.5 (D-75).
+    /// A hosted CI runner, a floor: P-01 and P-02 fail only over their budget times 1.5
+    /// (D-75, D-90).
     Runner,
+}
+
+const fn runner_floor(budget: u64) -> u64 {
+    budget * 3 / 2
 }
 
 /// P-01 from a log of [`OVERLAY_PRESSES`] overlays: the p95 (nearest rank) of their
@@ -70,7 +76,7 @@ pub(crate) fn overlay_visible(log: &str, machine: Machine) -> Verdict {
     let (met, detail) = match machine {
         Machine::Reference => (within_budget, format!("{measured}); sorted {times:?}")),
         Machine::Runner => {
-            let floor = OVERLAY_VISIBLE_BUDGET_MS * 3 / 2;
+            let floor = runner_floor(OVERLAY_VISIBLE_BUDGET_MS);
             let budget = if within_budget { "within" } else { "over" };
             (
                 slowest <= floor,
@@ -131,23 +137,29 @@ pub(crate) fn after_use(log: &str) -> Verdict {
     )
 }
 
-/// P-02 as its `p02_` test judged it, from the test binary's `--nocapture` output.
-pub(crate) fn copy(test_output: &str) -> Verdict {
-    let passed = test_output.contains("test result: ok. 1 passed");
-    let Some(median) = test_output
-        .lines()
-        .find(|line| line.starts_with("P-02 median copy"))
-    else {
-        return Verdict {
-            budget: "P-02",
-            met: false,
-            detail: "the p02_ test printed no median copy time".to_owned(),
-        };
+/// P-02 from the `p02_` test's `--nocapture` output: the median of five copies of a 4K region.
+pub(crate) fn copy(test_output: &str, machine: Machine) -> Verdict {
+    let Some(&median) = perf_values(test_output, "P-02", "median_us").last() else {
+        return missing("P-02", "median_us");
+    };
+    let measured =
+        format!("median copy of a 4K region {median} us (budget under {COPY_BUDGET_US} us");
+    let within_budget = median < COPY_BUDGET_US;
+    let (met, detail) = match machine {
+        Machine::Reference => (within_budget, format!("{measured})")),
+        Machine::Runner => {
+            let floor = runner_floor(COPY_BUDGET_US);
+            let budget = if within_budget { "within" } else { "over" };
+            (
+                median <= floor,
+                format!("{measured}, {budget} it; a runner fails only over {floor} us)"),
+            )
+        }
     };
     Verdict {
         budget: "P-02",
-        met: passed,
-        detail: format!("{median} (judged by the p02_ test)"),
+        met,
+        detail,
     }
 }
 
@@ -359,11 +371,17 @@ mod tests {
     }
 
     #[test]
-    fn p02_is_the_verdict_of_its_test() {
-        let median = "P-02 median copy of a 4K region 61.2ms, all [60ms, 61.2ms]\n";
-        assert!(copy(&format!("{median}test result: ok. 1 passed; 0 failed")).met);
-        assert!(!copy(&format!("{median}test result: FAILED. 0 passed; 1 failed")).met);
-        assert!(!copy("test result: ok. 0 passed; 0 failed").met);
+    fn d90_p02_holds_under_150_ms_and_a_runner_fails_only_over_225_ms() {
+        let output =
+            |us: u64| format!("perf P-02 median_us={us} all=[]\ntest result: ok. 1 passed\n");
+        assert!(copy(&output(149_999), Machine::Reference).met);
+        assert!(!copy(&output(150_000), Machine::Reference).met);
+        let runner = copy(&output(160_000), Machine::Runner);
+        assert!(runner.met);
+        assert!(runner.detail.contains("over it"), "{}", runner.detail);
+        assert!(copy(&output(225_000), Machine::Runner).met);
+        assert!(!copy(&output(225_001), Machine::Runner).met);
+        assert!(!copy("test result: ok. 0 passed", Machine::Runner).met);
     }
 
     #[test]
