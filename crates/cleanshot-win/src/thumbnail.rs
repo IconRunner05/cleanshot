@@ -10,7 +10,10 @@ use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, SW_SHOWNOACTIVATE, 
 use crate::Error;
 use crate::fade;
 
+mod drag;
 mod window;
+
+pub use drag::Dragged;
 
 // D-96, in device-independent pixels.
 const INSET: f32 = 16.0;
@@ -21,8 +24,8 @@ const BUTTON_GAP: f32 = 8.0;
 const STAY: Duration = Duration::from_secs(5);
 const SLIDE: Duration = Duration::from_millis(120);
 
-/// What happened on the thumbnail, delivered inside its window's procedure: drop or close the
-/// [`Thumbnail`] after the call returns, never during it.
+/// What happened on the thumbnail, delivered inside its window's procedure. Dropping the
+/// [`Thumbnail`] during the call is sound; closing it with a fade belongs after the call.
 #[derive(Debug)]
 pub enum ThumbnailEvent {
     /// The preview was clicked: open the capture in the editor.
@@ -33,6 +36,10 @@ pub enum ThumbnailEvent {
     Dismiss,
     /// Five seconds passed with the pointer off the thumbnail.
     TimedOut,
+    /// The thumbnail was dragged out and dropped on another app (D-94).
+    Dropped,
+    /// Windows' drag loop failed.
+    DragFailed(windows::core::Error),
     /// Direct2D could not draw the preview.
     DrawFailed(windows::core::Error),
 }
@@ -65,7 +72,9 @@ impl Thumbnail {
     /// Shows `preview`, already scaled down, on the monitor holding `monitor`, sliding in over
     /// 120 ms or appearing at once when Windows' Animation effects is off (F-13). It sends
     /// [`ThumbnailEvent::TimedOut`] once it has shown for five seconds without the pointer on
-    /// it.
+    /// it. With `drag`, a press dragged past Windows' drag distance asks it for what to drag
+    /// out (D-94); without it, the thumbnail cannot be dragged. The thread must have OLE
+    /// started, as GPUI's does.
     ///
     /// # Errors
     ///
@@ -74,13 +83,14 @@ impl Thumbnail {
     pub fn show(
         preview: &RgbaImage,
         monitor: RECT,
+        drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
         on_event: impl FnMut(ThumbnailEvent) + 'static,
     ) -> Result<Self, Error> {
         window::register_class()?;
         let work = work_area(monitor).map_err(Error::Window)?;
         let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Window)?;
         let slide = fade::animations_on().map_err(Error::Window)?;
-        let window = window::open_window(preview, work, scale, slide, Box::new(on_event))?;
+        let window = window::open_window(preview, work, scale, slide, drag, Box::new(on_event))?;
         // SAFETY: `window` was created above on this thread; D-96 shows it without activation.
         let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
         let thumbnail = Self { window };
@@ -153,9 +163,9 @@ fn slid(elapsed: Duration, distance: i32) -> Option<i32> {
 }
 
 /// The time the thumbnail has left to show after `elapsed` more, or `None` once it is up.
-/// While the pointer is on it the time stands still (D-96).
-fn left_after(left: Duration, elapsed: Duration, hovered: bool) -> Option<Duration> {
-    if hovered {
+/// While it is `held`, by the pointer on it or a drag from it, the time stands still (D-96).
+fn left_after(left: Duration, elapsed: Duration, held: bool) -> Option<Duration> {
+    if held {
         return Some(left);
     }
     left.checked_sub(elapsed).filter(|left| !left.is_zero())
@@ -195,14 +205,15 @@ fn button_at(buttons: &[(Button, RECT); 2], point: POINT) -> Option<Button> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::time::Instant;
 
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, IsWindow, MSG,
-        PM_REMOVE, PeekMessageW, SendMessageW, WM_LBUTTONUP, WS_EX_NOACTIVATE,
+        PM_REMOVE, PeekMessageW, SendMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        WS_EX_NOACTIVATE,
     };
 
     use super::*;
@@ -291,9 +302,20 @@ mod tests {
         }
     }
 
-    fn shown(events: &Rc<RefCell<Vec<String>>>) -> Thumbnail {
+    /// Sends each `(message, lparam)` to `window` in turn, as the mouse would.
+    fn click(window: HWND, messages: &[(u32, isize)]) {
+        for &(message, lparam) in messages {
+            // SAFETY: the window belongs to this thread, and a mouse message carries no pointer.
+            unsafe { SendMessageW(window, message, Some(WPARAM(0)), Some(LPARAM(lparam))) };
+        }
+    }
+
+    fn shown(
+        events: &Rc<RefCell<Vec<String>>>,
+        drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
+    ) -> Thumbnail {
         let sink = Rc::clone(events);
-        Thumbnail::show(&preview(), RECT::default(), move |event| {
+        Thumbnail::show(&preview(), RECT::default(), drag, move |event| {
             sink.borrow_mut().push(format!("{event:?}"));
         })
         .expect("the thumbnail opens")
@@ -304,7 +326,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         // SAFETY: reads which window is in the foreground.
         let before = unsafe { GetForegroundWindow() };
-        let thumbnail = shown(&events);
+        let thumbnail = shown(&events, None);
         let window = thumbnail.window;
         pump_until(Duration::from_millis(300), || false);
         // SAFETY: reads the window's own style and the foreground window.
@@ -320,14 +342,10 @@ mod tests {
             0
         );
         // SAFETY: the window belongs to this thread; (10, 10) is on the preview, off the buttons.
-        unsafe {
-            SendMessageW(
-                window,
-                WM_LBUTTONUP,
-                Some(WPARAM(0)),
-                Some(LPARAM(0x000A_000A)),
-            )
-        };
+        click(
+            window,
+            &[(WM_LBUTTONDOWN, 0x000A_000A), (WM_LBUTTONUP, 0x000A_000A)],
+        );
         assert_eq!(*events.borrow(), ["Open"]);
         drop(thumbnail);
         // SAFETY: IsWindow only reads whether the handle still names a window.
@@ -335,9 +353,102 @@ mod tests {
     }
 
     #[test]
+    fn f09_a_press_dragged_past_the_drag_distance_asks_for_the_drag_and_is_not_a_click() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let asked = Rc::new(Cell::new(0));
+        let asking = Rc::clone(&asked);
+        let drag: Box<dyn Fn() -> Option<Dragged>> = Box::new(move || {
+            asking.set(asking.get() + 1);
+            None
+        });
+        let thumbnail = shown(&events, Some(drag));
+        let (press, near, far) = (0x000A_000A, 0x000A_000B, 0x0028_0028);
+        click(
+            thumbnail.window,
+            &[(WM_LBUTTONDOWN, press), (WM_MOUSEMOVE, near)],
+        );
+        assert_eq!(
+            asked.get(),
+            0,
+            "a move inside the drag distance is still a press"
+        );
+        click(
+            thumbnail.window,
+            &[(WM_MOUSEMOVE, far), (WM_LBUTTONUP, far)],
+        );
+        assert_eq!(asked.get(), 1);
+        assert!(events.borrow().is_empty(), "{:?}", events.borrow());
+        drop(thumbnail);
+    }
+
+    const PRESS: isize = 0x000A_000A;
+    const FAR: isize = 0x0028_0028;
+
+    #[test]
+    fn f09_the_countdown_stands_still_while_a_drag_runs() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&events);
+        let drag: Box<dyn Fn() -> Option<Dragged>> = Box::new(move || {
+            // Stands in for DoDragDrop's modal loop, which dispatches this thread's timers.
+            pump_until(STAY + Duration::from_secs(1), || !seen.borrow().is_empty());
+            None
+        });
+        let thumbnail = shown(&events, Some(drag));
+        click(
+            thumbnail.window,
+            &[(WM_LBUTTONDOWN, PRESS), (WM_MOUSEMOVE, FAR)],
+        );
+        assert!(
+            events.borrow().is_empty(),
+            "{:?} during the drag",
+            events.borrow()
+        );
+        drop(thumbnail);
+    }
+
+    #[test]
+    fn f09_a_thumbnail_dropped_during_its_drag_is_freed_only_once_the_drag_returns() {
+        struct Freed(Rc<Cell<bool>>);
+        impl Drop for Freed {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let freed = Rc::new(Cell::new(false));
+        let guard = Freed(Rc::clone(&freed));
+        let slot: Rc<RefCell<Option<Thumbnail>>> = Rc::default();
+        let freed_during = Rc::new(Cell::new(None));
+        let (closing, watching, report) = (
+            Rc::clone(&slot),
+            Rc::clone(&freed),
+            Rc::clone(&freed_during),
+        );
+        let drag: Box<dyn Fn() -> Option<Dragged>> = Box::new(move || {
+            drop(closing.borrow_mut().take());
+            report.set(Some(watching.get()));
+            None
+        });
+        let thumbnail = Thumbnail::show(&preview(), RECT::default(), Some(drag), move |_| {
+            let Freed(_) = &guard;
+        })
+        .expect("the thumbnail opens");
+        let window = thumbnail.window;
+        *slot.borrow_mut() = Some(thumbnail);
+        click(window, &[(WM_LBUTTONDOWN, PRESS), (WM_MOUSEMOVE, FAR)]);
+        assert_eq!(
+            freed_during.get(),
+            Some(false),
+            "freed under the running drag"
+        );
+        assert!(freed.get(), "freed once the drag returned");
+        // SAFETY: IsWindow only reads whether the handle still names a window.
+        assert!(!unsafe { IsWindow(Some(window)) }.as_bool());
+    }
+
+    #[test]
     fn f09_the_thumbnail_times_out_after_five_seconds_with_the_pointer_off_it() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let thumbnail = shown(&events);
+        let thumbnail = shown(&events, None);
         let start = Instant::now();
         pump_until(Duration::from_secs(4), || !events.borrow().is_empty());
         assert!(

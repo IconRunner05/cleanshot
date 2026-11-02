@@ -1,8 +1,9 @@
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::RgbaImage;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ROUNDED_RECT,
@@ -18,11 +19,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, Tr
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, KillTimer,
     MA_NOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_TIMER,
-    WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SetWindowPos, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY,
+    WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, PCWSTR, w};
 
+use super::drag::{self, Dragged, Ended, left_the_press};
 use super::{
     Button, INSET, RADIUS, STAY, ThumbnailEvent, button_at, buttons, left_after, place, slid,
 };
@@ -55,6 +57,11 @@ struct Surface {
     /// `None` once [`ThumbnailEvent::TimedOut`] has been sent.
     left: Cell<Option<Duration>>,
     hovered: Cell<bool>,
+    /// A drag from the thumbnail is running; its modal loop still delivers the timers.
+    dragging: Cell<bool>,
+    /// Where the left button went down on the thumbnail, until it is released or a drag starts.
+    pressed: Cell<Option<POINT>>,
+    drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
     listener: RefCell<Box<dyn FnMut(ThumbnailEvent)>>,
 }
 
@@ -152,11 +159,31 @@ impl Surface {
         }
     }
 
+    /// Starts the drag-out once a press has moved past Windows' drag distance (D-94).
+    fn drag_from(&self, now: POINT) {
+        let (Some(start), Some(drag)) = (self.pressed.get(), &self.drag) else {
+            return;
+        };
+        if !left_the_press(start, now) {
+            return;
+        }
+        self.pressed.set(None);
+        self.dragging.set(true);
+        let ended = drag().map(drag::drag);
+        self.dragging.set(false);
+        match ended {
+            Some(Ok(Ended::Dropped)) => self.send(ThumbnailEvent::Dropped),
+            Some(Ok(Ended::Cancelled)) | None => {}
+            Some(Err(error)) => self.send(ThumbnailEvent::DragFailed(error)),
+        }
+    }
+
     fn count_down(&self, window: HWND) {
         let now = Instant::now();
         let elapsed = now - self.ticked.replace(now);
         let Some(left) = self.left.get() else { return };
-        let left = left_after(left, elapsed, self.hovered.get());
+        let held = self.hovered.get() || self.dragging.get();
+        let left = left_after(left, elapsed, held);
         self.left.set(left);
         if left.is_none() {
             // SAFETY: `window` is this surface's own window.
@@ -190,6 +217,7 @@ pub(super) fn open_window(
     work: RECT,
     scale: f32,
     slide: bool,
+    drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> Result<HWND, Error> {
     let (width, height) = (preview.width(), preview.height());
@@ -219,23 +247,24 @@ pub(super) fn open_window(
         )
     }
     .map_err(Error::Window)?;
-    let made = surface(window, preview, rest, distance, scale, listener).and_then(|surface| {
-        round_corners(window, client_width, client_height, px(RADIUS))?;
-        // SAFETY: `window` exists, so WM_NCDESTROY will free this Box once. The timers die
-        // with the window.
-        unsafe {
-            SetWindowLongPtrW(
-                window,
-                GWLP_USERDATA,
-                Box::into_raw(Box::new(surface)) as isize,
-            );
-            if distance > 0 {
-                SetTimer(Some(window), SLIDE_TIMER, FRAME, None);
+    let made =
+        surface(window, preview, rest, distance, scale, drag, listener).and_then(|surface| {
+            round_corners(window, client_width, client_height, px(RADIUS))?;
+            // SAFETY: `window` exists, so WM_NCDESTROY will give up this count once. The timers
+            // die with the window.
+            unsafe {
+                SetWindowLongPtrW(
+                    window,
+                    GWLP_USERDATA,
+                    Rc::into_raw(Rc::new(surface)) as isize,
+                );
+                if distance > 0 {
+                    SetTimer(Some(window), SLIDE_TIMER, FRAME, None);
+                }
+                SetTimer(Some(window), COUNTDOWN_TIMER, TICK, None);
             }
-            SetTimer(Some(window), COUNTDOWN_TIMER, TICK, None);
-        }
-        Ok(())
-    });
+            Ok(())
+        });
     if let Err(error) = made {
         // SAFETY: the window was created above and holds no state yet.
         let destroyed = unsafe { DestroyWindow(window) };
@@ -251,6 +280,7 @@ fn surface(
     rest: RECT,
     distance: i32,
     scale: f32,
+    drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> windows::core::Result<Surface> {
     // SAFETY: D2D1CreateFactory has no preconditions.
@@ -283,6 +313,9 @@ fn surface(
         ticked: Cell::new(now),
         left: Cell::new(Some(STAY)),
         hovered: Cell::new(false),
+        dragging: Cell::new(false),
+        pressed: Cell::new(None),
+        drag,
         listener: RefCell::new(listener),
     })
 }
@@ -309,22 +342,27 @@ unsafe extern "system" fn window_procedure(
 ) -> LRESULT {
     // SAFETY: GWLP_USERDATA is 0 until open_window stores the Surface pointer, and
     // WM_NCDESTROY clears it.
-    let surface = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *mut Surface;
+    let surface = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *const Surface;
     if surface.is_null() {
         // SAFETY: forwarding an unhandled message to the default procedure.
         return unsafe { DefWindowProcW(window, message, wparam, lparam) };
     }
     if message == WM_NCDESTROY {
-        // SAFETY: this is the window's last message; the Box is freed once and the pointer
-        // cleared.
+        // SAFETY: this is the window's last message; the window's count is given up once and
+        // the pointer cleared. A message still running below holds its own count.
         unsafe {
             SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            drop(Box::from_raw(surface));
+            drop(Rc::from_raw(surface));
             return DefWindowProcW(window, message, wparam, lparam);
         }
     }
-    // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-    let surface = unsafe { &*surface };
+    // SAFETY: a non-null pointer carries the window's count until WM_NCDESTROY. This message
+    // takes a count of its own, so a Thumbnail dropped while it runs (from an event, or during
+    // a drag's modal loop) frees the Surface only once the message returns.
+    let surface = unsafe {
+        Rc::increment_strong_count(surface);
+        Rc::from_raw(surface)
+    };
     match message {
         WM_PAINT => {
             let mut paint = PAINTSTRUCT::default();
@@ -355,6 +393,7 @@ unsafe extern "system" fn window_procedure(
                     let _ = InvalidateRect(Some(window), None, false);
                 }
             }
+            surface.drag_from(client_point(lparam));
             LRESULT(0)
         }
         WM_MOUSELEAVE => {
@@ -363,7 +402,14 @@ unsafe extern "system" fn window_procedure(
             let _ = unsafe { InvalidateRect(Some(window), None, false) };
             LRESULT(0)
         }
+        WM_LBUTTONDOWN => {
+            surface.pressed.set(Some(client_point(lparam)));
+            LRESULT(0)
+        }
         WM_LBUTTONUP => {
+            if surface.pressed.take().is_none() {
+                return LRESULT(0);
+            }
             surface.send(match button_at(&surface.buttons, client_point(lparam)) {
                 Some(Button::Save) => ThumbnailEvent::Save,
                 Some(Button::Dismiss) => ThumbnailEvent::Dismiss,

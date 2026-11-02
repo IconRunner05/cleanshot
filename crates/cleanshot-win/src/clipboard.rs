@@ -13,7 +13,7 @@ use windows::Win32::System::Ole::CF_DIBV5;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
 };
-use windows::core::w;
+use windows::core::{PCWSTR, w};
 
 /// How many times a copy tries to open the clipboard while another program holds it, and the
 /// wait between tries: 10 tries over 90 ms, inside P-02's 150 ms.
@@ -30,9 +30,14 @@ pub fn copy_image(bitmap: &[u8], png: &[u8]) -> windows::core::Result<()> {
     replace_with(&[(u32::from(CF_DIBV5.0), bitmap), (png_format()?, png)])
 }
 
-fn png_format() -> windows::core::Result<u32> {
-    // SAFETY: the name is a 'static NUL-terminated string.
-    match unsafe { RegisterClipboardFormatW(w!("PNG")) } {
+pub(crate) fn png_format() -> windows::core::Result<u32> {
+    registered(w!("PNG"))
+}
+
+/// The clipboard format Windows registers under `name`, the same in every program.
+pub(crate) fn registered(name: PCWSTR) -> windows::core::Result<u32> {
+    // SAFETY: the caller's name is a 'static NUL-terminated string.
+    match unsafe { RegisterClipboardFormatW(name) } {
         0 => Err(windows::core::Error::from_thread()),
         format => Ok(format),
     }
@@ -100,10 +105,21 @@ fn open_on(window: HWND) -> windows::core::Result<()> {
 }
 
 /// Puts `bytes` on the open clipboard as `format`. The clipboard owns the block only once
-/// `SetClipboardData` takes it, so every failure before that frees it here.
+/// `SetClipboardData` takes it, so a failure frees it here.
 fn set(format: u32, bytes: &[u8]) -> windows::core::Result<()> {
+    let block = global(bytes)?;
+    // SAFETY: `block` is ours until SetClipboardData takes it, and freed here if it does not.
+    unsafe {
+        SetClipboardData(format, Some(HANDLE(block.0)))
+            .map(|_| ())
+            .map_err(|error| freed(block, error))
+    }
+}
+
+/// A movable global block holding a copy of `bytes`, owned by the caller.
+pub(crate) fn global(bytes: &[u8]) -> windows::core::Result<HGLOBAL> {
     // SAFETY: the block is allocated for `bytes.len()` bytes and written only through a
-    // non-null lock of it; it is freed on every path where the clipboard has not taken it.
+    // non-null lock of it; it is freed if it cannot be locked.
     unsafe {
         let block: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes.len())?;
         let target = GlobalLock(block).cast::<u8>();
@@ -114,9 +130,7 @@ fn set(format: u32, bytes: &[u8]) -> windows::core::Result<()> {
         // GlobalUnlock reports an error when the lock count reaches zero, which is
         // the expected outcome here.
         let _ = GlobalUnlock(block);
-        SetClipboardData(format, Some(HANDLE(block.0)))
-            .map(|_| ())
-            .map_err(|error| freed(block, error))
+        Ok(block)
     }
 }
 
