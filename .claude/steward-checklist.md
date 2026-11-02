@@ -47,3 +47,6 @@ clean, well organised, and written by a human for a human.
   connecting one module's event to another's call) gets a refine moving it into its own file
   in `cleanshot-app`, or CHANGES if the move needs the builder's decision. Measure main.rs
   before and after (`scc --by-file`), whatever its size.
+- **`docs/security.md` in step.** A change to what `cleanshot.exe` touches (files, registry,
+  clipboard, window messages, hotkeys, DLL loading, network, processes) updates
+  `docs/security.md` in the same commit; CHANGES otherwise. (Orchestrator's rule, 2026-11-02.)
