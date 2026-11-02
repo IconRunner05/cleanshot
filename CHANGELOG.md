@@ -15,6 +15,9 @@ section exists.
   a fixed save folder, which may be a network share and which Save As cannot leave; copying
   only, which greys out Save and says why; PNG only; and no Settings item in the tray menu.
   A value set wrongly makes Cleanshot stricter, never looser.
+- Numbered steps (F-41): N, or the Numbered step button, places a filled circle with its
+  number where you click. Steps count 1, 2, 3 in the order they were placed, and removing
+  one renumbers the rest.
 
 ## [0.1.2] - 2026-11-02
 
