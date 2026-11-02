@@ -18,6 +18,7 @@ use cleanshot_win::capture::{Copied, MonitorImage, OutputReport, RECT, black_sha
 use cleanshot_win::instance::Launch;
 use cleanshot_win::log::{Log, Usage, since_start, usage};
 use cleanshot_win::overlay::Overlay;
+use cleanshot_win::policy::read_policy;
 use cleanshot_win::settings_file::{read_settings, settings_path};
 use cleanshot_win::tray::{
     Request, Tray, ask_running_instance_to_capture, message_box, print_screen_fallback,
@@ -55,21 +56,14 @@ fn main() {
         Err(error) => (None, Some(format!("The log could not be opened: {error}."))),
     };
     let (settings, warning) = load_settings();
-    let (region, fallback) = region_hotkey(settings.hotkeys.region);
-    let hotkeys = [
-        (Request::Capture(HotkeyAction::Region), region),
-        (
-            Request::Capture(HotkeyAction::FullScreen),
-            settings.hotkeys.full_screen,
-        ),
-        (
-            Request::Capture(HotkeyAction::LastRegion),
-            settings.hotkeys.last_region,
-        ),
-    ];
+    let (policy, policy_problems) = read_policy();
+    let (hotkeys, fallback) = tray_hotkeys(&settings);
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
-    let session = Rc::new(Session::new(settings, Rc::clone(&tray), log));
+    let session = Rc::new(Session::new(settings, policy, Rc::clone(&tray), log));
+    for problem in policy_problems {
+        session.log_line("policy", |_| format!("problem {problem}"));
+    }
     let launched = Rc::clone(&session);
     cleanshot_editor::run(move |cx| {
         // D-76: prewarm on the overlay thread before the tray is ready.
@@ -99,7 +93,7 @@ fn main() {
                     .spawn(async move |cx| match to {
                         Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
                         Handoff::SaveAs => {
-                            let (folder, name) = save_as_start(&session.settings.borrow());
+                            let (folder, name) = save_as_start(&session.saving_settings());
                             let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
                             save_chosen(&session, image, chosen.await);
                         }
@@ -121,6 +115,9 @@ fn main() {
             .detach();
         })
         .expect("the tray window and icon are created");
+        if launched.policy.settings_hidden() {
+            created.hide_settings_item();
+        }
         let text = start_warnings(&created, [warning, log_warning, fallback, unwarmed]);
         launched_tray.replace(Some(created));
         if !text.is_empty() {
@@ -141,6 +138,24 @@ fn main() {
     // out to remove its icon.
     drop(tray.take());
     drop(instance);
+}
+
+/// The hotkey each capture request registers at start, and the warning when Snipping Tool
+/// holds the region's (F-52).
+fn tray_hotkeys(settings: &Settings) -> ([(Request, Hotkey); 3], Option<String>) {
+    let (region, fallback) = region_hotkey(settings.hotkeys.region);
+    let hotkeys = [
+        (Request::Capture(HotkeyAction::Region), region),
+        (
+            Request::Capture(HotkeyAction::FullScreen),
+            settings.hotkeys.full_screen,
+        ),
+        (
+            Request::Capture(HotkeyAction::LastRegion),
+            settings.hotkeys.last_region,
+        ),
+    ];
+    (hotkeys, fallback)
 }
 
 /// What start-up has to tell the user, in one line: `earlier`, then each hotkey another program
@@ -164,7 +179,7 @@ fn start_warnings(tray: &Tray, earlier: [Option<String>; 4]) -> String {
 struct Session {
     /// F-55: the settings window changes them while Cleanshot runs.
     settings: RefCell<Settings>,
-    /// F-57: no policy until the HKLM read fills it.
+    /// F-57: read once at start.
     policy: Policy,
     tray: Rc<RefCell<Option<Tray>>>,
     overlay: RefCell<Option<Overlay>>,
@@ -177,10 +192,15 @@ struct Session {
 }
 
 impl Session {
-    fn new(settings: Settings, tray: Rc<RefCell<Option<Tray>>>, log: Option<Log>) -> Self {
+    fn new(
+        settings: Settings,
+        policy: Policy,
+        tray: Rc<RefCell<Option<Tray>>>,
+        log: Option<Log>,
+    ) -> Self {
         Self {
             settings: RefCell::new(settings),
-            policy: Policy::default(),
+            policy,
             tray,
             overlay: RefCell::new(None),
             last_selection: Cell::new(None),
@@ -245,6 +265,12 @@ impl Session {
                 }
             }),
         );
+    }
+
+    /// The settings a save uses: the user's, with the policy's folder and format where it sets
+    /// them (F-57).
+    fn saving_settings(&self) -> Settings {
+        self.policy.applied_to(self.settings.borrow().clone())
     }
 
     /// Logs a `perf` line under `--log`, made from the time since the process started.
@@ -344,19 +370,19 @@ fn editor_deliver(
     session: &Rc<Session>,
 ) -> impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static {
     let session = Rc::clone(session);
-    move |output, document| deliver(output, document, &session.settings.borrow())
+    move |output, document| deliver(output, document, &session.saving_settings())
 }
 
 fn editor_save_as_start(session: &Rc<Session>) -> impl Fn() -> (PathBuf, String) + 'static {
     let session = Rc::clone(session);
-    move || save_as_start(&session.settings.borrow())
+    move || save_as_start(&session.saving_settings())
 }
 
 fn editor_save_to(
     session: &Rc<Session>,
 ) -> impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static {
     let session = Rc::clone(session);
-    move |path, document| save_to(path, document, &session.settings.borrow())
+    move |path, document| save_to(path, document, &session.saving_settings())
 }
 
 /// P-07: logs the time from now, as the editor opens, to the frame after its first draw.
@@ -380,7 +406,7 @@ fn save_chosen(
     };
     let document = Document::new(Arc::new(image));
     if let Err(error) =
-        chosen.and_then(|path| save_to(&path, &document, &session.settings.borrow()))
+        chosen.and_then(|path| save_to(&path, &document, &session.saving_settings()))
     {
         session.warn(&delivery_notice(&Err(error)));
     }

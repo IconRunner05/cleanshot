@@ -48,6 +48,8 @@ struct State {
     taskbar_created: u32,
     capture_signal: u32,
     icon_shown: Cell<bool>,
+    /// F-57: off under the organisation's `HideSettings` policy.
+    settings_item: Cell<bool>,
     /// The icon the shell shows, kept until the shell has the next one (D-92).
     icon: RefCell<Option<TrayIcon>>,
     /// The request each registered hotkey sends; hotkey id `n` is entry `n - 1`.
@@ -123,6 +125,7 @@ impl Tray {
             capture_signal: capture_signal(),
             hotkey_requests: hotkeys.iter().map(|(request, _)| *request).collect(),
             icon_shown: Cell::new(false),
+            settings_item: Cell::new(true),
             icon: RefCell::new(None),
         });
         // SAFETY: `window` exists, so it will get WM_NCDESTROY, where the window procedure
@@ -174,6 +177,11 @@ impl Tray {
             };
         }
         taken
+    }
+
+    /// Leaves Settings out of the tray menu, for the organisation's `HideSettings` policy (F-57).
+    pub fn hide_settings_item(&self) {
+        self.state().settings_item.set(false);
     }
 
     /// Whether the shell took the icon at the last try: at creation or when the taskbar last
@@ -419,16 +427,32 @@ fn redraw_icon(window: HWND, state: &State) {
     }
 }
 
-fn show_menu(window: HWND) -> Option<Request> {
+/// The tray menu's items in order, each with its command id.
+fn menu_items(settings_item: bool) -> Vec<(usize, HSTRING)> {
+    let mut items = vec![
+        (
+            MENU_CAPTURE_REGION,
+            HSTRING::from(HotkeyAction::Region.name()),
+        ),
+        (
+            MENU_CAPTURE_SCREEN,
+            HSTRING::from(HotkeyAction::FullScreen.name()),
+        ),
+    ];
+    if settings_item {
+        items.push((MENU_SETTINGS, HSTRING::from("Settings")));
+    }
+    items.push((MENU_EXIT, HSTRING::from("Exit")));
+    items
+}
+
+fn show_menu(window: HWND, settings_item: bool) -> Option<Request> {
     // SAFETY: the menu is created, shown and destroyed here, all on this window's thread.
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        let region = HSTRING::from(HotkeyAction::Region.name());
-        let screen = HSTRING::from(HotkeyAction::FullScreen.name());
-        let built = AppendMenuW(menu, MF_STRING, MENU_CAPTURE_REGION, &region)
-            .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_CAPTURE_SCREEN, &screen))
-            .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Settings")))
-            .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("Exit")));
+        let built = menu_items(settings_item)
+            .iter()
+            .try_for_each(|(id, text)| AppendMenuW(menu, MF_STRING, *id, text));
         let mut cursor = POINT::default();
         let chosen = if built.is_ok() && GetCursorPos(&raw mut cursor).is_ok() {
             // The menu closes on an outside click only if its window is in the foreground; when
@@ -497,7 +521,7 @@ unsafe extern "system" fn window_procedure(
         WM_CLOSE => Some(Request::Exit),
         ICON_MESSAGE => match u32::try_from(lparam.0 & 0xFFFF) {
             Ok(WM_LBUTTONDBLCLK) => Some(Request::Capture(HotkeyAction::Region)),
-            Ok(WM_CONTEXTMENU) => show_menu(window),
+            Ok(WM_CONTEXTMENU) => show_menu(window, state.settings_item.get()),
             _ => None,
         },
         message if message == state.capture_signal => Some(Request::Capture(HotkeyAction::Region)),
@@ -713,5 +737,28 @@ mod tests {
         let long = "x".repeat(400);
         tray.warn("Cleanshot settings", &long)
             .expect("the balloon is shown from the icon");
+    }
+
+    #[test]
+    fn f57_the_tray_menu_leaves_out_settings_only_under_hide_settings() {
+        let ids = |shown| {
+            menu_items(shown)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(true),
+            [
+                MENU_CAPTURE_REGION,
+                MENU_CAPTURE_SCREEN,
+                MENU_SETTINGS,
+                MENU_EXIT
+            ]
+        );
+        assert_eq!(
+            ids(false),
+            [MENU_CAPTURE_REGION, MENU_CAPTURE_SCREEN, MENU_EXIT]
+        );
     }
 }

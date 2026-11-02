@@ -186,7 +186,7 @@ fn finish(session: &Session, captures: &[MonitorImage], selected: RECT, output: 
     match deliver(
         output,
         &Document::new(Arc::new(image)),
-        &session.settings.borrow(),
+        &session.saving_settings(),
     ) {
         Ok(Delivered::Copied) => {
             session.perf(|_| format!("P-02 copied_ms={}", started.elapsed().as_millis()));
