@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::RgbaImage;
-use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_toolbar};
+use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_container};
 use cleanshot_win::capture::{MonitorImage, RECT};
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
@@ -28,24 +28,30 @@ fn main() {
     let (chosen, choice) = mpsc::channel();
     let (painted, shown) = mpsc::channel();
     thread::spawn(move || {
-        let verdict = wait_for_toolbar("Capture", ControlKind::Button, start, &shown)
-            .map_err(|missing| format!("{missing:?}"))
-            .and_then(|buttons| {
-                let buttons: Vec<String> = buttons.into_iter().map(|button| button.name).collect();
-                if buttons != BUTTONS {
-                    return Err(format!("buttons {buttons:?}, expected {BUTTONS:?}"));
-                }
-                match invoke_in_own_windows("Copy") {
-                    Ok(true) => {}
-                    Ok(false) => return Err(String::from("no button named Copy to invoke")),
-                    Err(error) => return Err(format!("Copy could not be invoked: {error}")),
-                }
-                match choice.recv_timeout(PATIENCE) {
-                    Ok(Some(selected)) if selected == SELECTED => Ok(()),
-                    Ok(other) => Err(format!("the overlay sent {other:?} for Copy")),
-                    Err(error) => Err(format!("the overlay sent nothing for Copy: {error}")),
-                }
-            });
+        let verdict = wait_for_container(
+            ControlKind::ToolBar,
+            "Capture",
+            ControlKind::Button,
+            start,
+            &shown,
+        )
+        .map_err(|missing| format!("{missing:?}"))
+        .and_then(|buttons| {
+            let buttons: Vec<String> = buttons.into_iter().map(|button| button.name).collect();
+            if buttons != BUTTONS {
+                return Err(format!("buttons {buttons:?}, expected {BUTTONS:?}"));
+            }
+            match invoke_in_own_windows("Copy") {
+                Ok(true) => {}
+                Ok(false) => return Err(String::from("no button named Copy to invoke")),
+                Err(error) => return Err(format!("Copy could not be invoked: {error}")),
+            }
+            match choice.recv_timeout(PATIENCE) {
+                Ok(Some(selected)) if selected == SELECTED => Ok(()),
+                Ok(other) => Err(format!("the overlay sent {other:?} for Copy")),
+                Err(error) => Err(format!("the overlay sent nothing for Copy: {error}")),
+            }
+        });
         match verdict {
             Ok(()) => {
                 println!("{TEST} ... ok");

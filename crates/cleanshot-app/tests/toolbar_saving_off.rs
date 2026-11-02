@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{DeliveryError, RgbaImage, SavingOff, delivery_notice};
-use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_toolbar};
+use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_container};
 use cleanshot_win::capture::{MonitorImage, RECT};
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
@@ -26,37 +26,43 @@ fn main() {
     let (chosen, choice) = mpsc::channel();
     let (painted, shown) = mpsc::channel();
     thread::spawn(move || {
-        let verdict = wait_for_toolbar("Capture", ControlKind::Button, start, &shown)
-            .map_err(|missing| format!("{missing:?}"))
-            .and_then(|buttons| {
-                let off: Vec<_> = buttons
-                    .iter()
-                    .map(|button| {
-                        (
-                            button.name.as_str(),
-                            button.enabled,
-                            button.help_text.as_str(),
-                        )
-                    })
-                    .collect();
-                let wanted = [
-                    ("Copy", true, ""),
-                    ("Save", false, expected.as_str()),
-                    ("Edit", true, ""),
-                    ("Cancel", true, ""),
-                ];
-                if off != wanted {
-                    return Err(format!("buttons {off:?}, expected {wanted:?}"));
-                }
-                if invoke_in_own_windows("Save").is_ok() {
-                    return Err(String::from("UI Automation pressed the Save that is off"));
-                }
-                match choice.recv_timeout(Duration::from_secs(1)) {
-                    Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
-                    Ok(event) => Err(format!("the overlay sent {event} for a refused press")),
-                    Err(error) => Err(format!("the overlay's channel closed: {error}")),
-                }
-            });
+        let verdict = wait_for_container(
+            ControlKind::ToolBar,
+            "Capture",
+            ControlKind::Button,
+            start,
+            &shown,
+        )
+        .map_err(|missing| format!("{missing:?}"))
+        .and_then(|buttons| {
+            let off: Vec<_> = buttons
+                .iter()
+                .map(|button| {
+                    (
+                        button.name.as_str(),
+                        button.enabled,
+                        button.help_text.as_str(),
+                    )
+                })
+                .collect();
+            let wanted = [
+                ("Copy", true, ""),
+                ("Save", false, expected.as_str()),
+                ("Edit", true, ""),
+                ("Cancel", true, ""),
+            ];
+            if off != wanted {
+                return Err(format!("buttons {off:?}, expected {wanted:?}"));
+            }
+            if invoke_in_own_windows("Save").is_ok() {
+                return Err(String::from("UI Automation pressed the Save that is off"));
+            }
+            match choice.recv_timeout(Duration::from_secs(1)) {
+                Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
+                Ok(event) => Err(format!("the overlay sent {event} for a refused press")),
+                Err(error) => Err(format!("the overlay's channel closed: {error}")),
+            }
+        });
         match verdict {
             Ok(()) => {
                 println!("{TEST} ... ok");

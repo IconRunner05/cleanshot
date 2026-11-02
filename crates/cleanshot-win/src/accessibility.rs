@@ -8,9 +8,10 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationInvokePattern, TreeScope_Subtree,
-    UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ImageControlTypeId,
-    UIA_InvokePatternId, UIA_RadioButtonControlTypeId, UIA_ToolBarControlTypeId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+    IUIAutomationTogglePattern, TreeScope_Subtree, UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID,
+    UIA_CheckBoxControlTypeId, UIA_GroupControlTypeId, UIA_ImageControlTypeId, UIA_InvokePatternId,
+    UIA_RadioButtonControlTypeId, UIA_TogglePatternId, UIA_ToolBarControlTypeId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId};
 use windows::core::BOOL;
@@ -32,6 +33,7 @@ pub struct Control {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlKind {
     ToolBar,
+    Group,
     Button,
     RadioButton,
     CheckBox,
@@ -40,13 +42,13 @@ pub enum ControlKind {
     Other(i32),
 }
 
-/// Why [`wait_for_toolbar`] found no toolbar, with what a failing test should print.
+/// Why [`wait_for_container`] found no container, with what a failing test should print.
 #[derive(Debug)]
-pub enum ToolbarMissing {
-    /// No signal came that the toolbar's window was shown.
+pub enum ContainerMissing {
+    /// No signal came that the container's window was shown.
     NotShown(RecvTimeoutError),
     /// The window was shown `shown` after the start, and `walks` walks over the patience
-    /// that followed never found the toolbar. `last` is what the last walk reported.
+    /// that followed never found the container. `last` is what the last walk reported.
     NotFound {
         walks: u32,
         shown: Duration,
@@ -59,25 +61,26 @@ pub enum ToolbarMissing {
 // here, so the wait only bounds a hang.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// The `kind` controls, in order, that UI Automation reports once a toolbar named
-/// `toolbar` appears under this process's windows (F-05, F-58). The walk starts when `shown`
-/// says the window was shown, as no user reaches a toolbar before that, and goes on every
+/// The `kind` controls, in order, that UI Automation reports once a `container` control named
+/// `name` (such as the toolbar named Capture) appears under this process's windows (F-05,
+/// F-58). The walk starts when `shown` says the window was shown, as no user reaches it before that, and goes on every
 /// 250 ms for up to a minute; `start` dates the times in the error. Call it from a thread that
 /// owns no window: a window answers UI Automation on its own thread, so a walk from that
 /// thread waits on itself.
 ///
 /// # Errors
 ///
-/// [`ToolbarMissing`] if the window was not shown, or the toolbar not found, within a minute.
-pub fn wait_for_toolbar(
-    toolbar: &str,
+/// [`ContainerMissing`] if the window was not shown, or the container not found, within a minute.
+pub fn wait_for_container(
+    container: ControlKind,
+    name: &str,
     kind: ControlKind,
     start: Instant,
     shown: &Receiver<Instant>,
-) -> Result<Vec<Control>, ToolbarMissing> {
+) -> Result<Vec<Control>, ContainerMissing> {
     let shown = shown
         .recv_timeout(PATIENCE)
-        .map_err(ToolbarMissing::NotShown)?;
+        .map_err(ContainerMissing::NotShown)?;
     let deadline = Instant::now() + PATIENCE;
     let mut walks = 0;
     let mut window_seen = None;
@@ -87,7 +90,7 @@ pub fn wait_for_toolbar(
         if let Ok(controls) = &walked {
             if controls
                 .iter()
-                .any(|control| control.kind == ControlKind::ToolBar && control.name == toolbar)
+                .any(|control| control.kind == container && control.name == name)
             {
                 return Ok(controls
                     .iter()
@@ -100,7 +103,7 @@ pub fn wait_for_toolbar(
             }
         }
         if Instant::now() >= deadline {
-            return Err(ToolbarMissing::NotFound {
+            return Err(ContainerMissing::NotFound {
                 walks,
                 shown: shown - start,
                 window_seen,
@@ -113,7 +116,7 @@ pub fn wait_for_toolbar(
 
 /// Every element UI Automation reports under this process's top-level windows, the windows
 /// themselves included (F-58). Call it from a thread that owns no window, as for
-/// [`wait_for_toolbar`].
+/// [`wait_for_container`].
 ///
 /// # Errors
 ///
@@ -131,23 +134,62 @@ pub fn controls_in_own_windows() -> Result<Vec<Control>, Error> {
 
 /// Presses the first button named `name` under this process's top-level windows through its
 /// Invoke pattern, as a screen reader's activate command does. Returns whether one was found.
-/// Call it from a thread that owns no window, as for [`wait_for_toolbar`].
+/// Call it from a thread that owns no window, as for [`wait_for_container`].
 ///
 /// # Errors
 ///
 /// [`Error::Accessibility`] if COM, UI Automation or the button refuses a call.
 pub fn invoke_in_own_windows(name: &str) -> Result<bool, Error> {
+    act_on_own_control(UIA_ButtonControlTypeId, name, |element| {
+        // SAFETY: the element is live, and the pattern asked for is the interface cast to.
+        unsafe {
+            element
+                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)?
+                .Invoke()
+        }
+    })
+}
+
+/// Flips the first check box named `name` under this process's top-level windows through its
+/// Toggle pattern, as a screen reader's activate command does. Returns whether one was found.
+/// Call it from a thread that owns no window, as for [`wait_for_container`].
+///
+/// # Errors
+///
+/// [`Error::Accessibility`] if COM, UI Automation or the check box refuses a call.
+pub fn toggle_in_own_windows(name: &str) -> Result<bool, Error> {
+    act_on_own_control(UIA_CheckBoxControlTypeId, name, |element| {
+        // SAFETY: the element is live, and the pattern asked for is the interface cast to.
+        unsafe {
+            element
+                .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)?
+                .Toggle()
+        }
+    })
+}
+
+fn act_on_own_control(
+    kind: UIA_CONTROLTYPE_ID,
+    name: &str,
+    act: impl FnOnce(&IUIAutomationElement) -> windows::core::Result<()>,
+) -> Result<bool, Error> {
     // SAFETY: COM is initialised for this thread and released below once the call ends.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
         .map_err(Error::Accessibility)?;
-    let invoked = invoke(name).map_err(Error::Accessibility);
+    let acted = find_own_control(kind, name)
+        .and_then(|found| found.map(|element| act(&element)).transpose())
+        .map(|acted| acted.is_some())
+        .map_err(Error::Accessibility);
     // SAFETY: balances the successful CoInitializeEx above, after every COM object is dropped.
     unsafe { CoUninitialize() };
-    invoked
+    acted
 }
 
-fn invoke(name: &str) -> windows::core::Result<bool> {
+fn find_own_control(
+    kind: UIA_CONTROLTYPE_ID,
+    name: &str,
+) -> windows::core::Result<Option<IUIAutomationElement>> {
     // SAFETY: CUIAutomation is the system class for IUIAutomation, created in process.
     let automation: IUIAutomation =
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }?;
@@ -162,20 +204,14 @@ fn invoke(name: &str) -> windows::core::Result<bool> {
             // SAFETY: `index` is below the array's length; the element is live.
             let element = unsafe { found.GetElement(index) }?;
             // SAFETY: plain property reads of a live element.
-            let (kind, named) = unsafe { (element.CurrentControlType()?, element.CurrentName()?) };
-            if kind != UIA_ButtonControlTypeId || named != name {
-                continue;
+            let (found_kind, named) =
+                unsafe { (element.CurrentControlType()?, element.CurrentName()?) };
+            if found_kind == kind && named == name {
+                return Ok(Some(element));
             }
-            // SAFETY: the element is live, and the pattern asked for is the interface cast to.
-            unsafe {
-                element
-                    .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)?
-                    .Invoke()?;
-            }
-            return Ok(true);
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
@@ -205,6 +241,7 @@ fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
             };
             let kind = [
                 (UIA_ToolBarControlTypeId, ControlKind::ToolBar),
+                (UIA_GroupControlTypeId, ControlKind::Group),
                 (UIA_ButtonControlTypeId, ControlKind::Button),
                 (UIA_RadioButtonControlTypeId, ControlKind::RadioButton),
                 (UIA_CheckBoxControlTypeId, ControlKind::CheckBox),

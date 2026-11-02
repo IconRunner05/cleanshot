@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Instant;
 
 use cleanshot_core::{DeliveryError, RgbaImage};
-use cleanshot_win::accessibility::{ControlKind, wait_for_toolbar};
+use cleanshot_win::accessibility::{ControlKind, wait_for_container};
 
 const TOOLS: [&str; 13] = [
     "Select",
@@ -50,12 +50,13 @@ fn main() {
     thread::spawn(move || {
         let mut failed = false;
         for (test, toolbar, kind, expected) in WALKS {
-            let walked = wait_for_toolbar(toolbar, kind, start, &drawn).map(|controls| {
-                controls
-                    .into_iter()
-                    .map(|control| control.name)
-                    .collect::<Vec<_>>()
-            });
+            let walked = wait_for_container(ControlKind::ToolBar, toolbar, kind, start, &drawn)
+                .map(|controls| {
+                    controls
+                        .into_iter()
+                        .map(|control| control.name)
+                        .collect::<Vec<_>>()
+                });
             match walked {
                 Ok(names) if names == expected => println!("{test} ... ok"),
                 Ok(names) => {

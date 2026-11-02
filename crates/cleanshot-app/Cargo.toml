@@ -29,6 +29,10 @@ harness = false
 name = "thumbnail_automation"
 harness = false
 
+[[test]]
+name = "settings_automation"
+harness = false
+
 [dependencies]
 cleanshot-core.workspace = true
 cleanshot-render.workspace = true
