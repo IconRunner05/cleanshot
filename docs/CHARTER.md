@@ -453,6 +453,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-101 | 2026-11-02 | v1.0 ships an x64 exe only; an ARM64 release comes after v1.0. The ARM64 build stays in CI (C-06) so it keeps compiling | decided (owner, 2026-11-02) | The owner's call, closing the CHARTER 11 open question; M4 already lists the ARM64 release after v1.0 |
 | D-99 | 2026-11-02 | The F-10 timer is set on the F-11 capture panel only: its Timer control steps Off, 3, 5, 10 s and back to Off with each press, and Capture waits that long before the grab, counting down in whole seconds. The overlay toolbar after a freeze shows the capture mode and Options but no timer. The panel's mode and timer are held in memory for the session, starting at Region and Off, and never written | decided (orchestrator, 2026-11-02) | A timer is for setting up the screen before the freeze, so it has no use once the screen is frozen; a timer in the overlay would need it to close, count and freeze again. D-30 names no settings key for either, and both are a choice for the capture at hand. Agreed with capture |
 | D-98 | 2026-11-02 | The winget package is `Cleanshot.Cleanshot`, publisher `Cleanshot`, with its homepage, support and release notes on the GitHub repository (`IconRunner05/cleanshot`). Its manifest is kept in `winget/` as the three files winget-pkgs takes, with only the version and the exe's SHA-256 left for a release to fill | decided (owner, 2026-11-02) | The owner's call on the identifier and publisher; homepage and release notes on the repository, and the generated manifest, are the design the orchestrator approved. A manifest filled from the release's own checksum cannot point at another exe |
 | D-97 | 2026-11-02 | The budget kit (`budgets.bat`) starts `cleanshot.exe` once and quits it before it measures anything, so P-03 measures Cleanshot's own start, not an antivirus scan of a newly written exe. Its phases wait for the exe's own log lines, for up to 2 minutes each, rather than for a fixed time: the warm-up for the P-03 tray-ready line, and the idle phase for the P-05 line, which the exe logs 10 s after the tray is ready. A line still missing after that wait is a FAIL, and fails the kit job (CHARTER 7) | assumed | Orchestrator's call, 2026-11-02. A just-written or downloaded unsigned exe is scanned on its first start, on the owner's PC as on a runner, and that time is not Cleanshot's. A fixed wait lost the idle sample whenever the start was slow, and a kit that drops a sample is broken |
@@ -552,7 +553,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 - [x] winget `PackageIdentifier` / publisher name and the GitHub owner: `Cleanshot.Cleanshot`, publisher `Cleanshot`, on `IconRunner05/cleanshot` (D-98).
 - [x] Code-signing route (signing service and who holds the certificate): SignPath Foundation (D-74).
-- [ ] ARM64 in the v1.0 release, or after?
+- [x] ARM64 in the v1.0 release, or after? After: v1.0 ships x64 only (D-101).
 
 ### Known risks
 
