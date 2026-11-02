@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use cleanshot_core::{INTER, LINE_HEIGHT, PointF, TextBlock};
+use cleanshot_core::{INTER, LINE_HEIGHT, Label, PointF, TextBlock, baseline};
 use gpui::{
     App, Font, FontFeatures, FontWeight, Global, Pixels, Point, Rgba, ShapedLine, TextAlign,
     TextRun, Window, black, font, point, px,
@@ -124,14 +124,39 @@ fn shape(line: &str, font_size: Pixels, color: Rgba, window: &Window) -> ShapedL
         .shape_line(line.to_owned().into(), font_size, &[run], None)
 }
 
-pub(crate) fn paint_text(
-    block: &TextBlock,
+/// Paints `label` in Inter and `color`, laid out as the export lays it out (F-34, F-41).
+pub(crate) fn paint_label(
+    label: &Label,
     color: Rgba,
     fit: &Fit,
     window: &mut Window,
     cx: &mut App,
 ) {
-    for line in lay_out(block, color, fit.scale, |at| fit.point(at), window) {
+    let lines = match label {
+        Label::Block(block) => lay_out(block, color, fit.scale, |at| fit.point(at), window),
+        Label::Centred {
+            text,
+            size,
+            centre_x,
+            top,
+        } => {
+            let font_size = px(size * fit.scale);
+            let height = font_size * LINE_HEIGHT;
+            let shaped = shape(text, font_size, color, window);
+            let start = fit.point(PointF {
+                x: *centre_x,
+                y: baseline(*top, *size),
+            });
+            let left = point(start.x - shaped.width() / 2.0, start.y);
+            let origin = line_origin(left, height, shaped.ascent, shaped.descent);
+            vec![LaidLine {
+                shaped,
+                origin,
+                height,
+            }]
+        }
+    };
+    for line in lines {
         // Fails only if a glyph cannot be rasterised; the document keeps the text.
         let _ = line
             .shaped

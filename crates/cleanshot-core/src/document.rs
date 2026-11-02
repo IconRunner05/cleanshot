@@ -1,7 +1,8 @@
 use std::f32::consts::{FRAC_PI_6, PI};
 use std::sync::Arc;
 
-use crate::TextBlock;
+use crate::step::Step;
+use crate::text::{Label, TextBlock};
 
 /// A capture with annotations on top. All coordinates are in base-image physical pixels.
 /// Changed only through [`crate::History`].
@@ -61,6 +62,42 @@ impl Document {
     pub fn frame(&self) -> Frame {
         self.frame
     }
+
+    /// The text each shape shows, in drawing order, with the shape showing it.
+    pub fn labels(&self) -> impl Iterator<Item = (ShapeId, Label<'_>)> {
+        let shapes = self.shapes.iter().map(|entry| &entry.shape);
+        self.shapes
+            .iter()
+            .zip(step_numbers(shapes))
+            .filter_map(|(entry, number)| {
+                let label = match &entry.shape {
+                    Shape::Text(block) => Label::Block(block),
+                    Shape::Step(step) => step.label(number),
+                    Shape::Arrow { .. }
+                    | Shape::Line { .. }
+                    | Shape::Rect { .. }
+                    | Shape::Ellipse { .. }
+                    | Shape::Pen(_)
+                    | Shape::Highlight(_)
+                    | Shape::Redact { .. }
+                    | Shape::Spotlight(_) => return None,
+                };
+                Some((entry.id, label))
+            })
+    }
+}
+
+/// For each of `shapes`, in order, how many of them up to and including it are steps: a
+/// step's number, from 1 (F-41).
+pub fn step_numbers<'a>(
+    shapes: impl IntoIterator<Item = &'a Shape>,
+) -> impl Iterator<Item = usize> {
+    shapes.into_iter().scan(0, |steps, shape| {
+        if let Shape::Step(_) = shape {
+            *steps += 1;
+        }
+        Some(*steps)
+    })
 }
 
 /// The parts of `base` the spotlights among `shapes` dim: everything outside all of them, as
@@ -190,6 +227,7 @@ pub enum Shape {
     },
     /// Dims the image outside it (F-43).
     Spotlight(RectF),
+    Step(Step),
 }
 
 /// Whether a rectangle or ellipse is drawn as an outline or filled with the style colour.
@@ -417,6 +455,38 @@ mod tests {
                 assert_eq!(dimmed, usize::from(!lit), "pixel at ({x}, {y})");
             }
         }
+    }
+
+    #[test]
+    fn f41_removing_a_step_renumbers_the_ones_after_it_and_undo_numbers_them_back() {
+        use crate::{Command, History, Look, Tool};
+        let mut history = History::new(Document::new(Arc::new(
+            RgbaImage::new(1, 1, vec![0; 4]).unwrap(),
+        )));
+        let look = Look::default_for(Tool::Step);
+        let add = |history: &mut History, command| history.apply(command).unwrap();
+        for x in [10.0, 20.0, 30.0] {
+            let step = Tool::Step.command(&[PointF { x, y: 5.0 }], false, &look);
+            add(&mut history, step.unwrap());
+            let arrow =
+                Tool::Arrow.command(&[PointF { x, y: 0.0 }, PointF { x, y: 9.0 }], false, &look);
+            add(&mut history, arrow.unwrap());
+        }
+        let numbers = |document: &Document| {
+            document
+                .labels()
+                .map(|(_, label)| match label {
+                    Label::Centred { text, centre_x, .. } => format!("{text}@{centre_x}"),
+                    Label::Block(block) => panic!("no text was added: {block:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(numbers(history.document()), ["1@10", "2@20", "3@30"]);
+        let first = history.document().shapes()[0].id;
+        add(&mut history, Command::Remove(first));
+        assert_eq!(numbers(history.document()), ["1@20", "2@30"]);
+        history.undo().unwrap();
+        assert_eq!(numbers(history.document()), ["1@10", "2@20", "3@30"]);
     }
 
     #[test]

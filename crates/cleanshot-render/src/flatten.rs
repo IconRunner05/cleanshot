@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use cleanshot_core::{
     Color, Document, Fill, GlyphMask, PointF, RectF, RgbaImage, SPOTLIGHT_DIM, Shape, ShapeEntry,
-    TextMasks, arrow_head, dimmed_areas,
+    ShapeId, TextMasks, arrow_head, dimmed_areas, number_color,
 };
 use tiny_skia::{
     BlendMode, ColorU8, FillRule, IntRect, IntSize, LineCap, LineJoin, Paint, Path, PathBuilder,
@@ -193,14 +193,24 @@ fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry, masks: &TextMasks) -> Result<()
         Shape::Redact { rect, mode } => redact(pixmap, *rect, *mode),
         // F-43: flatten dims around every spotlight before it draws any shape.
         Shape::Spotlight(_) => {}
-        Shape::Text(_) => {
-            let layers = masks
-                .layers(entry.id)
-                .ok_or(Error::MissingTextMask(entry.id))?;
-            for layer in layers {
-                glyphs(pixmap, layer, layer.color().unwrap_or(entry.style.color));
-            }
+        Shape::Text(_) => text(pixmap, entry.id, masks, entry.style.color)?,
+        Shape::Step(step) => {
+            fill(
+                pixmap,
+                skia_rect(step.circle()).and_then(PathBuilder::from_oval),
+                &paint,
+            );
+            text(pixmap, entry.id, masks, number_color(entry.style.color))?;
         }
+    }
+    Ok(())
+}
+
+/// Paints the glyph layers of the shape `id` in `color`, or in a colour glyph's own colour.
+fn text(pixmap: &mut Pixmap, id: ShapeId, masks: &TextMasks, color: Color) -> Result<(), Error> {
+    let layers = masks.layers(id).ok_or(Error::MissingTextMask(id))?;
+    for layer in layers {
+        glyphs(pixmap, layer, layer.color().unwrap_or(color));
     }
     Ok(())
 }
@@ -475,6 +485,27 @@ mod tests {
             flatten(history.document(), &TextMasks::default()),
             Err(Error::MissingTextMask(missing)) if missing == id
         ));
+    }
+
+    #[test]
+    fn f41_a_step_fills_its_circle_and_draws_its_number_in_the_contrasting_colour() {
+        let mut history = history(RgbaImage::new(40, 40, [0, 0, 0, 255].repeat(1600)).unwrap());
+        let look = cleanshot_core::Look::default_for(cleanshot_core::Tool::Step);
+        let centre = PointF { x: 20.0, y: 20.0 };
+        let step = cleanshot_core::Tool::Step.command(&[centre], false, &look);
+        history.apply(step.unwrap()).unwrap();
+        let id = history.document().shapes()[0].id;
+        assert!(matches!(
+            flatten(history.document(), &TextMasks::default()),
+            Err(Error::MissingTextMask(missing)) if missing == id
+        ));
+        let mut masks = TextMasks::default();
+        masks.insert(id, vec![mask(20, 20, 1, &[255], None)]);
+        let flat = flatten(history.document(), &masks).unwrap().image().clone();
+        let red = look.style().color;
+        assert_eq!(pixel(&flat, 20, 20), [255, 255, 255, 255]);
+        assert_eq!(pixel(&flat, 20, 10), [red.r, red.g, red.b, 255]);
+        assert_eq!(pixel(&flat, 1, 1), [0, 0, 0, 255]);
     }
 
     #[test]

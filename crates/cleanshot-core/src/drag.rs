@@ -77,7 +77,8 @@ impl Drag {
             | Tool::Highlighter
             | Tool::Redact
             | Tool::Crop
-            | Tool::Spotlight => Some(Start::Drag(Self::Draw {
+            | Tool::Spotlight
+            | Tool::Step => Some(Start::Drag(Self::Draw {
                 tool,
                 look,
                 path: vec![at],
@@ -177,7 +178,8 @@ fn constrained_handle(shape: &Shape, handle: Handle, to: PointF) -> PointF {
         | Shape::Text(_)
         | Shape::Highlight(_)
         | Shape::Redact { .. }
-        | Shape::Spotlight(_) => None,
+        | Shape::Spotlight(_)
+        | Shape::Step(_) => None,
     };
     match (handle, ends) {
         (Handle::Start, Some((_, end))) => snapped_to_45_degrees(end, to),

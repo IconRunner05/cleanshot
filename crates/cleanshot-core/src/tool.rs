@@ -3,6 +3,7 @@ use crate::drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::look::Look;
 use crate::selection::box_between;
+use crate::step::Step;
 
 /// What a press or drag on the canvas does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -18,6 +19,7 @@ pub enum Tool {
     Crop,
     Text,
     Spotlight,
+    Step,
 }
 
 impl Tool {
@@ -34,6 +36,7 @@ impl Tool {
             Shape::Highlight(_) => Self::Highlighter,
             Shape::Redact { .. } => Self::Redact,
             Shape::Spotlight(_) => Self::Spotlight,
+            Shape::Step(_) => Self::Step,
         }
     }
 
@@ -106,6 +109,7 @@ impl Tool {
                 })
             }),
             Self::Spotlight => has_area.then(|| add(Shape::Spotlight(area))),
+            Self::Step => Some(add(Shape::Step(Step::new(last, look.text_size())))),
             Self::Crop => has_area.then_some(Command::SetCrop(Some(area))),
         }
     }

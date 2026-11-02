@@ -119,9 +119,7 @@ impl TextBlock {
     /// Each line's text and where its baseline starts, in image pixels: the line box's top,
     /// plus half the leading Inter leaves in it, plus Inter's ascent.
     pub fn lines(&self) -> impl Iterator<Item = (&str, PointF)> {
-        let em = f32::from(INTER_UNITS_PER_EM);
-        let (ascent, descent) = (f32::from(INTER_ASCENT) / em, f32::from(INTER_DESCENT) / em);
-        let first = self.at.y + ((LINE_HEIGHT - ascent - descent) / 2.0 + ascent) * self.size;
+        let first = baseline(self.at.y, self.size);
         let step = LINE_HEIGHT * self.size;
         let x = self.at.x;
         self.text.split('\n').scan(first, move |y, line| {
@@ -134,6 +132,30 @@ impl TextBlock {
     pub(crate) fn moved_to(&self, at: PointF) -> Self {
         Self { at, ..self.clone() }
     }
+}
+
+/// The baseline of a line whose line box has its top at `top`, in Inter at `size` pixels per
+/// em: the top, plus half the leading Inter leaves in the box, plus Inter's ascent.
+#[must_use]
+pub fn baseline(top: f32, size: f32) -> f32 {
+    let em = f32::from(INTER_UNITS_PER_EM);
+    let (ascent, descent) = (f32::from(INTER_ASCENT) / em, f32::from(INTER_DESCENT) / em);
+    top + ((LINE_HEIGHT - ascent - descent) / 2.0 + ascent) * size
+}
+
+/// Text a shape shows, as the screen and the export both lay it out (F-34, F-41).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Label<'a> {
+    /// Laid out from its top-left corner, as a text shape is.
+    Block(&'a TextBlock),
+    /// One line, `size` pixels per em, horizontally centred on `centre_x`, its line box's top
+    /// at `top`.
+    Centred {
+        text: String,
+        size: f32,
+        centre_x: f32,
+        top: f32,
+    },
 }
 
 /// The 8-bit coverage of one glyph layer of a text shape, in image pixels, as DirectWrite

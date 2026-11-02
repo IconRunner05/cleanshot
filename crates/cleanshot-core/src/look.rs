@@ -47,7 +47,8 @@ impl Look {
             | Tool::Redact
             | Tool::Crop
             | Tool::Text
-            | Tool::Spotlight => Style {
+            | Tool::Spotlight
+            | Tool::Step => Style {
                 color: ANNOTATION_RED,
                 stroke_width: 3.0,
             },
@@ -101,6 +102,7 @@ impl Look {
                 mode: self.redact,
             },
             Shape::Text(block) => Shape::Text(self.dress_text(&block)),
+            Shape::Step(step) => Shape::Step(step.with_size(self.text_size)),
             shape @ (Shape::Arrow { .. }
             | Shape::Line { .. }
             | Shape::Pen(_)
@@ -176,6 +178,10 @@ impl Look {
                 text_size: block.size(),
                 ..look
             },
+            Shape::Step(step) => Self {
+                text_size: step.size(),
+                ..look
+            },
             Shape::Arrow { .. }
             | Shape::Line { .. }
             | Shape::Pen(_)
@@ -215,7 +221,7 @@ impl Setting {
             Tool::Rectangle | Tool::Ellipse => &[Self::Color, Self::StrokeWidth, Self::Fill],
             Tool::Highlighter => &[Self::Color],
             Tool::Redact => &[Self::Redact],
-            Tool::Text => &[Self::Color, Self::TextSize],
+            Tool::Text | Tool::Step => &[Self::Color, Self::TextSize],
             Tool::Select | Tool::Crop | Tool::Spotlight => &[],
         }
     }

@@ -13,6 +13,7 @@ mod look;
 mod selection;
 mod settings;
 mod settings_change;
+mod step;
 mod text;
 mod text_edit;
 mod tool;
@@ -20,7 +21,7 @@ mod tool;
 pub use delivery::{Delivered, DeliveryError, Output, delivery_notice, save_as_notice};
 pub use document::{
     Color, Document, Fill, Frame, ImageError, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM,
-    Shape, ShapeEntry, ShapeId, Style, arrow_head, dimmed_areas,
+    Shape, ShapeEntry, ShapeId, Style, arrow_head, dimmed_areas, step_numbers,
 };
 pub use drag::{Drag, Press, Start};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
@@ -36,9 +37,10 @@ pub use settings::{
     SaveFormat, Settings, SettingsProblem,
 };
 pub use settings_change::{Applied, SettingsNotice, SettingsSaveError, settings_notice};
+pub use step::{STEP_DIAMETER, Step, number_color};
 pub use text::{
     DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,
-    INTER_UNITS_PER_EM, LINE_HEIGHT, TextBlock, TextBlockError, TextMasks,
+    INTER_UNITS_PER_EM, LINE_HEIGHT, Label, TextBlock, TextBlockError, TextMasks, baseline,
 };
 pub use text_edit::{
     BoxPress, CaretMove, LineMove, LinePosition, TextEdit, TextOrigin, commit_text,

@@ -4,8 +4,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, Frame, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM,
-    Shape, ShapeId, Style, arrow_head, dimmed_areas, handles,
+    Color, Command, Document, Fill, Frame, Label, PointF, RectF, RedactMode, RgbaImage,
+    SPOTLIGHT_DIM, Shape, ShapeId, Style, arrow_head, dimmed_areas, handles, number_color,
+    step_numbers,
 };
 use cleanshot_render::{Redacted, redacted};
 use gpui::{
@@ -17,7 +18,7 @@ use gpui::{
 use smallvec::smallvec;
 
 use crate::placement::{Fit, Placement};
-use crate::text::paint_text;
+use crate::text::paint_label;
 use crate::theme::ACCENT;
 
 const ELLIPSE_SEGMENTS: u16 = 64;
@@ -234,8 +235,16 @@ pub(crate) fn document_canvas(
             let dimmed = dimmed_areas(image, shown.iter().map(|(_, shape, _)| *shape));
             paint_dim(&dimmed, fit.image_bounds, &fit, window);
             let mut selected_shape = None;
-            for (id, shape, style) in shown {
-                paint_shape(shape, *style, &fit, &redactions, &dimmed, window, cx);
+            let numbers =
+                step_numbers(shown.iter().map(|(_, shape, _)| *shape)).collect::<Vec<_>>();
+            for ((id, shape, style), number) in shown.into_iter().zip(numbers) {
+                let painting = Painting {
+                    fit: &fit,
+                    redactions: &redactions,
+                    dimmed: &dimmed,
+                    number,
+                };
+                paint_shape(shape, *style, &painting, window, cx);
                 if id.is_some() && overlay.selected == id {
                     selected_shape = Some(shape);
                 }
@@ -387,15 +396,28 @@ fn paint_handle(centre: Point<Pixels>, window: &mut Window) {
     ));
 }
 
+/// What a shape is painted against: the fit, the redaction previews, the spotlights' dimmed
+/// areas, and the number a step at this place in the drawing order shows.
+struct Painting<'a> {
+    fit: &'a Fit,
+    redactions: &'a RedactionPreviews,
+    dimmed: &'a [RectF],
+    number: usize,
+}
+
 fn paint_shape(
     shape: &Shape,
     style: Style,
-    fit: &Fit,
-    redactions: &RedactionPreviews,
-    dimmed: &[RectF],
+    painting: &Painting,
     window: &mut Window,
     cx: &mut App,
 ) {
+    let Painting {
+        fit,
+        redactions,
+        dimmed,
+        number,
+    } = *painting;
     let color = rgba(style.color);
     let width = px(style.stroke_width * fit.scale);
     let stroke = PathBuilder::stroke(width);
@@ -452,7 +474,7 @@ fn paint_shape(
             let points: Vec<_> = points.iter().map(|p| fit.point(*p)).collect();
             paint_polygon(window, stroke, &points, false, color);
         }
-        Shape::Text(block) => paint_text(block, color, fit, window, cx),
+        Shape::Text(block) => paint_label(&Label::Block(block), color, fit, window, cx),
         Shape::Redact { rect, mode } => {
             // D-78: a redaction is the capture with its pixels destroyed, so it dims like the capture.
             if let Some(painted) = redactions.paint(*rect, *mode, fit, window) {
@@ -461,6 +483,22 @@ fn paint_shape(
         }
         // F-43: the canvas dims around every spotlight before it paints any shape.
         Shape::Spotlight(_) => {}
+        Shape::Step(step) => {
+            paint_polygon(
+                window,
+                PathBuilder::fill(),
+                &ellipse(fit.bounds(step.circle())),
+                true,
+                color,
+            );
+            paint_label(
+                &step.label(number),
+                rgba(number_color(style.color)),
+                fit,
+                window,
+                cx,
+            );
+        }
     }
 }
 

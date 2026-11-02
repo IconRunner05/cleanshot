@@ -23,7 +23,7 @@ pub enum Error {
     TooLarge { width: u32, height: u32 },
     #[error("the crop {0:?} does not cover any pixel of the image")]
     CropOutsideImage(RectF),
-    #[error("text shape {0:?} has no glyph masks")]
+    #[error("shape {0:?} shows text but has no glyph masks")]
     MissingTextMask(ShapeId),
     #[error("the flattened pixels did not form an image")]
     Output(#[source] ImageError),

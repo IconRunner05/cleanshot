@@ -54,8 +54,8 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
                 .map(|(handle, at)| (Handle::Box(handle), at))
                 .collect()
         }),
-        // F-34: text resizes by its font size, which the text tool does not offer yet.
-        Shape::Text(_) => Vec::new(),
+        // F-34, F-41: text and steps resize by their font size, on the property strip.
+        Shape::Text(_) | Shape::Step(_) => Vec::new(),
     }
 }
 
@@ -133,6 +133,7 @@ pub fn moved(shape: &Shape, offset: PointF) -> Shape {
         },
         Shape::Pen(points) => Shape::Pen(points.iter().copied().map(shift).collect()),
         Shape::Text(block) => Shape::Text(block.moved_to(shift(block.at()))),
+        Shape::Step(step) => Shape::Step(step.moved_to(shift(step.centre()))),
         Shape::Highlight(rect) => Shape::Highlight(shift_rect(*rect)),
         Shape::Spotlight(rect) => Shape::Spotlight(shift_rect(*rect)),
         Shape::Redact { rect, mode } => Shape::Redact {
@@ -189,7 +190,9 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
             | Shape::Spotlight(_),
             Handle::Start | Handle::End,
         )
-        | (Shape::Text(_), Handle::Box(_) | Handle::Start | Handle::End) => shape.clone(),
+        | (Shape::Text(_) | Shape::Step(_), Handle::Box(_) | Handle::Start | Handle::End) => {
+            shape.clone()
+        }
     }
 }
 
@@ -243,6 +246,7 @@ pub fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
             fill: Fill::Solid,
         } => inside_ellipse(grown(*rect, reach), point),
         Shape::Text(block) => inside(grown(block.extent(), reach), point),
+        Shape::Step(step) => inside_ellipse(grown(step.circle(), reach), point),
     }
 }
 
@@ -270,6 +274,7 @@ fn bounds(shape: &Shape) -> Option<RectF> {
             Some(box_between(low, high))
         }
         Shape::Text(block) => Some(block.extent()),
+        Shape::Step(step) => Some(step.circle()),
         Shape::Arrow { .. } | Shape::Line { .. } => None,
     }
 }
