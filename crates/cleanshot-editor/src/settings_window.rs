@@ -246,6 +246,7 @@ impl Render for SettingsView {
                 cx,
                 |settings, choice| settings.after_capture = choice,
             ))
+            .child(show_thumbnail_row(settings.show_thumbnail, theme, cx))
             .child(self.start_with_windows_row(theme, cx));
         let saving = self.saving_section(theme, cx);
         let hotkeys = section("Hotkeys", theme)
@@ -420,6 +421,18 @@ impl SettingsView {
                 })),
             )
     }
+}
+
+fn show_thumbnail_row(on: bool, theme: Theme, cx: &mut Context<SettingsView>) -> impl IntoElement {
+    row().child(label("Thumbnail", theme)).child(
+        control("Thumbnail", "Show a thumbnail", Role::CheckBox, on, theme)
+            .aria_toggled(if on { Toggled::True } else { Toggled::False })
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.edit(|settings| settings.show_thumbnail = !on);
+                cx.notify();
+            }))
+            .child("Show a thumbnail after Copy or Save"),
+    )
 }
 
 /// A titled panel of CHARTER 4's material (F-55).

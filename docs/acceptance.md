@@ -4,7 +4,7 @@ The hands-on check the owner runs on the reference PC with a release candidate b
 
 Start from a release candidate exe downloaded from its GitHub pre-release, with no `cleanshot.toml` next to it or in `%APPDATA%\Cleanshot` from an earlier run (C-05). Default hotkeys: PrtSc captures a region (Ctrl+Shift+4 if Windows' "Use the Print screen key to open screen capture" is on), Shift+PrtSc the last region, Ctrl+PrtSc the full screen.
 
-F-08 to F-12 get their steps when they are built.
+F-08, F-10, F-11 and F-12 get their steps when they are built.
 
 ## Start and tray
 
@@ -24,6 +24,7 @@ F-08 to F-12 get their steps when they are built.
 - [ ] F-22: Capture and press Ctrl+Shift+S. The Windows save dialog opens. Pick an existing file: it asks before replacing it.
 - [ ] F-06: Press Shift+PrtSc. The last copied or saved rectangle is copied at once, with no overlay.
 - [ ] F-07: Press Ctrl+PrtSc. The monitor under the pointer is captured.
+- [ ] F-09: Capture and press Enter. A thumbnail slides in at the bottom-right of that monitor, and the window you were in keeps the focus. Hover it: it stays, with Save and Dismiss along its bottom. Move away: it fades after about 5 s. Capture again and drag the thumbnail into Word or Explorer: the image or a PNG file lands there. Capture again and click it: the editor opens with the capture.
 - [ ] F-13: Turn off Settings > Accessibility > Visual effects > Animation effects. The overlay appears with no fade. Turn on a high-contrast theme: the overlay and toolbar use its colours.
 
 ## Editor
@@ -42,6 +43,6 @@ F-08 to F-12 get their steps when they are built.
 
 ## Settings and policy
 
-- [ ] F-55: Open Settings from the tray. Change the save folder, the format and a hotkey: each takes effect at once with no Save button.
+- [ ] F-55: Open Settings from the tray. Change the save folder, the format and a hotkey: each takes effect at once with no Save button. Turn off "Show a thumbnail after Copy or Save" and capture: no thumbnail appears.
 - [ ] F-56: Turn on Start with Windows, sign out and back in: Cleanshot starts. Turn it off: it no longer does.
 - [ ] F-57: With the Group Policy template from the release (`Cleanshot.admx`, `Cleanshot.adml`), enable "Copy captures only, never save them": Save and Save As are turned off in the overlay and the editor. Enable "Keep the settings window closed": Settings leaves the tray menu.
