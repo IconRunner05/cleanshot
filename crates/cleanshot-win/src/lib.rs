@@ -14,6 +14,7 @@ pub mod save;
 mod selection;
 pub mod settings_file;
 mod size_pill;
+pub mod startup;
 pub mod text;
 mod toolbar;
 pub mod tray;
