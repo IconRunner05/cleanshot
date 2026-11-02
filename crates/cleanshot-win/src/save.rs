@@ -154,6 +154,7 @@ pub fn is_inside(path: &Path, folder: &Path) -> bool {
     let (path, folder) = (lowered(&path), lowered(&folder));
     path.len() > folder.len() && path.starts_with(&folder)
 }
+
 /// F-22: writes `bytes` to `path`, replacing the file there, which the user has confirmed.
 /// The file appears whole or not at all: the bytes go to a partial file in the same folder,
 /// which `fs::rename` (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`) moves over `path`. No

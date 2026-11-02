@@ -266,6 +266,7 @@ impl OffTip {
         };
     }
 }
+
 /// What one monitor's surface keeps to paint the toolbar: the frozen capture blurred through
 /// a crop to the pill, so each paint blurs only what the pill shows (CHARTER 4, "Live blur").
 pub(crate) struct Paint {
