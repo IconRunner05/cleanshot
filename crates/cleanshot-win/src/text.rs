@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 
-use cleanshot_core::{Color, Document, GlyphMask, INTER, PointF, Shape, TextBlock, TextMasks};
+use cleanshot_core::{
+    Color, Document, GlyphMask, INTER, Label, PointF, TextBlock, TextMasks, baseline,
+};
 use windows::Win32::Foundation::{DWRITE_E_NOCOLOR, E_INVALIDARG, RECT};
 use windows::Win32::Globalization::GetUserDefaultLocaleName;
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
@@ -29,10 +31,10 @@ use windows::core::{BOOL, ComObject, HSTRING, IUnknown, Ref, implement};
 
 use crate::Error;
 
-/// F-34: the glyph coverage of every text shape in `document`, made by the glyph path GPUI
-/// draws text with on screen: Inter from core's bytes, laid out by DirectWrite with natural
-/// measuring, each line on core's baseline, raw grayscale coverage with no gamma, and one
-/// layer per colour for colour glyphs.
+/// F-34, F-41, F-42: the glyph coverage of every label in `document`, keyed by the shape
+/// showing it, made by the glyph path GPUI draws text with on screen: Inter from core's bytes,
+/// laid out by DirectWrite with natural measuring, each line on core's baseline, raw grayscale
+/// coverage with no gamma, and one layer per colour for colour glyphs.
 ///
 /// # Errors
 ///
@@ -40,12 +42,17 @@ use crate::Error;
 pub fn masks(document: &Document) -> Result<TextMasks, Error> {
     let fonts = Fonts::inter().map_err(Error::Text)?;
     let mut masks = TextMasks::default();
-    for entry in document.shapes() {
-        let Shape::Text(block) = &entry.shape else {
-            continue;
+    for (id, label) in document.labels() {
+        let layers = match label {
+            Label::Block(block) => fonts.layers(block),
+            Label::Centred {
+                text,
+                size,
+                centre_x,
+                top,
+            } => fonts.centred_layers(&text, size, centre_x, top),
         };
-        let layers = fonts
-            .layers(block)
+        let layers = layers
             .map_err(Error::Text)?
             .into_iter()
             .map(|layer| {
@@ -59,7 +66,7 @@ pub fn masks(document: &Document) -> Result<TextMasks, Error> {
                 )
             })
             .collect::<Result<_, _>>()?;
-        masks.insert(entry.id, layers);
+        masks.insert(id, layers);
     }
     Ok(masks)
 }
@@ -264,24 +271,49 @@ impl Fonts {
         let mut layers = Vec::new();
         for (line, baseline) in block.lines() {
             let text: Vec<u16> = line.encode_utf16().collect();
-            let runs = ComObject::new(GlyphRuns {
-                factory: self.factory.clone(),
-                baseline,
-                layers: RefCell::default(),
-            });
-            // SAFETY: the layout and the renderer live until Draw returns, and Draw calls the
-            // renderer on this thread only.
-            unsafe {
-                self.layout(&text, &format)?.Draw(
-                    None,
-                    &runs.to_interface::<IDWriteTextRenderer>(),
-                    0.0,
-                    0.0,
-                )?;
-            }
-            layers.append(&mut runs.layers.borrow_mut());
+            layers.append(&mut self.line_layers(&self.layout(&text, &format)?, baseline)?);
         }
         Ok(layers)
+    }
+
+    /// Every glyph layer of `text` on one line at `size`, its width centred on `centre_x` and
+    /// its line box's top at `top`.
+    fn centred_layers(
+        &self,
+        text: &str,
+        size: f32,
+        centre_x: f32,
+        top: f32,
+    ) -> windows::core::Result<Vec<Layer>> {
+        let text: Vec<u16> = text.encode_utf16().collect();
+        let layout = self.layout(&text, &self.format(size)?)?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        // SAFETY: the layout is owned here and `metrics` is writable.
+        unsafe { layout.GetMetrics(&raw mut metrics)? };
+        let baseline = PointF {
+            x: centre_x - metrics.width / 2.0,
+            y: baseline(top, size),
+        };
+        self.line_layers(&layout, baseline)
+    }
+
+    /// Every glyph layer of the one-line `layout`, its glyph runs placed on `baseline`.
+    fn line_layers(
+        &self,
+        layout: &IDWriteTextLayout,
+        baseline: PointF,
+    ) -> windows::core::Result<Vec<Layer>> {
+        let runs = ComObject::new(GlyphRuns {
+            factory: self.factory.clone(),
+            baseline,
+            layers: RefCell::default(),
+        });
+        // SAFETY: the layout and the renderer live until Draw returns, and Draw calls the
+        // renderer on this thread only.
+        unsafe {
+            layout.Draw(None, &runs.to_interface::<IDWriteTextRenderer>(), 0.0, 0.0)?;
+        }
+        Ok(runs.layers.take())
     }
 }
 
@@ -601,8 +633,8 @@ mod tests {
     use std::sync::Arc;
 
     use cleanshot_core::{
-        Command, History, INTER_ASCENT, INTER_DESCENT, INTER_UNITS_PER_EM, LINE_HEIGHT, RgbaImage,
-        Style,
+        Bubble, Command, History, INTER_ASCENT, INTER_DESCENT, INTER_UNITS_PER_EM, LINE_HEIGHT,
+        RgbaImage, Shape, Style,
     };
     use windows::Win32::Graphics::DirectWrite::{DWRITE_FONT_METRICS, IDWriteFontCollection1};
 
@@ -617,12 +649,12 @@ mod tests {
             .expect("a positive size and a measured width")
     }
 
-    fn document(text: &str) -> Document {
+    fn document(shape: Shape) -> Document {
         let image = RgbaImage::new(1, 1, vec![0; 4]).expect("1x1 RGBA");
         let mut history = History::new(Document::new(Arc::new(image)));
         history
             .apply(Command::Add {
-                shape: Shape::Text(block(text)),
+                shape,
                 style: Style {
                     color: Color {
                         r: 0,
@@ -714,7 +746,7 @@ mod tests {
 
     #[test]
     fn f34_a_documents_masks_are_the_same_on_every_call() {
-        let document = document("Hg");
+        let document = document(Shape::Text(block("Hg")));
         let id = document.shapes()[0].id;
         let first = masks(&document).expect("the masks are made");
         assert!(first.layers(id).is_some_and(|layers| !layers.is_empty()));
@@ -723,12 +755,53 @@ mod tests {
 
     #[test]
     fn f34_a_text_with_no_ink_still_has_its_layers_recorded() {
-        let document = document("  ");
+        let document = document(Shape::Text(block("  ")));
         let id = document.shapes()[0].id;
         assert_eq!(
             masks(&document).expect("the masks are made").layers(id),
             Some(&[][..])
         );
+    }
+
+    #[test]
+    fn f42_a_bubbles_text_has_its_masks() {
+        let document = document(Shape::Bubble(Bubble::new(
+            block("Hg"),
+            PointF { x: 0.0, y: 0.0 },
+        )));
+        let id = document.shapes()[0].id;
+        let masks = masks(&document).expect("the masks are made");
+        assert!(masks.layers(id).is_some_and(|layers| !layers.is_empty()));
+    }
+
+    #[test]
+    fn f41_a_centred_label_is_centred_on_its_x_with_its_top_from_core() {
+        let fonts = Fonts::inter().expect("Inter loads");
+        let metrics = metrics(&fonts);
+        let cap_height = f32::from(metrics.capHeight) / f32::from(metrics.designUnitsPerEm) * SIZE;
+        let (centre_x, line_top) = (100.0, 40.0);
+        for text in ["1", "9", "10", "99"] {
+            let layers = fonts
+                .centred_layers(text, SIZE, centre_x, line_top)
+                .expect("the number is drawn");
+            let inked = || layers.iter().filter(|layer| layer.width > 0);
+            let left = inked().map(|layer| layer.left).min().expect("ink");
+            let right = inked()
+                .map(|layer| layer.left + i32::try_from(layer.width).expect("a glyph's width"))
+                .max()
+                .expect("ink");
+            let ink_centre = f64::from(left + right) / 2.0;
+            assert!(
+                (ink_centre - f64::from(centre_x)).abs() <= 2.0,
+                "{text}'s ink is centred at {ink_centre}, not {centre_x}"
+            );
+            let expected = f64::from(baseline(line_top, SIZE) - cap_height).floor();
+            assert!(
+                (top(&layers) - expected).abs() <= 1.0,
+                "{text}'s ink starts at row {} where core's top puts it at {expected}",
+                top(&layers)
+            );
+        }
     }
 
     #[test]
