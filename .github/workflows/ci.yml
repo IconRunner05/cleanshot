@@ -241,7 +241,7 @@ jobs:
           # Portable mode (C-05). Ctrl+Shift+4, because the Snipping Tool may hold PrtSc (F-52).
           printf '[hotkeys]\nregion = "Ctrl+Shift+4"\n' > "$run/cleanshot.toml"
           "$run/cleanshot.exe" --log &
-          sleep 3
+          # --overlays waits for the tray-ready line, then 3 s, before the first press (D-88).
           # Each press waits for the last overlay's P-01 line and for it to close, so a slow
           # overlay is measured, not raced; one that never shows or closes fails the run.
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --overlays "$run/cleanshot.log" || failed=$?

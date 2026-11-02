@@ -28,6 +28,10 @@ const BENCH_REDRAWS: NonZeroU32 = NonZeroU32::new(600).expect("600 is not zero")
 const OVERLAY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The pause after an overlay closes before the next press, as between a user's captures.
 const OVERLAY_SETTLE: Duration = Duration::from_millis(500);
+/// How long the exe has to log P-03's tray-ready line before `--overlays` fails.
+const TRAY_TIMEOUT: Duration = Duration::from_secs(30);
+/// D-88: the first press comes this long after the tray is ready, so it is not timed during start-up.
+const START_SETTLE: Duration = Duration::from_secs(3);
 /// How long after the last overlay closes the exe has to log its P-04 after-use sample, which
 /// it takes 10 s after.
 const AFTER_USE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -39,22 +43,9 @@ fn main() {
         [_, flag, path] if flag == "--report" => path.clone(),
         [_, flag, inputs @ ..] if flag == "--budgets" => std::process::exit(judge(inputs)),
         [_, flag, log] if flag == "--overlays" => {
-            let shown = |press| perf_lines(Path::new(log), "P-01", "overlay_visible_ms") >= press;
-            if let Err(error) = open_and_cancel_overlays(
-                budgets::OVERLAY_PRESSES,
-                OVERLAY_TIMEOUT,
-                OVERLAY_SETTLE,
-                shown,
-            ) {
+            if let Err(error) = open_overlays_after_start(Path::new(log)) {
                 eprintln!("{error}");
                 std::process::exit(1);
-            }
-            // P-04: the judge reads the after-use sample, or says it is missing.
-            let waited = Instant::now();
-            while perf_lines(Path::new(log), "P-04", "private_working_set_bytes") == 0
-                && waited.elapsed() < AFTER_USE_TIMEOUT
-            {
-                std::thread::sleep(Duration::from_millis(250));
             }
             return;
         }
@@ -196,6 +187,37 @@ fn log_text(path: &str) -> String {
 
 /// How many `budget` perf lines (P-01 for an overlay shown, P-02 for a copy) cleanshot.exe
 /// has logged in its `--log` file so far.
+/// `--overlays LOG`: once the exe's tray is ready and settled (D-88), opens and cancels
+/// [`budgets::OVERLAY_PRESSES`] overlays, then waits for the after-use P-04 sample.
+fn open_overlays_after_start(log: &Path) -> Result<(), String> {
+    let started = Instant::now();
+    while !(log.exists() && perf_lines(log, "P-03", "tray_ready_ms") > 0) {
+        if started.elapsed() >= TRAY_TIMEOUT {
+            return Err(format!(
+                "the exe logged no P-03 tray_ready_ms line within {TRAY_TIMEOUT:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(START_SETTLE);
+    let shown = |press| perf_lines(log, "P-01", "overlay_visible_ms") >= press;
+    open_and_cancel_overlays(
+        budgets::OVERLAY_PRESSES,
+        OVERLAY_TIMEOUT,
+        OVERLAY_SETTLE,
+        shown,
+    )
+    .map_err(|error| error.to_string())?;
+    // P-04: the judge reads the after-use sample, or says it is missing.
+    let waited = Instant::now();
+    while perf_lines(log, "P-04", "private_working_set_bytes") == 0
+        && waited.elapsed() < AFTER_USE_TIMEOUT
+    {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(())
+}
+
 fn perf_lines(log: &Path, budget: &str, key: &str) -> u32 {
     let log = std::fs::read_to_string(log).expect("cleanshot.exe was started with --log here");
     let shown = log
