@@ -5,5 +5,5 @@ pub enum CaptureMode {
     #[default]
     Region,
     Window,
-    Screen,
+    FullScreen,
 }
