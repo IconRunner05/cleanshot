@@ -60,13 +60,19 @@ jobs:
       - name: The Group Policy template is well-formed XML (F-57)
         run: python3 -c 'import sys, xml.dom.minidom; [xml.dom.minidom.parse(path) for path in sys.argv[1:]]' policy/Cleanshot.admx policy/en-US/Cleanshot.adml
 
-      - name: Release files are the exe, its SBOM, the Group Policy template and their checksums
+      - name: Release files are the exe, its SBOM, the Group Policy template, the winget manifest and their checksums
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir dist
           cp "$RUNNER_TEMP/exe/cleanshot.exe" "dist/cleanshot-$VERSION-x64.exe"
+          # D-98: the manifest names this exe's own checksum.
+          sha=$(sha256sum "dist/cleanshot-$VERSION-x64.exe" | cut -d' ' -f1)
+          for template in winget/*.yaml; do
+            sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHA256@/$sha/g" "$template" > "dist/${template#winget/}"
+          done
+          if grep -n '@VERSION@\|@SHA256@' dist/*.yaml; then echo "FAIL: a winget placeholder is left"; exit 1; fi
           # F-57: Group Policy pairs an .adml with its .admx by name, so neither carries the version.
           cp policy/Cleanshot.admx policy/en-US/Cleanshot.adml dist/
           cargo cyclonedx --manifest-path crates/cleanshot-app/Cargo.toml --format json \
@@ -75,6 +81,9 @@ jobs:
           cd dist
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
+          listed=$(grep " cleanshot-$VERSION-x64.exe\$" SHA256SUMS | cut -d' ' -f1)
+          grep -qxF "    InstallerSha256: \"$listed\"" Cleanshot.Cleanshot.installer.yaml ||
+            { echo "FAIL: the winget manifest's InstallerSha256 is not the exe's line in SHA256SUMS"; exit 1; }
 
       - name: Attest the exe's build provenance
         if: startsWith(github.ref, 'refs/tags/')
