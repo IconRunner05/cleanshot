@@ -35,7 +35,7 @@ These are invariants. Code that violates one is a bug, whatever the task said. E
 | C-02 | Ship **one file**: `cleanshot.exe`. Static CRT, all assets embedded. No side-by-side DLLs, no installer, no runtime prerequisites. **[CI]** |
 | C-03 | Runs as a standard user. Manifest declares `asInvoker`; never writes `HKLM`, `Program Files` or other machine-wide locations. |
 | C-04 | Per-Monitor v2 DPI aware. All capture geometry is in physical pixels. |
-| C-05 | Settings live in `cleanshot.toml` next to the exe if one exists (portable mode), otherwise `%APPDATA%\Cleanshot\cleanshot.toml`. Nothing else is persisted. |
+| C-05 | Settings live in `cleanshot.toml` next to the exe if one exists (portable mode), otherwise `%APPDATA%\Cleanshot\cleanshot.toml`. Nothing else is persisted by Cleanshot; Windows' Save As dialog keeps its own Recent items and per-user dialog history, as any program's does (D-84). |
 | C-06 | Targets `x86_64-pc-windows-msvc`. Keep `aarch64-pc-windows-msvc` building in CI. **[CI]** |
 
 ### Security (from Greenshot's CVE history)
@@ -56,7 +56,7 @@ These are invariants. Code that violates one is a bug, whatever the task said. E
 | ID | Rule |
 | --- | --- |
 | C-20 | No telemetry, analytics, crash upload or update checks. |
-| C-21 | No temp files and no capture history. Pixels stay in memory until the user copies or saves them. |
+| C-21 | No temp files and no capture history kept by Cleanshot. Pixels stay in memory until the user copies or saves them. A copy enters Windows' clipboard history like any program's copy (D-84). |
 | C-22 | Redaction is destructive in every output: covered pixels are replaced, not overlaid. |
 | C-23 | Logging is off by default; `--log` writes to the settings folder, never logs pixel data or clipboard contents. |
 
@@ -455,6 +455,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-84 | 2026-11-02 | C-05 and C-21 bind what Cleanshot itself persists. Windows' Save As dialog adds a saved file to Recent items and to its per-user dialog history in the registry, and Cleanshot leaves that on. A copy goes into Windows' clipboard history (Win+V), and into cloud clipboard sync if the user turned it on, like any program's copy. Both are documented in `docs/security.md` | decided (owner, 2026-11-02) | Owner's call: document Save As history only, and keep copies in clipboard history. Both are what a user expects of a Windows program, and both are under the user's and the PC policy's control |
 | D-81 | 2026-11-01 | The settings window (F-55) applies each change at once, with no Save button: the change is kept only if a settings file holding it reads back with no problem, then the file is replaced atomically and changed hotkeys are registered again; a hotkey another program holds keeps its old key, in use and in the file. The window shows a setting only once something reads it: after capture, save folder, format, and the region, full screen and last region hotkeys. `show_thumbnail`, `show_pointer`, `remember_last_selection` and `start_with_windows` appear with the features that read them (F-09, F-12, F-56). A recorded letter or digit needs Ctrl, Alt or Win; each hotkey has a Reset to its default, the only way back to PrtSc | assumed | Orchestrator's call, 2026-11-01. A switch that does nothing misleads, and live apply matches CHARTER 4's macOS-like look. Checking with the file's own reader means nothing kept now is refused at the next start. A bare letter as a global hotkey would take that key from every program; PrtSc never reaches a window as a key press, so it cannot be recorded |
 | D-80 | 2026-11-01 | The F-44 frame is drawn outside the exported image, never over a capture pixel: the border is 1 px of black at 20% opacity, and the shadow is CHARTER 4's "0 8 24, 25% black" (8 px down, a Gaussian of 12 px standard deviation cut at 24 px, black at 25%), cast by the image and its border together. The image grows by 1 px a side for the border, and by 24 px left and right, 16 px above and 32 px below for the shadow. PNG and the clipboard's PNG keep the margin's transparency; JPG, BMP and the clipboard's `CF_DIBV5` are opaque, every translucent pixel laid over white | assumed | The editor's own panels use this shadow, so an exported image sits in the same look. Many programs read the clipboard's bitmap as `CF_DIB` and ignore its alpha, so a transparent margin would paste black there; programs that read alpha take the PNG. White is the page most pastes land on |
 | D-79 | 2026-11-01 | Under `--log` each capture also writes `capture` lines: how the screen was copied (duplication, or GDI and why), each output's adapter, device name, desktop bounds, rotation and its duplication's first-frame facts from DXGI, and each monitor's share of black pixels | decided (orchestrator, 2026-11-01) | A capture that comes out black on a real PC cannot be reproduced on a hosted runner, which has one virtual adapter; these lines say which path ran and what DXGI reported, and hold no pixels (C-23). |
