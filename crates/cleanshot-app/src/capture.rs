@@ -99,36 +99,7 @@ pub(super) fn capture(
     let shown = Overlay::show(&captures, selected, move |event| {
         // F-13 (D-68): the editor takes over from the overlay with no fade between them.
         let handoff = matches!(event, OverlayEvent::Edit(_));
-        let mut saving_as = None;
-        match event {
-            OverlayEvent::Cancelled => {}
-            OverlayEvent::Copy(selected) => {
-                finishing.last_selection.set(Some(selected));
-                finish(&finishing, &frozen, selected, Output::Copy);
-            }
-            OverlayEvent::Save(selected) => {
-                finishing.last_selection.set(Some(selected));
-                finish(&finishing, &frozen, selected, Output::Save);
-            }
-            OverlayEvent::SaveAs(selected) => {
-                finishing.last_selection.set(Some(selected));
-                match region(&frozen, selected) {
-                    Ok(image) => saving_as = Some(image),
-                    Err(error) => {
-                        finishing.warn(&format!("The capture did not finish: {error}."));
-                    }
-                }
-            }
-            OverlayEvent::Edit(selected) => match region(&frozen, selected) {
-                Ok(image) => pass_on(image, Handoff::Editor),
-                Err(error) => {
-                    finishing.warn(&format!("The capture could not be edited: {error}."));
-                }
-            },
-            OverlayEvent::DrawFailed(error) => {
-                finishing.warn(&format!("The overlay could not draw: {error}."));
-            }
-        }
+        let saving_as = on_overlay_event(&finishing, &frozen, event, &*pass_on);
         // The event arrives inside an overlay window's procedure, so the windows close
         // after it returns, and the Save As dialog opens over the desktop, not the overlay.
         let closing = Rc::clone(&finishing);
@@ -161,6 +132,42 @@ pub(super) fn capture(
     }
     // P-01: the black-share pass runs after the overlay is visible.
     session.log_capture(&copied, &outputs, &captures);
+}
+
+/// What the overlay's `event` does as it arrives: copy, save or edit the selection from
+/// `frozen`. For Save As, the image to save once the overlay has closed.
+fn on_overlay_event(
+    session: &Session,
+    frozen: &[MonitorImage],
+    event: OverlayEvent,
+    pass_on: &dyn Fn(RgbaImage, Handoff),
+) -> Option<RgbaImage> {
+    match event {
+        OverlayEvent::Cancelled => {}
+        OverlayEvent::Copy(selected) => {
+            session.last_selection.set(Some(selected));
+            finish(session, frozen, selected, Output::Copy);
+        }
+        OverlayEvent::Save(selected) => {
+            session.last_selection.set(Some(selected));
+            finish(session, frozen, selected, Output::Save);
+        }
+        OverlayEvent::SaveAs(selected) => {
+            session.last_selection.set(Some(selected));
+            match region(frozen, selected) {
+                Ok(image) => return Some(image),
+                Err(error) => session.warn(&format!("The capture did not finish: {error}.")),
+            }
+        }
+        OverlayEvent::Edit(selected) => match region(frozen, selected) {
+            Ok(image) => pass_on(image, Handoff::Editor),
+            Err(error) => session.warn(&format!("The capture could not be edited: {error}.")),
+        },
+        OverlayEvent::DrawFailed(error) => {
+            session.warn(&format!("The overlay could not draw: {error}."));
+        }
+    }
+    None
 }
 
 // The selection becomes a document with nothing drawn on it, so the overlay delivers through
