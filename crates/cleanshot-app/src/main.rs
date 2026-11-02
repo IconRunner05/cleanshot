@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    AfterCapture, Delivered, DeliveryError, Document, Hotkey, MAX_SETTINGS_BYTES, Output,
-    RgbaImage, Settings, SettingsProblem, delivery_notice,
+    AfterCapture, Delivered, DeliveryError, Document, Hotkey, HotkeyAction, MAX_SETTINGS_BYTES,
+    Output, RgbaImage, Settings, SettingsProblem, delivery_notice,
 };
 use cleanshot_editor::ask_save_path;
 use cleanshot_win::capture::{
@@ -56,9 +56,15 @@ fn main() {
     let (settings, warning) = load_settings();
     let (region, fallback) = region_hotkey(settings.hotkeys.region);
     let hotkeys = [
-        (Request::CaptureRegion, region),
-        (Request::CaptureScreen, settings.hotkeys.full_screen),
-        (Request::CaptureLastRegion, settings.hotkeys.last_region),
+        (Request::Capture(HotkeyAction::Region), region),
+        (
+            Request::Capture(HotkeyAction::FullScreen),
+            settings.hotkeys.full_screen,
+        ),
+        (
+            Request::Capture(HotkeyAction::LastRegion),
+            settings.hotkeys.last_region,
+        ),
     ];
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
@@ -103,13 +109,11 @@ fn main() {
             // waits for GPUI's executor instead of borrowing the app here.
             app.spawn(async move |cx| {
                 cx.update(|cx| {
-                    let kind = match request {
-                        Request::CaptureRegion => Capture::Region,
-                        Request::CaptureScreen => Capture::Screen,
-                        Request::CaptureLastRegion => Capture::LastRegion,
+                    let action = match request {
+                        Request::Capture(action) => action,
                         Request::Exit => return cx.quit(),
                     };
-                    capture(&session, kind, asked, defer, pass_on);
+                    capture(&session, action, asked, defer, pass_on);
                 });
             })
             .detach();
@@ -302,33 +306,28 @@ enum Handoff {
     SaveAs,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Capture {
-    Region,
-    Screen,
-    LastRegion,
-}
-
 #[derive(Debug, PartialEq)]
 enum Plan {
     Copy(RECT),
     Overlay(Option<RECT>),
 }
 
-/// What a capture of `kind` does once the screen is copied, or None when the pointer's
+/// What a capture of `action` does once the screen is copied, or None when the pointer's
 /// monitor is unknown. F-07 follows `after_capture` (D-34); F-06 copies the last selection
 /// with no overlay, or opens one when there is none yet (D-35).
 fn plan(
-    kind: Capture,
+    action: HotkeyAction,
     after_capture: AfterCapture,
     last_selection: Option<RECT>,
     pointer_monitor: impl FnOnce() -> Option<RECT>,
 ) -> Option<Plan> {
-    Some(match (kind, after_capture) {
-        (Capture::Region, _) => Plan::Overlay(None),
-        (Capture::Screen, AfterCapture::Copy) => Plan::Copy(pointer_monitor()?),
-        (Capture::Screen, AfterCapture::ShowToolbar) => Plan::Overlay(Some(pointer_monitor()?)),
-        (Capture::LastRegion, _) => last_selection.map_or(Plan::Overlay(None), Plan::Copy),
+    Some(match (action, after_capture) {
+        (HotkeyAction::Region, _) => Plan::Overlay(None),
+        (HotkeyAction::FullScreen, AfterCapture::Copy) => Plan::Copy(pointer_monitor()?),
+        (HotkeyAction::FullScreen, AfterCapture::ShowToolbar) => {
+            Plan::Overlay(Some(pointer_monitor()?))
+        }
+        (HotkeyAction::LastRegion, _) => last_selection.map_or(Plan::Overlay(None), Plan::Copy),
     })
 }
 
@@ -338,7 +337,7 @@ fn plan(
 // overlay opens as for a region.
 fn capture(
     session: &Rc<Session>,
-    kind: Capture,
+    action: HotkeyAction,
     asked: Instant,
     defer: impl Fn(Duration, Box<dyn FnOnce()>) + 'static,
     pass_on: impl Fn(RgbaImage, Handoff) + 'static,
@@ -355,7 +354,7 @@ fn capture(
         Ok(desktop) => desktop,
         Err(error) => return session.warn(&format!("The screen could not be captured: {error}.")),
     };
-    let pointer_monitor = || match monitor_under_cursor(&captures) {
+    let under_pointer = || match monitor_under_cursor(&captures) {
         Ok(monitor) => Some(monitor),
         Err(error) => {
             session.warn(&format!(
@@ -365,7 +364,7 @@ fn capture(
         }
     };
     let last = session.last_selection.get();
-    let selected = match plan(kind, session.settings.after_capture, last, pointer_monitor) {
+    let selected = match plan(action, session.settings.after_capture, last, under_pointer) {
         None => {
             session.log_capture(&copied, &outputs, &captures);
             return session.sample_after_use(&defer);
@@ -612,15 +611,20 @@ mod tests {
     fn f07_full_screen_copies_or_preselects_the_pointer_monitor_by_after_capture() {
         let monitor = || Some(MONITOR);
         assert_eq!(
-            plan(Capture::Screen, AfterCapture::Copy, None, monitor),
+            plan(HotkeyAction::FullScreen, AfterCapture::Copy, None, monitor),
             Some(Plan::Copy(MONITOR))
         );
         assert_eq!(
-            plan(Capture::Screen, AfterCapture::ShowToolbar, None, monitor),
+            plan(
+                HotkeyAction::FullScreen,
+                AfterCapture::ShowToolbar,
+                None,
+                monitor
+            ),
             Some(Plan::Overlay(Some(MONITOR)))
         );
         assert_eq!(
-            plan(Capture::Screen, AfterCapture::Copy, None, || None),
+            plan(HotkeyAction::FullScreen, AfterCapture::Copy, None, || None),
             None
         );
     }
@@ -630,16 +634,21 @@ mod tests {
         let monitor = || Some(MONITOR);
         for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
             assert_eq!(
-                plan(Capture::LastRegion, after, Some(LAST), monitor),
+                plan(HotkeyAction::LastRegion, after, Some(LAST), monitor),
                 Some(Plan::Copy(LAST))
             );
             assert_eq!(
-                plan(Capture::LastRegion, after, None, monitor),
+                plan(HotkeyAction::LastRegion, after, None, monitor),
                 Some(Plan::Overlay(None))
             );
         }
         assert_eq!(
-            plan(Capture::Region, AfterCapture::Copy, Some(LAST), monitor),
+            plan(
+                HotkeyAction::Region,
+                AfterCapture::Copy,
+                Some(LAST),
+                monitor
+            ),
             Some(Plan::Overlay(None))
         );
     }

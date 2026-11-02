@@ -43,7 +43,7 @@ use crate::overlay::WINDOW_CLASS;
 
 use crate::Error;
 use crate::capture::monitor_handles;
-use cleanshot_core::Hotkey;
+use cleanshot_core::{Hotkey, HotkeyAction};
 
 use crate::tray::{Request, Tray};
 
@@ -323,11 +323,14 @@ pub fn drive_tray(timeout: Duration) -> Result<TrayRun, Error> {
     let delivered = Rc::new(Cell::new(false));
     let seen = Rc::clone(&delivered);
     let region = Hotkey::parse("Ctrl+Shift+4").expect("Ctrl+Shift+4 is a valid hotkey");
-    let tray = Tray::create(&[(Request::CaptureRegion, region)], move |request| {
-        if request == Request::CaptureRegion {
-            seen.set(true);
-        }
-    })?;
+    let tray = Tray::create(
+        &[(Request::Capture(HotkeyAction::Region), region)],
+        move |request| {
+            if request == Request::Capture(HotkeyAction::Region) {
+                seen.set(true);
+            }
+        },
+    )?;
     // SAFETY: GetForegroundWindow has no preconditions.
     let foreground_window = !unsafe { GetForegroundWindow() }.is_invalid();
     let inputs_sent = press(&[VK_CONTROL, VK_SHIFT, VIRTUAL_KEY(u16::from(b'4'))]);

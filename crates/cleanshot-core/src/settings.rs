@@ -67,7 +67,8 @@ impl HotkeyAction {
     /// Every action, in the order the settings window lists them.
     pub const ALL: [Self; 3] = [Self::Region, Self::FullScreen, Self::LastRegion];
 
-    /// The action's name, as the tray menu shows it (F-50).
+    /// The action's name, as the settings window shows it and the tray menu, for the actions
+    /// it lists (F-50, F-55).
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {

@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 
-use cleanshot_core::{Hotkey, Key, Modifiers};
+use cleanshot_core::{Hotkey, HotkeyAction, Key, Modifiers};
 use windows::Win32::Foundation::{
     ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
@@ -38,9 +38,7 @@ const MENU_EXIT: usize = 3;
 /// What the user asked for through the tray icon, its menu or a global hotkey.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
-    CaptureRegion,
-    CaptureScreen,
-    CaptureLastRegion,
+    Capture(HotkeyAction),
     Exit,
 }
 
@@ -371,8 +369,10 @@ fn show_menu(window: HWND) -> Option<Request> {
     // SAFETY: the menu is created, shown and destroyed here, all on this window's thread.
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        let built = AppendMenuW(menu, MF_STRING, MENU_CAPTURE_REGION, w!("Capture region"))
-            .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_CAPTURE_SCREEN, w!("Capture screen")))
+        let region = HSTRING::from(HotkeyAction::Region.name());
+        let screen = HSTRING::from(HotkeyAction::FullScreen.name());
+        let built = AppendMenuW(menu, MF_STRING, MENU_CAPTURE_REGION, &region)
+            .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_CAPTURE_SCREEN, &screen))
             .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("Exit")));
         let mut cursor = POINT::default();
         let chosen = if built.is_ok() && GetCursorPos(&raw mut cursor).is_ok() {
@@ -398,8 +398,8 @@ fn show_menu(window: HWND) -> Option<Request> {
         let destroyed = DestroyMenu(menu);
         debug_assert!(destroyed.is_ok(), "a menu created here is destroyed once");
         match chosen? {
-            MENU_CAPTURE_REGION => Some(Request::CaptureRegion),
-            MENU_CAPTURE_SCREEN => Some(Request::CaptureScreen),
+            MENU_CAPTURE_REGION => Some(Request::Capture(HotkeyAction::Region)),
+            MENU_CAPTURE_SCREEN => Some(Request::Capture(HotkeyAction::FullScreen)),
             MENU_EXIT => Some(Request::Exit),
             _ => None,
         }
@@ -440,11 +440,11 @@ unsafe extern "system" fn window_procedure(
             .copied(),
         WM_CLOSE => Some(Request::Exit),
         ICON_MESSAGE => match u32::try_from(lparam.0 & 0xFFFF) {
-            Ok(WM_LBUTTONDBLCLK) => Some(Request::CaptureRegion),
+            Ok(WM_LBUTTONDBLCLK) => Some(Request::Capture(HotkeyAction::Region)),
             Ok(WM_CONTEXTMENU) => show_menu(window),
             _ => None,
         },
-        message if message == state.capture_signal => Some(Request::CaptureRegion),
+        message if message == state.capture_signal => Some(Request::Capture(HotkeyAction::Region)),
         message if message == state.taskbar_created => {
             state.icon_shown.set(add_icon(window));
             None
@@ -510,8 +510,14 @@ mod tests {
         let sink = Rc::clone(&received);
         let tray = Tray::create(
             &[
-                (Request::CaptureRegion, hotkey("Ctrl+Alt+F17")),
-                (Request::CaptureScreen, hotkey("Ctrl+Alt+F18")),
+                (
+                    Request::Capture(HotkeyAction::Region),
+                    hotkey("Ctrl+Alt+F17"),
+                ),
+                (
+                    Request::Capture(HotkeyAction::FullScreen),
+                    hotkey("Ctrl+Alt+F18"),
+                ),
             ],
             move |request| sink.borrow_mut().push(request),
         )
@@ -533,7 +539,10 @@ mod tests {
         drop(tray);
         assert_eq!(
             *received.borrow(),
-            [Request::CaptureScreen, Request::CaptureRegion]
+            [
+                Request::Capture(HotkeyAction::FullScreen),
+                Request::Capture(HotkeyAction::Region)
+            ]
         );
     }
 
@@ -541,12 +550,12 @@ mod tests {
     fn f51_a_hotkey_already_held_is_reported_not_fatal() {
         let taken = hotkey("Ctrl+Alt+F15");
         let free = hotkey("Ctrl+Alt+F16");
-        let first =
-            Tray::create(&[(Request::CaptureRegion, taken)], |_| {}).expect("the first tray");
+        let first = Tray::create(&[(Request::Capture(HotkeyAction::Region), taken)], |_| {})
+            .expect("the first tray");
         let second = Tray::create(
             &[
-                (Request::CaptureRegion, taken),
-                (Request::CaptureScreen, free),
+                (Request::Capture(HotkeyAction::Region), taken),
+                (Request::Capture(HotkeyAction::FullScreen), free),
             ],
             |_| {},
         )
@@ -555,9 +564,16 @@ mod tests {
         let outcomes: Vec<_> = second.hotkeys().collect();
         assert!(matches!(
             outcomes[0],
-            (Request::CaptureRegion, _, Err(Error::HotkeyTaken(_)))
+            (
+                Request::Capture(HotkeyAction::Region),
+                _,
+                Err(Error::HotkeyTaken(_))
+            )
         ));
-        assert!(matches!(outcomes[1], (Request::CaptureScreen, _, Ok(()))));
+        assert!(matches!(
+            outcomes[1],
+            (Request::Capture(HotkeyAction::FullScreen), _, Ok(()))
+        ));
     }
 
     #[test]
@@ -565,7 +581,10 @@ mod tests {
         let received = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&received);
         let tray = Tray::create(
-            &[(Request::CaptureRegion, hotkey("Ctrl+Alt+F13"))],
+            &[(
+                Request::Capture(HotkeyAction::Region),
+                hotkey("Ctrl+Alt+F13"),
+            )],
             move |request| {
                 sink.borrow_mut().push(request);
             },
@@ -583,13 +602,19 @@ mod tests {
             }
         }
         drop(tray);
-        assert_eq!(*received.borrow(), [Request::CaptureRegion]);
+        assert_eq!(*received.borrow(), [Request::Capture(HotkeyAction::Region)]);
     }
 
     #[test]
     fn f54_a_settings_warning_shows_from_the_tray_icon() {
-        let tray = Tray::create(&[(Request::CaptureRegion, hotkey("Ctrl+Alt+F14"))], |_| {})
-            .expect("the tray window is created");
+        let tray = Tray::create(
+            &[(
+                Request::Capture(HotkeyAction::Region),
+                hotkey("Ctrl+Alt+F14"),
+            )],
+            |_| {},
+        )
+        .expect("the tray window is created");
         assert!(tray.icon_shown(), "the runner's shell takes the icon");
         let long = "x".repeat(400);
         tray.warn("Cleanshot settings", &long)
