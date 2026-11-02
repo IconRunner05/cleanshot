@@ -29,6 +29,7 @@ mod window;
 
 #[cfg(feature = "field-test")]
 pub(crate) use window::WINDOW_CLASS;
+pub(crate) use window::{bgra, target_and_bitmap};
 use window::{open_window, register_class};
 
 const DESKTOP_DPI: f32 = 96.0;
@@ -318,7 +319,7 @@ fn toolbar_monitor(captures: &[MonitorImage]) -> windows::core::Result<Option<&M
 
 /// Physical pixels per DIP on the monitor holding `bounds`.
 #[expect(clippy::cast_precision_loss, reason = "a DPI is a few hundred")]
-fn dpi_scale(bounds: RECT) -> windows::core::Result<f32> {
+pub(crate) fn dpi_scale(bounds: RECT) -> windows::core::Result<f32> {
     let (mut x, mut y) = (0, 0);
     // SAFETY: both outputs are writable locals; MonitorFromRect always returns a monitor here.
     unsafe {

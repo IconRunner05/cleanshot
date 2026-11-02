@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cleanshot_core::box_handles;
+use cleanshot_core::{RgbaImage, box_handles};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
@@ -249,7 +249,7 @@ pub(super) fn prewarm(factory: &ID2D1Factory, palette: &Palette) -> windows::cor
 
 /// A render target for `window`, `width` x `height` physical pixels, and a bitmap on it of
 /// `bgra`, rows of premultiplied BGRA `width` pixels long.
-fn target_and_bitmap(
+pub(crate) fn target_and_bitmap(
     factory: &ID2D1Factory,
     window: HWND,
     width: u32,
@@ -305,12 +305,7 @@ fn surface(
     shared: &Rc<Shared>,
     hosts_toolbar: bool,
 ) -> windows::core::Result<Surface> {
-    // Captures are opaque, so straight and premultiplied alpha agree and only the channel
-    // order changes.
-    let mut bgra = capture.image.pixels().to_vec();
-    for pixel in bgra.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
+    let bgra = bgra(&capture.image);
     let (target, frozen) = target_and_bitmap(factory, window, width, height, &bgra)?;
     // SAFETY: every call takes owned or borrowed COM objects that outlive it.
     unsafe {
@@ -346,6 +341,16 @@ fn surface(
             shared: Rc::clone(shared),
         })
     }
+}
+
+/// The pixels of an opaque `image` as premultiplied BGRA. Captures are opaque, so straight and
+/// premultiplied alpha agree and only the channel order changes.
+pub(crate) fn bgra(image: &RgbaImage) -> Vec<u8> {
+    let mut bgra = image.pixels().to_vec();
+    for pixel in bgra.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    bgra
 }
 
 /// The desktop point of a mouse message's `lparam` on a window whose top-left is `origin`.

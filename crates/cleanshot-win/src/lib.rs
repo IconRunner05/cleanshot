@@ -18,6 +18,7 @@ pub mod settings_file;
 mod size_pill;
 pub mod startup;
 pub mod text;
+pub mod thumbnail;
 mod toolbar;
 pub mod tray;
 mod tray_icon;
