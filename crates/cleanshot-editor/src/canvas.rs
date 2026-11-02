@@ -4,9 +4,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, Frame, Label, PointF, RectF, RedactMode, RgbaImage,
-    SPOTLIGHT_DIM, Shape, ShapeId, Style, arrow_head, dimmed_areas, handles, number_color,
-    step_numbers,
+    Bubble, Color, Command, Document, Fill, Frame, Label, PointF, RectF, RedactMode, RgbaImage,
+    SPOTLIGHT_DIM, Shape, ShapeId, Style, arrow_head, dimmed_areas, handles, step_numbers, text_on,
 };
 use cleanshot_render::{Redacted, redacted};
 use gpui::{
@@ -493,13 +492,38 @@ fn paint_shape(
             );
             paint_label(
                 &step.label(number),
-                rgba(number_color(style.color)),
+                rgba(text_on(style.color)),
                 fit,
                 window,
                 cx,
             );
         }
+        Shape::Bubble(bubble) => paint_bubble(bubble, style, fit, window, cx),
     }
+}
+
+/// F-42: the rounded box and tail in the style colour, the text on them in the colour that reads.
+fn paint_bubble(bubble: &Bubble, style: Style, fit: &Fit, window: &mut Window, cx: &mut App) {
+    let color = rgba(style.color);
+    window.paint_quad(quad(
+        fit.bounds(bubble.outline()),
+        px(bubble.corner_radius() * fit.scale),
+        color,
+        px(0.0),
+        transparent_black(),
+        BorderStyle::Solid,
+    ));
+    if let Some(tail) = bubble.tail_triangle() {
+        let tail = tail.map(|point| fit.point(point));
+        paint_polygon(window, PathBuilder::fill(), &tail, true, color);
+    }
+    paint_label(
+        &Label::Block(bubble.block()),
+        rgba(text_on(style.color)),
+        fit,
+        window,
+        cx,
+    );
 }
 
 /// Lays the spotlight dim over each of `areas`, cut to `within` (F-43, D-78).

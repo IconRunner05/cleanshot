@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bubble;
 mod delivery;
 mod document;
 mod drag;
@@ -19,6 +20,7 @@ mod text;
 mod text_edit;
 mod tool;
 
+pub use bubble::{BUBBLE_PADDING, Bubble};
 pub use delivery::{Delivered, DeliveryError, Output, delivery_notice, save_as_notice};
 pub use document::{
     Color, Document, Fill, Frame, ImageError, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM,
@@ -39,10 +41,11 @@ pub use settings::{
     SaveFormat, Settings, SettingsProblem,
 };
 pub use settings_change::{Applied, SettingsNotice, SettingsSaveError, settings_notice};
-pub use step::{STEP_DIAMETER, Step, number_color};
+pub use step::{STEP_DIAMETER, Step};
 pub use text::{
     DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,
     INTER_UNITS_PER_EM, LINE_HEIGHT, Label, TextBlock, TextBlockError, TextMasks, baseline,
+    text_on,
 };
 pub use text_edit::{
     BoxPress, CaretMove, LineMove, LinePosition, TextEdit, TextOrigin, commit_text,

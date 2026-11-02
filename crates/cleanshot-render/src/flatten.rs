@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use cleanshot_core::{
     Color, Document, Fill, GlyphMask, PointF, RectF, RgbaImage, SPOTLIGHT_DIM, Shape, ShapeEntry,
-    ShapeId, TextMasks, arrow_head, dimmed_areas, number_color,
+    ShapeId, TextMasks, arrow_head, dimmed_areas, text_on,
 };
 use tiny_skia::{
     BlendMode, ColorU8, FillRule, IntRect, IntSize, LineCap, LineJoin, Paint, Path, PathBuilder,
@@ -200,10 +200,64 @@ fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry, masks: &TextMasks) -> Result<()
                 skia_rect(step.circle()).and_then(PathBuilder::from_oval),
                 &paint,
             );
-            text(pixmap, entry.id, masks, number_color(entry.style.color))?;
+            text(pixmap, entry.id, masks, text_on(entry.style.color))?;
+        }
+        Shape::Bubble(bubble) => {
+            fill(
+                pixmap,
+                rounded_rect(bubble.outline(), bubble.corner_radius()),
+                &paint,
+            );
+            if let Some(tail) = bubble.tail_triangle() {
+                fill(pixmap, polyline(&tail), &paint);
+            }
+            text(pixmap, entry.id, masks, text_on(entry.style.color))?;
         }
     }
     Ok(())
+}
+
+/// `rect` with each corner a quarter circle of `radius`, drawn as cubic Beziers.
+fn rounded_rect(rect: RectF, radius: f32) -> Option<Path> {
+    // The control-point distance that makes a cubic Bezier follow a quarter circle.
+    const KAPPA: f32 = 0.552_284_8;
+    let radius = radius.min(rect.width / 2.0).min(rect.height / 2.0);
+    let control = radius * (1.0 - KAPPA);
+    let (left, top) = (rect.x, rect.y);
+    let (right, bottom) = (left + rect.width, top + rect.height);
+    let mut builder = PathBuilder::new();
+    builder.move_to(left + radius, top);
+    builder.line_to(right - radius, top);
+    builder.cubic_to(
+        right - control,
+        top,
+        right,
+        top + control,
+        right,
+        top + radius,
+    );
+    builder.line_to(right, bottom - radius);
+    builder.cubic_to(
+        right,
+        bottom - control,
+        right - control,
+        bottom,
+        right - radius,
+        bottom,
+    );
+    builder.line_to(left + radius, bottom);
+    builder.cubic_to(
+        left + control,
+        bottom,
+        left,
+        bottom - control,
+        left,
+        bottom - radius,
+    );
+    builder.line_to(left, top + radius);
+    builder.cubic_to(left, top + control, left + control, top, left + radius, top);
+    builder.close();
+    builder.finish()
 }
 
 /// Paints the glyph layers of the shape `id` in `color`, or in a colour glyph's own colour.
@@ -506,6 +560,44 @@ mod tests {
         assert_eq!(pixel(&flat, 20, 20), [255, 255, 255, 255]);
         assert_eq!(pixel(&flat, 20, 10), [red.r, red.g, red.b, 255]);
         assert_eq!(pixel(&flat, 1, 1), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn f42_a_bubble_fills_its_rounded_box_and_tail_and_draws_its_text_in_the_contrasting_colour() {
+        let mut history = history(RgbaImage::new(40, 40, [0, 0, 0, 255].repeat(1600)).unwrap());
+        let block =
+            cleanshot_core::TextBlock::new(PointF { x: 10.0, y: 10.0 }, "a".into(), 8.0, 1.0)
+                .unwrap();
+        let bubble = cleanshot_core::Bubble::new(block, PointF { x: 14.0, y: 38.0 });
+        let red = Color {
+            r: 255,
+            g: 59,
+            b: 48,
+            a: 255,
+        };
+        history
+            .apply(Command::Add {
+                shape: Shape::Bubble(bubble),
+                style: Style {
+                    color: red,
+                    stroke_width: 3.0,
+                },
+            })
+            .unwrap();
+        let id = history.document().shapes()[0].id;
+        assert!(matches!(
+            flatten(history.document(), &TextMasks::default()),
+            Err(Error::MissingTextMask(missing)) if missing == id
+        ));
+        let mut masks = TextMasks::default();
+        masks.insert(id, vec![mask(12, 12, 1, &[255], None)]);
+        let flat = flatten(history.document(), &masks).unwrap().image().clone();
+        let red = [red.r, red.g, red.b, 255];
+        assert_eq!(pixel(&flat, 12, 12), [255, 255, 255, 255]);
+        assert_eq!(pixel(&flat, 16, 20), red);
+        assert_eq!(pixel(&flat, 14, 33), red);
+        assert_eq!(pixel(&flat, 6, 6), [0, 0, 0, 255]);
+        assert_eq!(pixel(&flat, 20, 33), [0, 0, 0, 255]);
     }
 
     #[test]

@@ -56,6 +56,8 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
         }),
         // F-34, F-41: text and steps resize by their font size, on the property strip.
         Shape::Text(_) | Shape::Step(_) => Vec::new(),
+        // F-42: the tail's tip is the one handle; the box follows the text.
+        Shape::Bubble(bubble) => vec![(Handle::End, bubble.tail())],
     }
 }
 
@@ -134,6 +136,7 @@ pub fn moved(shape: &Shape, offset: PointF) -> Shape {
         Shape::Pen(points) => Shape::Pen(points.iter().copied().map(shift).collect()),
         Shape::Text(block) => Shape::Text(block.moved_to(shift(block.at()))),
         Shape::Step(step) => Shape::Step(step.moved_to(shift(step.centre()))),
+        Shape::Bubble(bubble) => Shape::Bubble(bubble.moved_by(offset)),
         Shape::Highlight(rect) => Shape::Highlight(shift_rect(*rect)),
         Shape::Spotlight(rect) => Shape::Spotlight(shift_rect(*rect)),
         Shape::Redact { rect, mode } => Shape::Redact {
@@ -153,6 +156,7 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
         (Shape::Arrow { from, .. }, Handle::End) => Shape::Arrow { from: *from, to },
         (Shape::Line { to: end, .. }, Handle::Start) => Shape::Line { from: to, to: *end },
         (Shape::Line { from, .. }, Handle::End) => Shape::Line { from: *from, to },
+        (Shape::Bubble(bubble), Handle::End) => Shape::Bubble(bubble.with_tail(to)),
         (Shape::Rect { fill, .. }, Handle::Box(handle)) => match new_bounds(handle) {
             Some(rect) => Shape::Rect { rect, fill: *fill },
             None => shape.clone(),
@@ -190,9 +194,8 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
             | Shape::Spotlight(_),
             Handle::Start | Handle::End,
         )
-        | (Shape::Text(_) | Shape::Step(_), Handle::Box(_) | Handle::Start | Handle::End) => {
-            shape.clone()
-        }
+        | (Shape::Text(_) | Shape::Step(_), Handle::Box(_) | Handle::Start | Handle::End)
+        | (Shape::Bubble(_), Handle::Box(_) | Handle::Start) => shape.clone(),
     }
 }
 
@@ -247,6 +250,14 @@ pub fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
         } => inside_ellipse(grown(*rect, reach), point),
         Shape::Text(block) => inside(grown(block.extent(), reach), point),
         Shape::Step(step) => inside_ellipse(grown(step.circle(), reach), point),
+        Shape::Bubble(bubble) => {
+            inside(grown(bubble.outline(), reach), point)
+                || bubble.tail_triangle().is_some_and(|[left, tip, right]| {
+                    segment_distance(left, tip, point) <= reach
+                        || segment_distance(tip, right, point) <= reach
+                        || inside_triangle([left, tip, right], point)
+                })
+        }
     }
 }
 
@@ -275,6 +286,7 @@ fn bounds(shape: &Shape) -> Option<RectF> {
         }
         Shape::Text(block) => Some(block.extent()),
         Shape::Step(step) => Some(step.circle()),
+        Shape::Bubble(bubble) => Some(bubble.outline()),
         Shape::Arrow { .. } | Shape::Line { .. } => None,
     }
 }
@@ -358,6 +370,14 @@ fn inside_ellipse(rect: RectF, point: PointF) -> bool {
     let dx = (point.x - rect.x - radius_x) / radius_x;
     let dy = (point.y - rect.y - radius_y) / radius_y;
     dx * dx + dy * dy <= 1.0
+}
+
+fn inside_triangle([a, b, c]: [PointF; 3], point: PointF) -> bool {
+    let side = |from: PointF, to: PointF| {
+        (to.x - from.x) * (point.y - from.y) - (to.y - from.y) * (point.x - from.x)
+    };
+    let sides = [side(a, b), side(b, c), side(c, a)];
+    sides.iter().all(|&side| side >= 0.0) || sides.iter().all(|&side| side <= 0.0)
 }
 
 fn distance(a: PointF, b: PointF) -> f32 {

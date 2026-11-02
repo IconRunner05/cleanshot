@@ -20,6 +20,7 @@ pub enum Tool {
     Text,
     Spotlight,
     Step,
+    Bubble,
 }
 
 impl Tool {
@@ -37,6 +38,7 @@ impl Tool {
             Shape::Redact { .. } => Self::Redact,
             Shape::Spotlight(_) => Self::Spotlight,
             Shape::Step(_) => Self::Step,
+            Shape::Bubble(_) => Self::Bubble,
         }
     }
 
@@ -63,8 +65,8 @@ impl Tool {
 
     /// The edit a finished drag through `path` makes, drawn in `look`, `constrained` while Shift
     /// is held.
-    /// `None` for the select and text tools, which do not draw by dragging, and for a drag too short
-    /// to draw anything, such as a click.
+    /// `None` for the select, text and bubble tools, which do not draw by dragging, and for a drag
+    /// too short to draw anything, such as a click.
     #[must_use]
     pub fn command(self, path: &[PointF], constrained: bool, look: &Look) -> Option<Command> {
         let (&from, &last) = (path.first()?, path.last()?);
@@ -82,7 +84,7 @@ impl Tool {
             Command::Add { shape, style }
         };
         match self {
-            Self::Select | Self::Text => None,
+            Self::Select | Self::Text | Self::Bubble => None,
             Self::Arrow => (from != to).then(|| add(Shape::Arrow { from, to })),
             Self::Line => (from != to).then(|| add(Shape::Line { from, to })),
             Self::Pen => {

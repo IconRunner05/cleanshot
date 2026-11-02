@@ -261,9 +261,39 @@ impl TextMasks {
     }
 }
 
+/// The colour text is drawn in on `fill`, as a step's number and a bubble's text are: black on
+/// a light colour, white on a dark one, by the colour's luma (BT.601).
+#[must_use]
+pub fn text_on(fill: Color) -> Color {
+    let luma = 299 * u32::from(fill.r) + 587 * u32::from(fill.g) + 114 * u32::from(fill.b);
+    let level = if luma > 150_000 { 0 } else { 255 };
+    Color {
+        r: level,
+        g: level,
+        b: level,
+        a: 255,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rgb(r: u8, g: u8, b: u8) -> Color {
+        Color { r, g, b, a: 255 }
+    }
+
+    #[test]
+    fn f41_a_step_number_is_white_on_dark_colours_and_black_on_light_ones() {
+        let white = rgb(255, 255, 255);
+        let black = rgb(0, 0, 0);
+        for dark in [rgb(255, 59, 48), rgb(0, 122, 255), rgb(175, 82, 222), black] {
+            assert_eq!(text_on(dark), white, "{dark:?}");
+        }
+        for light in [rgb(255, 230, 0), rgb(255, 149, 0), white] {
+            assert_eq!(text_on(light), black, "{light:?}");
+        }
+    }
 
     #[test]
     fn f34_a_glyph_mask_needs_one_coverage_byte_per_pixel() {

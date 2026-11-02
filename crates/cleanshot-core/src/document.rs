@@ -1,6 +1,7 @@
 use std::f32::consts::{FRAC_PI_6, PI};
 use std::sync::Arc;
 
+use crate::bubble::Bubble;
 use crate::step::Step;
 use crate::text::{Label, TextBlock};
 
@@ -73,6 +74,7 @@ impl Document {
                 let label = match &entry.shape {
                     Shape::Text(block) => Label::Block(block),
                     Shape::Step(step) => step.label(number),
+                    Shape::Bubble(bubble) => Label::Block(bubble.block()),
                     Shape::Arrow { .. }
                     | Shape::Line { .. }
                     | Shape::Rect { .. }
@@ -228,6 +230,7 @@ pub enum Shape {
     /// Dims the image outside it (F-43).
     Spotlight(RectF),
     Step(Step),
+    Bubble(Bubble),
 }
 
 /// Whether a rectangle or ellipse is drawn as an outline or filled with the style colour.

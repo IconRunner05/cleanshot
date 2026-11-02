@@ -63,7 +63,8 @@ impl Drag {
     ) -> Press {
         let entry = |id| document.shapes().iter().find(|entry| entry.id == id);
         let start = match tool {
-            Tool::Select => None,
+            // D-87: typing into a bubble waits for the B tool, until the export draws its text.
+            Tool::Select | Tool::Bubble => None,
             Tool::Text => Some(Start::Type(text_origin(
                 shape_at(document, at, tolerance).and_then(entry),
                 at,
@@ -179,7 +180,8 @@ fn constrained_handle(shape: &Shape, handle: Handle, to: PointF) -> PointF {
         | Shape::Highlight(_)
         | Shape::Redact { .. }
         | Shape::Spotlight(_)
-        | Shape::Step(_) => None,
+        | Shape::Step(_)
+        | Shape::Bubble(_) => None,
     };
     match (handle, ends) {
         (Handle::Start, Some((_, end))) => snapped_to_45_degrees(end, to),
