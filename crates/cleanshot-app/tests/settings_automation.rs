@@ -136,6 +136,7 @@ fn remove_left_over(file: &Path) -> Result<(), String> {
         Err(error) => Err(format!("{} could not be removed: {error}", file.display())),
     }
 }
+
 fn walk(
     file: &Path,
     exe: &str,
