@@ -9,6 +9,7 @@ pub(crate) const OVERLAY_PRESSES: u32 = 20;
 const OVERLAY_VISIBLE_BUDGET_MS: u64 = 100;
 const TRAY_READY_BUDGET_MS: u64 = 300;
 const IDLE_WORKING_SET_BUDGET_BYTES: u64 = 25 * 1024 * 1024;
+const AFTER_USE_PRIVATE_BUDGET_BYTES: u64 = 10 * 1024 * 1024;
 // P-05's "~0%": under 1% of one core over the 10 s the exe logs.
 const IDLE_CPU_BUDGET_MS: u64 = 100;
 const EXE_SIZE_BUDGET_BYTES: u64 = 15_000_000;
@@ -117,6 +118,19 @@ pub(crate) fn idle(log: &str) -> [Verdict; 3] {
     ]
 }
 
+/// P-04 after use from the log of an overlay run: the private working set 10 s after the last
+/// capture closed (D-82). Shared pages are not counted.
+pub(crate) fn after_use(log: &str) -> Verdict {
+    under(
+        log,
+        "P-04",
+        "private_working_set_bytes",
+        AFTER_USE_PRIVATE_BUDGET_BYTES,
+        "private working set 10 s after the last capture",
+        "bytes",
+    )
+}
+
 /// P-02 as its `p02_` test judged it, from the test binary's `--nocapture` output.
 pub(crate) fn copy(test_output: &str) -> Verdict {
     let passed = test_output.contains("test result: ok. 1 passed");
@@ -205,7 +219,7 @@ fn under(
     what: &str,
     unit: &str,
 ) -> Verdict {
-    let Some(&value) = perf_values(log, budget, key).first() else {
+    let Some(&value) = perf_values(log, budget, key).last() else {
         return missing(budget, key);
     };
     Verdict {
@@ -319,6 +333,29 @@ mod tests {
             cpu.to_string(),
             "P-05 FAIL: no `perf P-05 cpu_ms=` line in the log"
         );
+    }
+
+    #[test]
+    fn d82_after_use_holds_the_last_private_working_set_under_10_mb() {
+        let log = |bytes: &[u64]| {
+            bytes
+                .iter()
+                .map(|bytes| {
+                    format!(
+                        "9000 perf P-04 private_working_set_bytes={bytes}
+"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .concat()
+        };
+        assert!(after_use(&log(&[10_485_759])).met);
+        assert!(!after_use(&log(&[10_485_760])).met);
+        assert!(after_use(&log(&[10_485_760, 10_485_759])).met);
+        assert!(!after_use(&log(&[10_485_759, 10_485_760])).met);
+        let idle_only = "10020 perf P-04 working_set_bytes=1
+";
+        assert!(!after_use(idle_only).met);
     }
 
     #[test]

@@ -62,13 +62,7 @@ fn main() {
     ];
     let tray = Rc::new(RefCell::new(None));
     let launched_tray = Rc::clone(&tray);
-    let session = Rc::new(Session {
-        settings,
-        tray: Rc::clone(&tray),
-        overlay: RefCell::new(None),
-        last_selection: Cell::new(None),
-        log: RefCell::new(log),
-    });
+    let session = Rc::new(Session::new(settings, Rc::clone(&tray), log));
     let launched = Rc::clone(&session);
     cleanshot_editor::run(move |cx| {
         // D-76: prewarm on the overlay thread before the tray is ready.
@@ -81,7 +75,15 @@ fn main() {
             let asked = Instant::now();
             let session = Rc::clone(&session);
             let closer = app.clone();
-            let defer = move |job: Box<dyn FnOnce()>| closer.spawn(async move |_| job()).detach();
+            let defer = move |after: Duration, job: Box<dyn FnOnce()>| {
+                let waited = closer.background_executor().timer(after);
+                closer
+                    .spawn(async move |_| {
+                        waited.await;
+                        job();
+                    })
+                    .detach();
+            };
             let opener = app.clone();
             let editing = Rc::clone(&session);
             let pass_on = move |image: RgbaImage, to: Handoff| {
@@ -159,11 +161,24 @@ struct Session {
     overlay: RefCell<Option<Overlay>>,
     /// F-06: the last selection copied or saved, kept in memory only (C-20).
     last_selection: Cell<Option<RECT>>,
+    /// So a P-04 after-use sample knows whether a capture started after it was set.
+    captures_started: Cell<u64>,
     /// C-23: open only under `--log`.
     log: RefCell<Option<Log>>,
 }
 
 impl Session {
+    fn new(settings: Settings, tray: Rc<RefCell<Option<Tray>>>, log: Option<Log>) -> Self {
+        Self {
+            settings,
+            tray,
+            overlay: RefCell::new(None),
+            last_selection: Cell::new(None),
+            captures_started: Cell::new(0),
+            log: RefCell::new(log),
+        }
+    }
+
     /// Under --log, the usage to measure P-05 from; None without it, so normal running starts
     /// no timer (P-05).
     fn idle_start(&self) -> Option<Usage> {
@@ -189,6 +204,37 @@ impl Session {
                 IDLE_SAMPLE.as_millis()
             )
         });
+    }
+
+    /// Under --log, logs the P-04 private working set 10 s from now if no capture starts
+    /// before then; normal running starts no timer (P-05).
+    fn sample_after_use(self: &Rc<Self>, defer: &dyn Fn(Duration, Box<dyn FnOnce()>)) {
+        if self.log.borrow().is_none() {
+            return;
+        }
+        let started = self.captures_started.get();
+        let session = Rc::clone(self);
+        defer(
+            AFTER_USE_SAMPLE,
+            Box::new(move || {
+                if session.captures_started.get() != started {
+                    return;
+                }
+                match usage() {
+                    Ok(held) => session.perf(|_| {
+                        format!(
+                            "P-04 private_working_set_bytes={}",
+                            held.private_working_set_bytes
+                        )
+                    }),
+                    Err(error) => {
+                        session.warn(&format!(
+                            "Logging could not sample memory after use: {error}."
+                        ));
+                    }
+                }
+            }),
+        );
     }
 
     /// Logs a `perf` line under `--log`, made from the time since the process started.
@@ -294,12 +340,13 @@ fn capture(
     session: &Rc<Session>,
     kind: Capture,
     asked: Instant,
-    defer: impl Fn(Box<dyn FnOnce()>) + 'static,
+    defer: impl Fn(Duration, Box<dyn FnOnce()>) + 'static,
     pass_on: impl Fn(RgbaImage, Handoff) + 'static,
 ) {
     if session.overlay.borrow().is_some() {
         return;
     }
+    session.captures_started.update(|started| started + 1);
     let Desktop {
         monitors: captures,
         copied,
@@ -319,13 +366,18 @@ fn capture(
     };
     let last = session.last_selection.get();
     let selected = match plan(kind, session.settings.after_capture, last, pointer_monitor) {
-        None => return session.log_capture(&copied, &outputs, &captures),
+        None => {
+            session.log_capture(&copied, &outputs, &captures);
+            return session.sample_after_use(&defer);
+        }
         Some(Plan::Overlay(selected)) => selected,
         Some(Plan::Copy(selected)) => {
             finish(session, &captures, selected, Output::Copy);
-            return session.log_capture(&copied, &outputs, &captures);
+            session.log_capture(&copied, &outputs, &captures);
+            return session.sample_after_use(&defer);
         }
     };
+    let defer = Rc::new(defer);
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
     let finishing = Rc::clone(session);
@@ -367,19 +419,24 @@ fn capture(
         // after it returns, and the Save As dialog opens over the desktop, not the overlay.
         let closing = Rc::clone(&finishing);
         let pass_on = Rc::clone(&pass_on);
-        defer(Box::new(move || {
-            let overlay = closing.overlay.borrow_mut().take();
-            if let Some(overlay) = overlay {
-                if handoff {
-                    drop(overlay);
-                } else if let Err(error) = overlay.close() {
-                    closing.warn(&format!("The overlay could not fade out: {error}."));
+        let sampling = Rc::clone(&defer);
+        defer(
+            Duration::ZERO,
+            Box::new(move || {
+                let overlay = closing.overlay.borrow_mut().take();
+                if let Some(overlay) = overlay {
+                    if handoff {
+                        drop(overlay);
+                    } else if let Err(error) = overlay.close() {
+                        closing.warn(&format!("The overlay could not fade out: {error}."));
+                    }
                 }
-            }
-            if let Some(image) = saving_as {
-                pass_on(image, Handoff::SaveAs);
-            }
-        }));
+                if let Some(image) = saving_as {
+                    pass_on(image, Handoff::SaveAs);
+                }
+                closing.sample_after_use(&*sampling);
+            }),
+        );
     });
     match shown {
         Ok(shown) => {
@@ -490,6 +547,7 @@ fn save_chosen(
 }
 
 const IDLE_SAMPLE: Duration = Duration::from_secs(10);
+const AFTER_USE_SAMPLE: Duration = Duration::from_secs(10);
 
 fn open_log() -> Result<Log, String> {
     let settings = settings_path().map_err(|error| error.to_string())?;

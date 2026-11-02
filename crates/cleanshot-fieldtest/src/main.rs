@@ -28,6 +28,9 @@ const BENCH_REDRAWS: NonZeroU32 = NonZeroU32::new(600).expect("600 is not zero")
 const OVERLAY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The pause after an overlay closes before the next press, as between a user's captures.
 const OVERLAY_SETTLE: Duration = Duration::from_millis(500);
+/// How long after the last overlay closes the exe has to log its P-04 after-use sample, which
+/// it takes 10 s after.
+const AFTER_USE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long one copy may take to be logged (P-02) before it counts as failed.
 const COPY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -36,7 +39,7 @@ fn main() {
         [_, flag, path] if flag == "--report" => path.clone(),
         [_, flag, inputs @ ..] if flag == "--budgets" => std::process::exit(judge(inputs)),
         [_, flag, log] if flag == "--overlays" => {
-            let shown = |press| perf_lines(Path::new(log), "P-01") >= press;
+            let shown = |press| perf_lines(Path::new(log), "P-01", "overlay_visible_ms") >= press;
             if let Err(error) = open_and_cancel_overlays(
                 budgets::OVERLAY_PRESSES,
                 OVERLAY_TIMEOUT,
@@ -46,6 +49,13 @@ fn main() {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
+            // P-04: the judge reads the after-use sample, or says it is missing.
+            let waited = Instant::now();
+            while perf_lines(Path::new(log), "P-04", "private_working_set_bytes") == 0
+                && waited.elapsed() < AFTER_USE_TIMEOUT
+            {
+                std::thread::sleep(Duration::from_millis(250));
+            }
             return;
         }
         [_, flag, times, log] if flag == "--copies-while-watched" => {
@@ -53,8 +63,9 @@ fn main() {
                 eprintln!("--copies-while-watched takes a count, not {times:?}");
                 std::process::exit(2);
             };
-            let copied =
-                copies_while_watched(times, COPY_TIMEOUT, || perf_lines(Path::new(log), "P-02"));
+            let copied = copies_while_watched(times, COPY_TIMEOUT, || {
+                perf_lines(Path::new(log), "P-02", "copied_ms")
+            });
             println!("F-20: {copied} of {times} copies reached the clipboard while it was watched");
             if copied < times {
                 std::process::exit(1);
@@ -80,9 +91,9 @@ fn main() {
                 eprintln!("--copy-at-scale takes WIDTH HEIGHT DPI as numbers, then LOG");
                 std::process::exit(2);
             };
-            if let Err(error) =
-                copy_at_scale(width, height, dpi, || perf_lines(Path::new(log), "P-02"))
-            {
+            if let Err(error) = copy_at_scale(width, height, dpi, || {
+                perf_lines(Path::new(log), "P-02", "copied_ms")
+            }) {
                 eprintln!("FAIL F-01 at {dpi} dpi: {error}");
                 std::process::exit(1);
             }
@@ -151,7 +162,11 @@ fn judge(inputs: &[String]) -> i32 {
                 std::fs::metadata(path).map(|exe| exe.len()),
             )),
             "--idle" => verdicts.extend(budgets::idle(&log_text(path))),
-            "--overlays" => verdicts.push(budgets::overlay_visible(&log_text(path), machine)),
+            "--overlays" => {
+                let log = log_text(path);
+                verdicts.push(budgets::overlay_visible(&log, machine));
+                verdicts.push(budgets::after_use(&log));
+            }
             "--copy" => verdicts.push(budgets::copy(&log_text(path))),
             "--bench" => verdicts.extend(budgets::editor(&log_text(path))),
             _ => {
@@ -181,11 +196,11 @@ fn log_text(path: &str) -> String {
 
 /// How many `budget` perf lines (P-01 for an overlay shown, P-02 for a copy) cleanshot.exe
 /// has logged in its `--log` file so far.
-fn perf_lines(log: &Path, budget: &str) -> u32 {
+fn perf_lines(log: &Path, budget: &str, key: &str) -> u32 {
     let log = std::fs::read_to_string(log).expect("cleanshot.exe was started with --log here");
     let shown = log
         .lines()
-        .filter(|line| line.contains(&format!(" perf {budget} ")))
+        .filter(|line| line.contains(&format!(" perf {budget} {key}=")))
         .count();
     u32::try_from(shown).expect("fewer than 4 billion lines")
 }

@@ -4,7 +4,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use windows::Win32::Foundation::FILETIME;
-use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+use windows::Win32::System::ProcessStatus::{
+    K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX2,
+};
 use windows::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
 use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 
@@ -13,7 +15,7 @@ const FILE_NAME: &str = "cleanshot.log";
     clippy::cast_possible_truncation,
     reason = "the counters are a few dozen bytes"
 )]
-const COUNTERS_SIZE: u32 = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+const COUNTERS_SIZE: u32 = size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32;
 
 /// Why the log could not be opened or written.
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +82,9 @@ pub fn since_start() -> Result<Duration, LogError> {
 #[derive(Clone, Copy, Debug)]
 pub struct Usage {
     pub working_set_bytes: usize,
+    /// The part of the working set no other process can share: shared DLL and mapped pages
+    /// are left out.
+    pub private_working_set_bytes: usize,
     /// CPU time in kernel and user mode together.
     pub cpu: Duration,
 }
@@ -92,14 +97,21 @@ pub struct Usage {
 /// if it does not give its memory counters.
 pub fn usage() -> Result<Usage, LogError> {
     let times = process_times()?;
-    let mut counters = PROCESS_MEMORY_COUNTERS::default();
-    // SAFETY: `counters` is writable and COUNTERS_SIZE is its size; the pseudo-handle needs no
-    // closing.
-    unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut counters, COUNTERS_SIZE) }
-        .ok()
-        .map_err(LogError::Memory)?;
+    let mut counters = PROCESS_MEMORY_COUNTERS_EX2::default();
+    // SAFETY: `counters` is writable and COUNTERS_SIZE is its size, which tells Windows it is the
+    // EX2 layout, whose head is PROCESS_MEMORY_COUNTERS; the pseudo-handle needs no closing.
+    unsafe {
+        K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+            COUNTERS_SIZE,
+        )
+    }
+    .ok()
+    .map_err(LogError::Memory)?;
     Ok(Usage {
         working_set_bytes: counters.WorkingSetSize,
+        private_working_set_bytes: counters.PrivateWorkingSetSize,
         cpu: duration(ticks(times.kernel) + ticks(times.user)),
     })
 }
@@ -187,6 +199,17 @@ mod tests {
         assert!(
             after.working_set_bytes > 0,
             "a running process has a working set"
+        );
+    }
+
+    #[test]
+    fn p04_the_private_working_set_leaves_shared_pages_out() {
+        let held = usage().expect("the usage reads");
+        assert!(
+            (1..held.working_set_bytes).contains(&held.private_working_set_bytes),
+            "private working set {} of {}: a running process holds private pages and shares DLL pages",
+            held.private_working_set_bytes,
+            held.working_set_bytes
         );
     }
 }

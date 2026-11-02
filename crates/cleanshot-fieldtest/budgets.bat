@@ -30,7 +30,7 @@ taskkill /IM cleanshot.exe /F >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 move /y cleanshot.log idle.log >nul 2>&1
 
-echo [2/4] Hotkey to overlay: P-01
+echo [2/4] Hotkey to overlay, and memory after use: P-01, P-04
 > cleanshot.toml echo [hotkeys]
 >> cleanshot.toml echo region = "Ctrl+Shift+4"
 start "" cleanshot.exe --log
