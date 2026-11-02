@@ -19,7 +19,9 @@ mod startup;
 mod step;
 mod text;
 mod text_edit;
+mod timer;
 mod tool;
+mod toolbar;
 
 pub use bubble::{BUBBLE_PADDING, Bubble};
 pub use delivery::{Delivered, DeliveryError, Output, delivery_notice, save_as_notice};
@@ -54,4 +56,6 @@ pub use text::{
 pub use text_edit::{
     BoxPress, CaretMove, LineMove, LinePosition, TextEdit, TextFrame, TextOrigin, commit_text,
 };
+pub use timer::Timer;
 pub use tool::Tool;
+pub use toolbar::CaptureMode;
