@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    Delivered, DeliveryError, Document, Hotkey, HotkeyAction, MAX_SETTINGS_BYTES, Output,
+    Delivered, DeliveryError, Document, Hotkey, HotkeyAction, MAX_SETTINGS_BYTES, Output, Policy,
     RgbaImage, Settings, SettingsProblem, delivery_notice,
 };
 use cleanshot_editor::ask_save_path;
@@ -26,9 +26,11 @@ use cleanshot_win::tray::{
 
 mod capture;
 mod delivery;
+mod settings_window;
 
 use capture::{Handoff, capture};
 use delivery::{deliver, save_as_start, save_to};
+use settings_window::open_settings;
 
 fn main() {
     cleanshot_win::load_dlls_from_system32_only().expect("the DLL search path is restricted");
@@ -97,7 +99,7 @@ fn main() {
                     .spawn(async move |cx| match to {
                         Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
                         Handoff::SaveAs => {
-                            let (folder, name) = save_as_start(&session.settings);
+                            let (folder, name) = save_as_start(&session.settings.borrow());
                             let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
                             save_chosen(&session, image, chosen.await);
                         }
@@ -110,6 +112,7 @@ fn main() {
                 cx.update(|cx| {
                     let action = match request {
                         Request::Capture(action) => action,
+                        Request::OpenSettings => return open_settings(cx, &session),
                         Request::Exit => return cx.quit(),
                     };
                     capture(&session, action, asked, defer, pass_on);
@@ -159,7 +162,10 @@ fn start_warnings(tray: &Tray, earlier: [Option<String>; 4]) -> String {
 
 /// What lives as long as the tray: read once at start, or held between captures.
 struct Session {
-    settings: Settings,
+    /// F-55: the settings window changes them while Cleanshot runs.
+    settings: RefCell<Settings>,
+    /// F-57: no policy until the HKLM read fills it.
+    policy: Policy,
     tray: Rc<RefCell<Option<Tray>>>,
     overlay: RefCell<Option<Overlay>>,
     /// F-06: the last selection copied or saved, kept in memory only (C-20).
@@ -173,7 +179,8 @@ struct Session {
 impl Session {
     fn new(settings: Settings, tray: Rc<RefCell<Option<Tray>>>, log: Option<Log>) -> Self {
         Self {
-            settings,
+            settings: RefCell::new(settings),
+            policy: Policy::default(),
             tray,
             overlay: RefCell::new(None),
             last_selection: Cell::new(None),
@@ -337,19 +344,19 @@ fn editor_deliver(
     session: &Rc<Session>,
 ) -> impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static {
     let session = Rc::clone(session);
-    move |output, document| deliver(output, document, &session.settings)
+    move |output, document| deliver(output, document, &session.settings.borrow())
 }
 
 fn editor_save_as_start(session: &Rc<Session>) -> impl Fn() -> (PathBuf, String) + 'static {
     let session = Rc::clone(session);
-    move || save_as_start(&session.settings)
+    move || save_as_start(&session.settings.borrow())
 }
 
 fn editor_save_to(
     session: &Rc<Session>,
 ) -> impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static {
     let session = Rc::clone(session);
-    move |path, document| save_to(path, document, &session.settings)
+    move |path, document| save_to(path, document, &session.settings.borrow())
 }
 
 /// P-07: logs the time from now, as the editor opens, to the frame after its first draw.
@@ -372,7 +379,9 @@ fn save_chosen(
         return;
     };
     let document = Document::new(Arc::new(image));
-    if let Err(error) = chosen.and_then(|path| save_to(&path, &document, &session.settings)) {
+    if let Err(error) =
+        chosen.and_then(|path| save_to(&path, &document, &session.settings.borrow()))
+    {
         session.warn(&delivery_notice(&Err(error)));
     }
 }

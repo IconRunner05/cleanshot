@@ -79,7 +79,12 @@ pub(super) fn capture(
         }
     };
     let last = session.last_selection.get();
-    let selected = match plan(action, session.settings.after_capture, last, under_pointer) {
+    let selected = match plan(
+        action,
+        session.settings.borrow().after_capture,
+        last,
+        under_pointer,
+    ) {
         None => {
             session.log_capture(&copied, &outputs, &captures);
             return session.sample_after_use(&defer);
@@ -178,7 +183,11 @@ fn finish(session: &Session, captures: &[MonitorImage], selected: RECT, output: 
         Ok(image) => image,
         Err(error) => return session.warn(&format!("The capture did not finish: {error}.")),
     };
-    match deliver(output, &Document::new(Arc::new(image)), &session.settings) {
+    match deliver(
+        output,
+        &Document::new(Arc::new(image)),
+        &session.settings.borrow(),
+    ) {
         Ok(Delivered::Copied) => {
             session.perf(|_| format!("P-02 copied_ms={}", started.elapsed().as_millis()));
         }

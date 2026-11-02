@@ -34,11 +34,13 @@ const ICON_ID: u32 = 1;
 const MENU_CAPTURE_REGION: usize = 1;
 const MENU_CAPTURE_SCREEN: usize = 2;
 const MENU_EXIT: usize = 3;
+const MENU_SETTINGS: usize = 4;
 
 /// What the user asked for through the tray icon, its menu or a global hotkey.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Capture(HotkeyAction),
+    OpenSettings,
     Exit,
 }
 
@@ -415,6 +417,7 @@ fn show_menu(window: HWND) -> Option<Request> {
         let screen = HSTRING::from(HotkeyAction::FullScreen.name());
         let built = AppendMenuW(menu, MF_STRING, MENU_CAPTURE_REGION, &region)
             .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_CAPTURE_SCREEN, &screen))
+            .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Settings")))
             .and_then(|()| AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("Exit")));
         let mut cursor = POINT::default();
         let chosen = if built.is_ok() && GetCursorPos(&raw mut cursor).is_ok() {
@@ -442,6 +445,7 @@ fn show_menu(window: HWND) -> Option<Request> {
         match chosen? {
             MENU_CAPTURE_REGION => Some(Request::Capture(HotkeyAction::Region)),
             MENU_CAPTURE_SCREEN => Some(Request::Capture(HotkeyAction::FullScreen)),
+            MENU_SETTINGS => Some(Request::OpenSettings),
             MENU_EXIT => Some(Request::Exit),
             _ => None,
         }

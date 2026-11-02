@@ -16,6 +16,9 @@ section exists.
 - Settings window (F-55): what happens after a capture, the save folder, the save format
   and the three capture hotkeys, each change saved at once. A hotkey another program holds
   is named, and the old one stays.
+- Start with Windows (F-56): a switch in the settings window. Cleanshot adds or removes its
+  entry in Windows' startup list only when you flip it; the entry is the only record of the
+  choice, and the start_with_windows key in cleanshot.toml is no longer used.
 - Border and shadow (F-44): the Border and Shadow toggles on the property strip put a thin
   border and a soft drop shadow around the whole image, on the canvas and in what is copied
   or saved. The image grows to hold them; PNG keeps the shadow's edge transparent, and
