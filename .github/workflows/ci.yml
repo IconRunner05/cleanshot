@@ -197,7 +197,12 @@ jobs:
             exit 1
           fi
           "$run/cleanshot.exe" --log &
-          sleep 15
+          # D-97: P-04 and P-05 are logged 10 s after the tray is ready, which a slow cold start
+          # (antivirus scanning a fresh exe) pushes back, so this waits for the line, not a time.
+          for _ in $(seq 240); do
+            grep -q " perf P-05 " "$run/cleanshot.log" 2>/dev/null && break
+            sleep 0.5
+          done
           taskkill //F //IM cleanshot.exe
           cat "$run/cleanshot.log"
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner \
