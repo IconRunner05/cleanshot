@@ -9,6 +9,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
 
+use crate::struct_size;
+
 /// The colours the overlay, its toolbar and its size pill are drawn in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Palette {
@@ -40,7 +42,7 @@ impl Palette {
     /// CHARTER 4's colours, or with a high-contrast theme on, that theme's (F-13).
     pub(crate) fn current() -> windows::core::Result<Self> {
         let mut contrast = HIGHCONTRASTW {
-            cbSize: u32::try_from(size_of::<HIGHCONTRASTW>()).expect("fits in u32"),
+            cbSize: struct_size::<HIGHCONTRASTW>(),
             ..HIGHCONTRASTW::default()
         };
         // SAFETY: `contrast` is writable and its size is given in cbSize.

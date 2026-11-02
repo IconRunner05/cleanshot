@@ -27,6 +27,7 @@ use windows::core::{BOOL, Interface};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use crate::Error;
+use crate::struct_size;
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -228,7 +229,7 @@ fn monitor_bounds() -> Result<Vec<RECT>, Error> {
         .into_iter()
         .map(|handle| {
             let mut info = MONITORINFO {
-                cbSize: u32::try_from(size_of::<MONITORINFO>()).expect("fits in u32"),
+                cbSize: struct_size::<MONITORINFO>(),
                 ..Default::default()
             };
             // SAFETY: `info` has its size set, as GetMonitorInfoW requires.
@@ -256,7 +257,7 @@ fn bitblt(bounds: RECT) -> Result<MonitorImage, Error> {
     let (width, height) = size_of_rect(bounds)?;
     let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
-            biSize: u32::try_from(size_of::<BITMAPINFOHEADER>()).expect("fits in u32"),
+            biSize: struct_size::<BITMAPINFOHEADER>(),
             biWidth: bounds.right - bounds.left,
             biHeight: -(bounds.bottom - bounds.top),
             biPlanes: 1,

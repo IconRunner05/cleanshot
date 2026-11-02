@@ -24,6 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::Error;
+use crate::struct_size;
 use crate::tray_icon::{TaskbarShade, TrayIcon};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotTray");
@@ -403,10 +404,6 @@ pub fn print_screen_fallback(
 fn capture_signal() -> u32 {
     // SAFETY: the argument is a 'static, NUL-terminated string.
     unsafe { RegisterWindowMessageW(CAPTURE_SIGNAL) }
-}
-
-pub(crate) fn struct_size<T>() -> u32 {
-    u32::try_from(size_of::<T>()).expect("a Win32 struct is smaller than 4 GiB")
 }
 
 fn icon_data(window: HWND) -> NOTIFYICONDATAW {

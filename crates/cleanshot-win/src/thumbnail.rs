@@ -9,6 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, SW_SHOWNOACTIVATE, 
 
 use crate::Error;
 use crate::fade;
+use crate::struct_size;
 
 mod drag;
 mod window;
@@ -161,7 +162,7 @@ impl Drop for Thumbnail {
 /// The work area, in physical pixels, of the monitor holding `monitor`.
 fn work_area(monitor: RECT) -> windows::core::Result<RECT> {
     let mut info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).expect("fits in u32"),
+        cbSize: struct_size::<MONITORINFO>(),
         ..Default::default()
     };
     // SAFETY: `info` is writable with its size set; MonitorFromRect always returns a monitor

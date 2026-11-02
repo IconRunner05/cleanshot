@@ -120,7 +120,7 @@ fn nearest_image(file: &'static [u8], size: i32) -> &'static [u8] {
 /// contrast.
 fn high_contrast_window() -> Option<u32> {
     let mut contrast = HIGHCONTRASTW {
-        cbSize: crate::tray::struct_size::<HIGHCONTRASTW>(),
+        cbSize: crate::struct_size::<HIGHCONTRASTW>(),
         ..Default::default()
     };
     // SAFETY: `contrast` is writable and its cbSize says how much.

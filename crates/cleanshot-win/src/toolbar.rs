@@ -17,8 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, Interface, PCWSTR, PWSTR};
 
 use crate::palette::Palette;
+use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
-use crate::tray::struct_size;
 
 pub(crate) mod automation;
 

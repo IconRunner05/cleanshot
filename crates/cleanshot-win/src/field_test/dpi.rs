@@ -24,6 +24,7 @@ use windows::core::{PCWSTR, w};
 
 use super::{FULL_SCREEN, press, pump_messages, within};
 use crate::Error;
+use crate::struct_size;
 
 const PATTERN_CLASS: PCWSTR = w!("CleanshotFieldTestPattern");
 /// Where the pattern sits on the primary monitor, in physical pixels.
@@ -190,7 +191,7 @@ impl PatternWindow {
         // SAFETY: a null module name asks for this exe's own handle.
         let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
         let class = WNDCLASSEXW {
-            cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).expect("fits in u32"),
+            cbSize: struct_size::<WNDCLASSEXW>(),
             lpfnWndProc: Some(paint_pattern),
             hInstance: instance.into(),
             lpszClassName: PATTERN_CLASS,
@@ -250,7 +251,7 @@ extern "system" fn paint_pattern(
         .collect();
     let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
-            biSize: u32::try_from(size_of::<BITMAPINFOHEADER>()).expect("fits in u32"),
+            biSize: struct_size::<BITMAPINFOHEADER>(),
             biWidth: PATTERN_SIDE,
             biHeight: -PATTERN_SIDE,
             biPlanes: 1,

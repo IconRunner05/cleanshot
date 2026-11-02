@@ -43,6 +43,7 @@ use crate::overlay::WINDOW_CLASS;
 
 use crate::Error;
 use crate::capture::monitor_handles;
+use crate::struct_size;
 use cleanshot_core::{Hotkey, HotkeyAction};
 
 use crate::tray::{Request, Tray, running_tray_window};
@@ -198,7 +199,7 @@ pub fn monitors() -> Result<Vec<Monitor>, Error> {
 
 fn describe_monitor(handle: HMONITOR) -> Monitor {
     let mut info = MONITORINFOEXW::default();
-    info.monitorInfo.cbSize = u32::try_from(size_of::<MONITORINFOEXW>()).expect("fits in u32");
+    info.monitorInfo.cbSize = struct_size::<MONITORINFOEXW>();
     // SAFETY: `info` is a MONITORINFOEXW with its size set, as GetMonitorInfoW requires.
     let described = unsafe { GetMonitorInfoW(handle, (&raw mut info).cast::<MONITORINFO>()) };
     let length = info

@@ -54,6 +54,11 @@ pub(crate) fn register_window_class(class: &WNDCLASSEXW) -> Result<(), Error> {
     Err(Error::Window(error))
 }
 
+/// The size of the Win32 struct `T`, as its `cbSize` field takes it.
+pub(crate) fn struct_size<T>() -> u32 {
+    u32::try_from(size_of::<T>()).expect("a Win32 struct is smaller than 4 GiB")
+}
+
 /// What went wrong in a call to Windows.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -29,6 +29,7 @@ use crate::loupe;
 use crate::palette::Palette;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
+use crate::struct_size;
 use crate::toolbar::automation::{self, Request};
 use crate::toolbar::{Control, OffTip, Paint};
 
@@ -159,7 +160,7 @@ pub(super) fn register_class() -> Result<(), Error> {
     // SAFETY: a null module name asks for this exe's own handle.
     let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
     let class = WNDCLASSEXW {
-        cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).expect("fits in u32"),
+        cbSize: struct_size::<WNDCLASSEXW>(),
         lpfnWndProc: Some(window_procedure),
         hInstance: instance.into(),
         lpszClassName: WINDOW_CLASS,

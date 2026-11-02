@@ -32,6 +32,7 @@ use super::{
 use crate::Error;
 use crate::overlay::{bgra, client_point, target_and_bitmap};
 use crate::palette::Palette;
+use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
 use crate::toolbar::OffTip;
 
@@ -206,7 +207,7 @@ pub(super) fn register_class() -> Result<(), Error> {
     // SAFETY: a null module name asks for this exe's own handle.
     let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
     let class = WNDCLASSEXW {
-        cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).expect("fits in u32"),
+        cbSize: struct_size::<WNDCLASSEXW>(),
         lpfnWndProc: Some(window_procedure),
         hInstance: instance.into(),
         lpszClassName: WINDOW_CLASS,
@@ -422,7 +423,7 @@ unsafe extern "system" fn window_procedure(
         WM_MOUSEMOVE => {
             if !surface.hovered.replace(true) {
                 let mut leave = TRACKMOUSEEVENT {
-                    cbSize: u32::try_from(size_of::<TRACKMOUSEEVENT>()).expect("fits in u32"),
+                    cbSize: struct_size::<TRACKMOUSEEVENT>(),
                     dwFlags: TME_LEAVE,
                     hwndTrack: window,
                     dwHoverTime: 0,

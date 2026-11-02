@@ -1,0 +1,18 @@
+id: struct-size-through-helper
+language: rust
+severity: error
+message: A Win32 struct's size goes through crate::struct_size::<T>(), not an inline u32::try_from(size_of::<T>()).
+files:
+  - crates/cleanshot-win/src/**/*.rs
+rule:
+  pattern: u32::try_from(size_of::<$T>())
+  not:
+    inside:
+      kind: function_item
+      has:
+        field: name
+        regex: ^struct_size$
+      stopBy: end
+constraints:
+  T:
+    regex: ^[A-Z][A-Z0-9_]+$
