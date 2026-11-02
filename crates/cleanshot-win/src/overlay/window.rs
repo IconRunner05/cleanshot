@@ -239,21 +239,30 @@ pub(super) fn prewarm(factory: &ID2D1Factory, palette: &Palette) -> windows::cor
             None,
         )
     }?;
-    let warmed = target_and_bitmap(factory, window, 1, 1, &[0; 4])
-        .and_then(|(target, frozen)| Paint::new(&target.cast()?, &frozen, 1.0, palette).map(drop));
+    let warmed = target_and_bitmap(
+        factory,
+        window,
+        D2D_SIZE_U {
+            width: 1,
+            height: 1,
+        },
+        (1, 1),
+        &[0; 4],
+    )
+    .and_then(|(target, frozen)| Paint::new(&target.cast()?, &frozen, 1.0, palette).map(drop));
     // SAFETY: the window was created above and holds no state.
     let destroyed = unsafe { DestroyWindow(window) };
     debug_assert!(destroyed.is_ok(), "a window made here is destroyed once");
     warmed
 }
 
-/// A render target for `window`, `width` x `height` physical pixels, and a bitmap on it of
-/// `bgra`, rows of premultiplied BGRA `width` pixels long.
+/// A render target for `window`, `target` physical pixels, and a bitmap on it `width` x
+/// `height` of `bgra`, rows of premultiplied BGRA `width` pixels long.
 pub(crate) fn target_and_bitmap(
     factory: &ID2D1Factory,
     window: HWND,
-    width: u32,
-    height: u32,
+    target: D2D_SIZE_U,
+    (width, height): (u32, u32),
     bgra: &[u8],
 ) -> windows::core::Result<(ID2D1HwndRenderTarget, ID2D1Bitmap)> {
     let format = D2D1_PIXEL_FORMAT {
@@ -268,7 +277,7 @@ pub(crate) fn target_and_bitmap(
     };
     let window_properties = D2D1_HWND_RENDER_TARGET_PROPERTIES {
         hwnd: window,
-        pixelSize: D2D_SIZE_U { width, height },
+        pixelSize: target,
         ..Default::default()
     };
     let bitmap_properties = D2D1_BITMAP_PROPERTIES {
@@ -306,7 +315,13 @@ fn surface(
     hosts_toolbar: bool,
 ) -> windows::core::Result<Surface> {
     let bgra = bgra(&capture.image);
-    let (target, frozen) = target_and_bitmap(factory, window, width, height, &bgra)?;
+    let (target, frozen) = target_and_bitmap(
+        factory,
+        window,
+        D2D_SIZE_U { width, height },
+        (width, height),
+        &bgra,
+    )?;
     // SAFETY: every call takes owned or borrowed COM objects that outlive it.
     unsafe {
         let palette = shared.palette;

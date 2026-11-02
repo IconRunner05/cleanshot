@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use cleanshot_core::RgbaImage;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ROUNDED_RECT,
     D2D1CreateFactory, ID2D1Bitmap, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
@@ -26,7 +26,8 @@ use windows::core::{Interface, PCWSTR, w};
 
 use super::drag::{self, Dragged, Ended, left_the_press};
 use super::{
-    Button, INSET, RADIUS, STAY, ThumbnailEvent, button_at, buttons, left_after, place, slid,
+    Button, INSET, RADIUS, STAY, ThumbnailEvent, button_at, buttons, centred, left_after, place,
+    slid, window_size,
 };
 use crate::Error;
 use crate::overlay::{bgra, client_point, target_and_bitmap};
@@ -44,6 +45,8 @@ const HAIRLINE: f32 = 1.0;
 struct Surface {
     target: ID2D1HwndRenderTarget,
     preview: ID2D1Bitmap,
+    /// Where the preview sits in the client area, centred when the window is larger.
+    framed: RECT,
     material: ID2D1SolidColorBrush,
     hairline: ID2D1SolidColorBrush,
     label: ID2D1SolidColorBrush,
@@ -93,9 +96,11 @@ impl Surface {
                 right: size.width,
                 bottom: size.height,
             };
+            self.target.FillRectangle(&raw const whole, &self.material);
+            let framed = rect(self.framed);
             self.target.DrawBitmap(
                 &self.preview,
-                Some(&raw const whole),
+                Some(&raw const framed),
                 1.0,
                 D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
                 None,
@@ -220,11 +225,13 @@ pub(super) fn open_window(
     drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> Result<HWND, Error> {
-    let (width, height) = (preview.width(), preview.height());
-    let (Ok(client_width), Ok(client_height)) = (i32::try_from(width), i32::try_from(height))
-    else {
+    let (Ok(width), Ok(height)) = (
+        i32::try_from(preview.width()),
+        i32::try_from(preview.height()),
+    ) else {
         return Err(Error::Window(windows::core::Error::empty()));
     };
+    let (client_width, client_height) = window_size(width, height, scale);
     let px = |dips: f32| (dips * scale).round() as i32;
     let rest = place(work, client_width, client_height, px(INSET));
     let distance = if slide { px(INSET) } else { 0 };
@@ -287,7 +294,23 @@ fn surface(
     let factory: ID2D1Factory =
         unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }?;
     let (width, height) = (preview.width(), preview.height());
-    let (target, preview) = target_and_bitmap(&factory, window, width, height, &bgra(preview))?;
+    let client = (rest.right - rest.left, rest.bottom - rest.top);
+    let target_size = D2D_SIZE_U {
+        width: client.0.unsigned_abs(),
+        height: client.1.unsigned_abs(),
+    };
+    let framed = centred(
+        client,
+        i32::try_from(width).expect("open_window checked it fits"),
+        i32::try_from(height).expect("open_window checked it fits"),
+    );
+    let (target, preview) = target_and_bitmap(
+        &factory,
+        window,
+        target_size,
+        (width, height),
+        &bgra(preview),
+    )?;
     let palette = Palette::current()?;
     // SAFETY: each colour lives in `palette`, which outlives its call.
     let (material, hairline, label) = unsafe {
@@ -303,6 +326,7 @@ fn surface(
         buttons: buttons(rest.right - rest.left, rest.bottom - rest.top, scale),
         target,
         preview,
+        framed,
         material,
         hairline,
         label,

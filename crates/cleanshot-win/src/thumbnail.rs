@@ -22,6 +22,12 @@ const BUTTON_HEIGHT: f32 = 24.0;
 const BUTTON_WIDTH: f32 = 64.0;
 const BUTTON_GAP: f32 = 8.0;
 const STAY: Duration = Duration::from_secs(5);
+const LARGEST_PREVIEW: (f32, f32) = (240.0, 160.0);
+/// Room for Save and Dismiss with a gap around each.
+const SMALLEST_WINDOW: (f32, f32) = (
+    2.0 * BUTTON_WIDTH + 3.0 * BUTTON_GAP,
+    BUTTON_HEIGHT + 2.0 * BUTTON_GAP,
+);
 const SLIDE: Duration = Duration::from_millis(120);
 
 /// What happened on the thumbnail, delivered inside its window's procedure. Dropping the
@@ -101,6 +107,23 @@ impl Thumbnail {
         Ok(thumbnail)
     }
 
+    /// The largest preview, in physical pixels, that the thumbnail shows on the monitor
+    /// holding `monitor`: scale the capture down to fit it, never up (D-94, D-96).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Window`] if the monitor's DPI cannot be read.
+    pub fn largest_preview(monitor: RECT) -> Result<(u32, u32), Error> {
+        let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Window)?;
+        let px = |dips: f32| {
+            // F-09: a few hundred pixels at any scale Windows offers.
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pixels = (dips * scale).round() as u32;
+            pixels
+        };
+        Ok((px(LARGEST_PREVIEW.0), px(LARGEST_PREVIEW.1)))
+    }
+
     /// Closes the thumbnail with F-13's 120 ms fade, or at once when Windows' Animation effects
     /// is off.
     ///
@@ -150,6 +173,31 @@ fn place(work: RECT, width: i32, height: i32, inset: i32) -> RECT {
         top: bottom - height,
         right,
         bottom,
+    }
+}
+
+/// The thumbnail's client size for a `width` x `height` preview at `scale` physical pixels
+/// per DIP: the preview's own, but never too small for its buttons.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the smallest window is a few hundred pixels"
+)]
+fn window_size(width: i32, height: i32, scale: f32) -> (i32, i32) {
+    let px = |dips: f32| (dips * scale).round() as i32;
+    (
+        width.max(px(SMALLEST_WINDOW.0)),
+        height.max(px(SMALLEST_WINDOW.1)),
+    )
+}
+
+/// Where a `width` x `height` preview sits in a client `window`: centred.
+fn centred((window_width, window_height): (i32, i32), width: i32, height: i32) -> RECT {
+    let (left, top) = ((window_width - width) / 2, (window_height - height) / 2);
+    RECT {
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
     }
 }
 
@@ -258,6 +306,27 @@ mod tests {
         );
         assert_eq!(left_after(second, second, false), None);
         assert_eq!(left_after(second, STAY, true), Some(second));
+    }
+
+    #[test]
+    fn f09_a_preview_too_small_for_the_buttons_sits_centred_in_a_window_they_fit() {
+        assert_eq!(window_size(30, 20, 1.0), (152, 40));
+        assert_eq!(window_size(30, 20, 1.5), (228, 60));
+        assert_eq!(window_size(200, 1, 1.0), (200, 40), "a sliver is no strip");
+        assert_eq!(window_size(240, 160, 1.0), (240, 160));
+        assert_eq!(
+            centred((152, 40), 30, 20),
+            RECT {
+                left: 61,
+                top: 10,
+                right: 91,
+                bottom: 30
+            }
+        );
+        for (_, area) in buttons(152, 40, 1.0) {
+            assert!(area.left >= 0 && area.top >= 0, "{area:?}");
+            assert!(area.right <= 152 && area.bottom <= 40, "{area:?}");
+        }
     }
 
     #[test]
