@@ -47,7 +47,7 @@ under a name the scan does not list, would pass it; those rows rest on review as
 
 | What | Detail | Proof |
 | --- | --- | --- |
-| Settings | Read from `cleanshot.toml` beside the exe if one is there (portable use), otherwise `%APPDATA%\Cleanshot\cleanshot.toml`. Cleanshot does not write this file. | Review (`settings_file.rs`) |
+| Settings | Read from `cleanshot.toml` beside the exe if one is there (portable use), otherwise `%APPDATA%\Cleanshot\cleanshot.toml`. Cleanshot does not write this file. A save folder on a share or a device (a path starting with two slashes, such as `\\server\share`, or with `\??\`) is refused and the default folder applies, so a crafted file beside the exe cannot send saves to another computer (C-10, D-83). A folder on a drive that reaches the network through a link or a mapped drive is allowed, because only the user can set one up (D-83). Save As can still choose a share. | Test (`c10_a_save_folder_on_a_share_or_device_is_refused_and_a_drive_folder_is_kept`); review (`settings.rs`, `settings_file.rs`) |
 | Saved images | Saved to the Screenshots known folder (created if missing) or to the configured folder, which must be a full path. Ctrl+S names the file `Screenshot <date> <time>.<ext>`, adding `-2`, `-3` and so on rather than replacing a file. Save As writes the name you type; Windows' Save As asks before replacing an existing file. | Test (`c15_unsafe_templates_are_refused`, `c15_a_save_folder_that_is_not_a_full_path_is_refused`, `f21_never_overwrites_existing_file`); review for Save As |
 | Partial files | A save writes `<name>.partialN` in the target folder, then links or moves it into place and deletes it. A crash or power cut mid-save, or a failed delete (an antivirus holding the file, say), leaves it there, and a failed delete is not shown to the user. | Review (`save.rs`) |
 | Clipboard, written | Copy puts the image on the clipboard as a bitmap and a PNG; Ctrl+C and Ctrl+X in a text box put text there. Cleanshot does not opt out of clipboard history, so if Windows' clipboard history (Win+V) is on it keeps the copy, and so does cloud clipboard sync if the user turned it on (D-84). | Review (`clipboard.rs`, `text_box.rs`) |
@@ -96,14 +96,8 @@ control what they do.
 
 ## Known gaps
 
-Each of these is where Cleanshot's own code falls short of a charter rule today. Its entry
-changes in the commit that closes it.
-
-- **C-10, network paths.** The configured save folder may be a network (UNC) path such as
-  `\\server\share`. Saving there, or opening Save As on it, makes Windows connect to that
-  server, and depending on the PC's network policy sign in to it with the user's Windows
-  credentials. A `cleanshot.toml` beside the exe takes precedence over the one in `%APPDATA%`,
-  so a crafted file placed next to the exe can set such a folder.
+Where Cleanshot's own code falls short of a charter rule today, an entry here says so, and it
+changes in the commit that closes it. None today.
 
 ## Supply chain and evidence
 

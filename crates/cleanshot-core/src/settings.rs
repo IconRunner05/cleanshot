@@ -209,7 +209,11 @@ impl Settings {
         let save_folder = reader.read("save_folder", |value| {
             value
                 .as_str()
-                .filter(|folder| !folder.is_empty() && folder.len() <= MAX_SAVE_FOLDER_BYTES)
+                .filter(|folder| {
+                    !folder.is_empty()
+                        && folder.len() <= MAX_SAVE_FOLDER_BYTES
+                        && !names_a_share_or_device(folder)
+                })
                 .map(|folder| Some(folder.to_owned()))
         });
         let settings = Self {
@@ -397,6 +401,13 @@ impl std::fmt::Display for Hotkey {
             Key::PrintScreen => write!(formatter, "PrtSc"),
         }
     }
+}
+
+// C-10 D-83: two leading slashes, or Windows' NT prefix, name a share or a device.
+fn names_a_share_or_device(folder: &str) -> bool {
+    let separator = ['\\', '/'];
+    folder.starts_with(separator) && folder[1..].starts_with(separator)
+        || folder.starts_with("\\??\\")
 }
 
 fn key(name: &str) -> Option<Key> {
@@ -595,6 +606,45 @@ mod tests {
             Err(invalid.clone())
         );
         assert_eq!(folder(String::new()).checked(), Err(invalid));
+    }
+
+    #[test]
+    fn c10_a_save_folder_on_a_share_or_device_is_refused_and_a_drive_folder_is_kept() {
+        let read = |folder: &str| {
+            let text = format!("save_folder = '{folder}'");
+            Settings::from_toml(text.as_bytes())
+        };
+        let invalid = vec![SettingsProblem::InvalidValue {
+            key: "save_folder".into(),
+        }];
+        for folder in [
+            "\\\\server\\share",
+            "\\\\?\\UNC\\server\\share",
+            "\\\\.\\pipe\\shots",
+            "\\\\?\\C:\\Shots",
+            "//server/share",
+            "\\/server/share",
+            "/\\server\\share",
+            "\\??\\UNC\\server\\share",
+        ] {
+            assert_eq!(
+                read(folder),
+                (Settings::default(), invalid.clone()),
+                "{folder}"
+            );
+        }
+        for folder in ["C:\\Users\\me\\Shots", "z:/shots"] {
+            let (settings, problems) = read(folder);
+            assert_eq!(
+                (settings.save_folder.as_deref(), problems),
+                (Some(folder), vec![])
+            );
+        }
+        let chosen_in_the_window = Settings {
+            save_folder: Some("\\\\server\\share".into()),
+            ..Settings::default()
+        };
+        assert_eq!(chosen_in_the_window.checked(), Err(invalid));
     }
 
     #[test]
