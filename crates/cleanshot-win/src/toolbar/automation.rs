@@ -27,7 +27,9 @@ use windows::Win32::UI::Accessibility::{
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{BSTR, Error, HRESULT, IUnknown, Interface, Result, implement};
 
-use super::{CONTROLS, Control, Layout};
+use cleanshot_core::ToolbarControl;
+
+use super::{Layout, name};
 
 /// Wakes the toolbar's window to act on what UI Automation asked of it. It carries nothing,
 /// so a post from another program only makes the window re-read its own [`Mirror`].
@@ -36,13 +38,13 @@ pub(crate) const WAKE: u32 = WM_APP;
 /// What UI Automation asks the toolbar to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Request {
-    Choose(Control),
-    Focus(Control),
+    Choose(ToolbarControl),
+    Focus(ToolbarControl),
 }
 
 #[derive(Default)]
 struct State {
-    shown: Option<(Layout, Control)>,
+    shown: Option<(Layout, ToolbarControl)>,
     /// F-08: what a window capture would pick, as a screen reader says it, and its frame.
     pick: Option<(String, RECT)>,
     requests: Vec<Request>,
@@ -67,15 +69,20 @@ impl Mirror {
     }
 
     /// Why `control` is off, or `None` when it can be chosen (F-57).
-    pub(crate) fn off(&self, control: Control) -> Option<&str> {
+    pub(crate) fn off(&self, control: ToolbarControl) -> Option<&str> {
         match control {
-            Control::Save => self.saving_off.as_deref(),
-            Control::Copy | Control::Edit | Control::Cancel => None,
+            ToolbarControl::Save => self.saving_off.as_deref(),
+            ToolbarControl::Mode(_)
+            | ToolbarControl::Timer
+            | ToolbarControl::Capture
+            | ToolbarControl::Copy
+            | ToolbarControl::Edit
+            | ToolbarControl::Cancel => None,
         }
     }
 
     /// Records where the toolbar is and which control has the focus, or that none shows.
-    pub(crate) fn show(&self, shown: Option<(Layout, Control)>) {
+    pub(crate) fn show(&self, shown: Option<(Layout, ToolbarControl)>) {
         self.lock().shown = shown;
     }
 
@@ -97,8 +104,8 @@ impl Mirror {
         std::mem::take(&mut self.lock().requests)
     }
 
-    fn shown(&self) -> Result<(Layout, Control)> {
-        self.lock().shown.ok_or_else(gone)
+    fn shown(&self) -> Result<(Layout, ToolbarControl)> {
+        self.lock().shown.clone().ok_or_else(gone)
     }
 
     fn ask(&self, window: HWND, request: Request) -> Result<()> {
@@ -177,11 +184,12 @@ fn none<T>() -> Result<T> {
     Err(Error::empty())
 }
 
-fn position(control: Control) -> usize {
-    CONTROLS
+fn position(control: ToolbarControl) -> usize {
+    cleanshot_core::Toolbar::Overlay
+        .controls()
         .iter()
         .position(|&each| each == control)
-        .expect("every control is in CONTROLS")
+        .expect("the toolbar shows every control it names")
 }
 
 fn variant(vt: VARENUM, value: VARIANT_0_0_0) -> VARIANT {
@@ -236,19 +244,19 @@ fn on_screen(at: windows::Win32::Foundation::RECT) -> UiaRect {
 )]
 mod providers {
     use super::{
-        CONTROLS, Control, HWND, IInvokeProvider, IInvokeProvider_Impl,
-        IRawElementProviderFragment, IRawElementProviderFragment_Impl,
-        IRawElementProviderFragmentRoot, IRawElementProviderFragmentRoot_Impl,
-        IRawElementProviderSimple, IRawElementProviderSimple_Impl, IUnknown, Interface, Mirror,
-        NavigateDirection, NavigateDirection_FirstChild, NavigateDirection_LastChild,
-        NavigateDirection_NextSibling, NavigateDirection_Parent, NavigateDirection_PreviousSibling,
-        POINT, ProviderOptions, ProviderOptions_ServerSideProvider, Request, Result, SAFEARRAY,
-        SafeArrayCreateVector, SafeArrayPutElement, TOOLBAR_NAME, UIA_ButtonControlTypeId,
+        HWND, IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
+        IRawElementProviderFragment_Impl, IRawElementProviderFragmentRoot,
+        IRawElementProviderFragmentRoot_Impl, IRawElementProviderSimple,
+        IRawElementProviderSimple_Impl, IUnknown, Interface, Mirror, NavigateDirection,
+        NavigateDirection_FirstChild, NavigateDirection_LastChild, NavigateDirection_NextSibling,
+        NavigateDirection_Parent, NavigateDirection_PreviousSibling, POINT, ProviderOptions,
+        ProviderOptions_ServerSideProvider, Request, Result, SAFEARRAY, SafeArrayCreateVector,
+        SafeArrayPutElement, TOOLBAR_NAME, ToolbarControl, UIA_ButtonControlTypeId,
         UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
         UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
         UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_TextControlTypeId,
         UIA_ToolBarControlTypeId, UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, VARIANT,
-        VT_I4, implement, none, not_enabled, number, on_screen, position, text, truth,
+        VT_I4, implement, name, none, not_enabled, number, on_screen, position, text, truth,
     };
 
     /// The toolbar, the root of the tree its window hands UI Automation.
@@ -271,7 +279,7 @@ mod providers {
     struct Button {
         window: HWND,
         mirror: Mirror,
-        control: Control,
+        control: ToolbarControl,
     }
 
     /// F-08: what a window capture would pick, after the buttons while it is being picked.
@@ -294,10 +302,19 @@ mod providers {
         if mirror.picking() {
             return picking(window, mirror);
         }
-        button(window, mirror, CONTROLS[CONTROLS.len() - 1])
+        button(
+            window,
+            mirror,
+            cleanshot_core::Toolbar::Overlay.controls()
+                [cleanshot_core::Toolbar::Overlay.controls().len() - 1],
+        )
     }
 
-    fn button(window: HWND, mirror: &Mirror, control: Control) -> IRawElementProviderFragment {
+    fn button(
+        window: HWND,
+        mirror: &Mirror,
+        control: ToolbarControl,
+    ) -> IRawElementProviderFragment {
         Button {
             window,
             mirror: mirror.clone(),
@@ -339,7 +356,11 @@ mod providers {
     impl IRawElementProviderFragment_Impl for Toolbar_Impl {
         fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
             match direction {
-                NavigateDirection_FirstChild => Ok(button(self.window, &self.mirror, CONTROLS[0])),
+                NavigateDirection_FirstChild => Ok(button(
+                    self.window,
+                    &self.mirror,
+                    cleanshot_core::Toolbar::Overlay.controls()[0],
+                )),
                 NavigateDirection_LastChild => Ok(last_child(self.window, &self.mirror)),
                 _ => none(),
             }
@@ -407,7 +428,7 @@ mod providers {
         fn GetPropertyValue(&self, property: UIA_PROPERTY_ID) -> Result<VARIANT> {
             Ok(match property {
                 UIA_ControlTypePropertyId => number(UIA_ButtonControlTypeId.0),
-                UIA_NamePropertyId => text(self.control.name()),
+                UIA_NamePropertyId => text(name(self.control)),
                 UIA_IsEnabledPropertyId | UIA_IsKeyboardFocusablePropertyId => {
                     truth(self.mirror.off(self.control).is_none())
                 }
@@ -428,9 +449,13 @@ mod providers {
     impl IRawElementProviderFragment_Impl for Button_Impl {
         fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
             let at = position(self.control);
-            let sibling = |index: Option<usize>| match index.and_then(|index| CONTROLS.get(index)) {
+            let sibling = |index: Option<usize>| match index
+                .and_then(|index| cleanshot_core::Toolbar::Overlay.controls().get(index))
+            {
                 Some(&control) => Ok(button(self.window, &self.mirror, control)),
-                None if index == Some(CONTROLS.len()) && self.mirror.picking() => {
+                None if index == Some(cleanshot_core::Toolbar::Overlay.controls().len())
+                    && self.mirror.picking() =>
+                {
                     Ok(picking(self.window, &self.mirror))
                 }
                 None => none(),
@@ -510,7 +535,8 @@ mod providers {
                 NavigateDirection_PreviousSibling => Ok(button(
                     self.window,
                     &self.mirror,
-                    CONTROLS[CONTROLS.len() - 1],
+                    cleanshot_core::Toolbar::Overlay.controls()
+                        [cleanshot_core::Toolbar::Overlay.controls().len() - 1],
                 )),
                 _ => none(),
             }
@@ -519,7 +545,8 @@ mod providers {
         fn GetRuntimeId(&self) -> Result<*mut SAFEARRAY> {
             let id = [
                 i32::try_from(UiaAppendRuntimeId).expect("UiaAppendRuntimeId is 3"),
-                i32::try_from(CONTROLS.len()).expect("four controls"),
+                i32::try_from(cleanshot_core::Toolbar::Overlay.controls().len())
+                    .expect("four controls"),
             ];
             // SAFETY: a two-element vector of VT_I4, each element written in range; the
             // caller frees the array.

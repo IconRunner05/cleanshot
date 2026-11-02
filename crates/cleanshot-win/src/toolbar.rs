@@ -1,3 +1,4 @@
+use cleanshot_core::{CaptureMode, Toolbar, ToolbarControl};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
@@ -22,63 +23,42 @@ use crate::text::{Fonts, TextStyle};
 
 pub(crate) mod automation;
 
-/// A control on the capture toolbar (F-05).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Control {
-    Copy,
-    Save,
-    Edit,
-    Cancel,
+/// A control's accessible name.
+pub(crate) fn name(control: ToolbarControl) -> &'static str {
+    match control {
+        ToolbarControl::Mode(CaptureMode::Region) => "Region",
+        ToolbarControl::Mode(CaptureMode::Window) => "Window",
+        ToolbarControl::Mode(CaptureMode::FullScreen) => "Screen",
+        ToolbarControl::Timer => "Timer",
+        ToolbarControl::Capture => "Capture",
+        ToolbarControl::Copy => "Copy",
+        ToolbarControl::Save => "Save",
+        ToolbarControl::Edit => "Edit",
+        ToolbarControl::Cancel => "Cancel",
+    }
 }
 
-/// The toolbar's controls in the order it shows them, Tab visits them and UI Automation lists
-/// them.
-pub(crate) const CONTROLS: [Control; 4] =
-    [Control::Copy, Control::Save, Control::Edit, Control::Cancel];
-
-impl Control {
-    /// The control's accessible name.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Control::Copy => "Copy",
-            Control::Save => "Save",
-            Control::Edit => "Edit",
-            Control::Cancel => "Cancel",
-        }
+fn label(control: ToolbarControl) -> &'static str {
+    match control {
+        ToolbarControl::Mode(_)
+        | ToolbarControl::Timer
+        | ToolbarControl::Capture
+        | ToolbarControl::Copy
+        | ToolbarControl::Save
+        | ToolbarControl::Edit => name(control),
+        ToolbarControl::Cancel => "\u{d7}",
     }
+}
 
-    fn label(self) -> &'static str {
-        match self {
-            Control::Copy | Control::Save | Control::Edit => self.name(),
-            Control::Cancel => "\u{d7}",
-        }
-    }
-
-    fn width(self) -> f32 {
-        match self {
-            Control::Copy | Control::Save | Control::Edit => TEXT_BUTTON_WIDTH,
-            Control::Cancel => ICON_BUTTON_WIDTH,
-        }
-    }
-
-    /// The control `step` places after this one in Tab order, wrapping at either end and
-    /// passing over a control that is `off` (F-57). Cancel is never off.
-    pub(crate) fn step(self, step: i32, off: impl Fn(Control) -> bool) -> Self {
-        let mut next = self.moved(step);
-        while off(next) {
-            next = next.moved(step.signum());
-        }
-        next
-    }
-
-    fn moved(self, step: i32) -> Self {
-        let at = CONTROLS
-            .iter()
-            .position(|&control| control == self)
-            .expect("every control is in CONTROLS");
-        let count = i32::try_from(CONTROLS.len()).expect("four controls");
-        let next = (i32::try_from(at).expect("four controls") + step).rem_euclid(count);
-        CONTROLS[usize::try_from(next).expect("rem_euclid is never negative")]
+fn button_width(control: ToolbarControl) -> f32 {
+    match control {
+        ToolbarControl::Mode(_)
+        | ToolbarControl::Timer
+        | ToolbarControl::Capture
+        | ToolbarControl::Copy
+        | ToolbarControl::Save
+        | ToolbarControl::Edit => TEXT_BUTTON_WIDTH,
+        ToolbarControl::Cancel => ICON_BUTTON_WIDTH,
     }
 }
 
@@ -96,10 +76,10 @@ const BLUR_DEVIATION: f32 = 10.0;
 const FOCUS_RING: f32 = 2.0;
 
 /// Where the toolbar and each control sit, in physical virtual-desktop pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Layout {
     pub(crate) pill: RECT,
-    pub(crate) controls: [(Control, RECT); 4],
+    pub(crate) controls: Vec<(ToolbarControl, RECT)>,
 }
 
 /// The toolbar centred near the bottom of `monitor`, or near its top when that would cover
@@ -113,8 +93,12 @@ pub(crate) struct Layout {
 pub(crate) fn layout(monitor: RECT, selected: Option<RECT>, scale: f32) -> Option<Layout> {
     let px = |dips: f32| (dips * scale).round() as i32;
     let width = px(PADDING * 2.0
-        + CONTROLS.iter().map(|control| control.width()).sum::<f32>()
-        + GAP * (CONTROLS.len() - 1) as f32);
+        + Toolbar::Overlay
+            .controls()
+            .iter()
+            .map(|&control| button_width(control))
+            .sum::<f32>()
+        + GAP * (Toolbar::Overlay.controls().len() - 1) as f32);
     let (height, margin) = (px(PILL_HEIGHT), px(EDGE_MARGIN));
     if width + 2 * margin > monitor.right - monitor.left
         || 2 * (height + margin) > monitor.bottom - monitor.top
@@ -138,17 +122,21 @@ pub(crate) fn layout(monitor: RECT, selected: Option<RECT>, scale: f32) -> Optio
     };
     let mut x = pill.left + px(PADDING);
     let button_top = pill.top + (height - px(BUTTON_HEIGHT)) / 2;
-    let controls = CONTROLS.map(|control| {
-        let right = x + px(control.width());
-        let placed = RECT {
-            left: x,
-            top: button_top,
-            right,
-            bottom: button_top + px(BUTTON_HEIGHT),
-        };
-        x = right + px(GAP);
-        (control, placed)
-    });
+    let controls = Toolbar::Overlay
+        .controls()
+        .iter()
+        .map(|&control| {
+            let right = x + px(button_width(control));
+            let placed = RECT {
+                left: x,
+                top: button_top,
+                right,
+                bottom: button_top + px(BUTTON_HEIGHT),
+            };
+            x = right + px(GAP);
+            (control, placed)
+        })
+        .collect();
     Some(Layout { pill, controls })
 }
 
@@ -158,7 +146,7 @@ fn overlaps(a: RECT, b: RECT) -> bool {
 
 impl Layout {
     /// Where `control` sits, in screen pixels.
-    pub(crate) fn area(&self, control: Control) -> RECT {
+    pub(crate) fn area(&self, control: ToolbarControl) -> RECT {
         self.controls
             .iter()
             .find_map(|&(placed, at)| (placed == control).then_some(at))
@@ -166,7 +154,7 @@ impl Layout {
     }
 
     /// The control under `point`, if any.
-    pub(crate) fn control_at(&self, point: POINT) -> Option<Control> {
+    pub(crate) fn control_at(&self, point: POINT) -> Option<ToolbarControl> {
         self.controls
             .iter()
             .find(|(_, at)| {
@@ -341,8 +329,8 @@ impl Paint {
         &self,
         layout: &Layout,
         origin: POINT,
-        focus: Control,
-        off: impl Fn(Control) -> bool,
+        focus: ToolbarControl,
+        off: impl Fn(ToolbarControl) -> bool,
     ) -> windows::core::Result<()> {
         let local = |at: RECT| D2D_RECT_F {
             left: (at.left - origin.x) as f32,
@@ -382,7 +370,7 @@ impl Paint {
                     radiusX: BUTTON_RADIUS * self.scale,
                     radiusY: BUTTON_RADIUS * self.scale,
                 };
-                if control == Control::Copy {
+                if control == ToolbarControl::Copy {
                     self.context
                         .FillRoundedRectangle(&raw const button, &self.accent);
                 }
@@ -404,7 +392,7 @@ impl Paint {
                         None,
                     );
                 }
-                let brush = if control == Control::Copy {
+                let brush = if control == ToolbarControl::Copy {
                     &self.on_accent
                 } else if off(control) {
                     &self.label_off
@@ -412,7 +400,7 @@ impl Paint {
                     &self.label
                 };
                 self.text
-                    .draw(&self.context, control.label(), &button.rect, brush);
+                    .draw(&self.context, label(control), &button.rect, brush);
             }
         }
         Ok(())
@@ -479,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn f05_a_click_lands_on_the_control_drawn_there_and_tab_wraps() {
+    fn f05_a_click_lands_on_the_control_drawn_there() {
         let placed = layout_at(None);
         for &(control, at) in &placed.controls {
             let middle = POINT {
@@ -493,17 +481,6 @@ mod tests {
             y: placed.pill.top,
         };
         assert_eq!(placed.control_at(outside), None);
-        let on = |_| false;
-        assert_eq!(Control::Cancel.step(1, on), Control::Copy);
-        assert_eq!(Control::Copy.step(-1, on), Control::Cancel);
-    }
-
-    #[test]
-    fn f57_tab_passes_over_save_while_saving_is_off() {
-        let off = |control| control == Control::Save;
-        assert_eq!(Control::Copy.step(1, off), Control::Edit);
-        assert_eq!(Control::Edit.step(-1, off), Control::Copy);
-        assert_eq!(Control::Cancel.step(2, off), Control::Edit);
     }
 
     #[test]

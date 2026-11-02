@@ -31,7 +31,9 @@ use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
 use crate::struct_size;
 use crate::toolbar::automation::{self, Request};
-use crate::toolbar::{Control, OffTip, Paint};
+use cleanshot_core::ToolbarControl;
+
+use crate::toolbar::{OffTip, Paint};
 
 pub(crate) const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
 const BORDER_WIDTH: f32 = 1.5;
@@ -195,7 +197,7 @@ impl Surface {
         match (&self.toolbar, self.shared.toolbar()) {
             (Some(paint), Some(placed)) => {
                 if let Some(tip) = &self.off_tip {
-                    let at = placed.area(Control::Save);
+                    let at = placed.area(ToolbarControl::Save);
                     tip.place(RECT {
                         left: at.left - self.origin.x,
                         top: at.top - self.origin.y,
@@ -397,7 +399,7 @@ fn surface(
             }
             (true | false, _) => None,
         };
-        let off_tip = match (&toolbar, shared.mirror.off(Control::Save)) {
+        let off_tip = match (&toolbar, shared.mirror.off(ToolbarControl::Save)) {
             (Some(_), Some(reason)) => Some(OffTip::new(window, reason)?),
             (Some(_) | None, _) => None,
         };

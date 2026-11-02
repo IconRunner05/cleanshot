@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use cleanshot_core::HotkeyAction;
+use cleanshot_core::{HotkeyAction, TabDirection, Toolbar, ToolbarControl};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory,
@@ -24,7 +24,7 @@ use crate::fade;
 use crate::palette::Palette;
 use crate::selection::{Grip, nudged};
 use crate::toolbar::automation::{self, Mirror};
-use crate::toolbar::{self, Control, Layout};
+use crate::toolbar::{self, Layout};
 
 mod window;
 
@@ -58,11 +58,11 @@ pub enum OverlayEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Key {
     /// Chooses this toolbar control, wherever the focus is.
-    Choose(Control),
+    Choose(ToolbarControl),
     /// Chooses the focused toolbar control.
     Press,
-    /// Moves the toolbar's focus this many controls along.
-    Focus(i32),
+    /// Moves the toolbar's focus one control along.
+    Focus(TabDirection),
     Nudge(i32, i32),
     SaveAs,
     /// Switches between drawing a region and picking a window (F-08, D-100).
@@ -70,23 +70,27 @@ enum Key {
 }
 
 const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 17] = [
-    (MOD_NOREPEAT, VK_ESCAPE, Key::Choose(Control::Cancel)),
+    (MOD_NOREPEAT, VK_ESCAPE, Key::Choose(ToolbarControl::Cancel)),
     (MOD_NOREPEAT, VK_RETURN, Key::Press),
     (MOD_NOREPEAT, VK_SPACE, Key::Press),
     (
         HOT_KEY_MODIFIERS(MOD_NOREPEAT.0 | MOD_CONTROL.0),
         VK_S,
-        Key::Choose(Control::Save),
+        Key::Choose(ToolbarControl::Save),
     ),
     (
         HOT_KEY_MODIFIERS(MOD_NOREPEAT.0 | MOD_CONTROL.0 | MOD_SHIFT.0),
         VK_S,
         Key::SaveAs,
     ),
-    (MOD_NOREPEAT, VK_E, Key::Choose(Control::Edit)),
+    (MOD_NOREPEAT, VK_E, Key::Choose(ToolbarControl::Edit)),
     (MOD_NOREPEAT, VK_W, Key::SwitchMode),
-    (HOT_KEY_MODIFIERS(0), VK_TAB, Key::Focus(1)),
-    (MOD_SHIFT, VK_TAB, Key::Focus(-1)),
+    (
+        HOT_KEY_MODIFIERS(0),
+        VK_TAB,
+        Key::Focus(TabDirection::Forward),
+    ),
+    (MOD_SHIFT, VK_TAB, Key::Focus(TabDirection::Back)),
     (HOT_KEY_MODIFIERS(0), VK_LEFT, Key::Nudge(-1, 0)),
     (HOT_KEY_MODIFIERS(0), VK_RIGHT, Key::Nudge(1, 0)),
     (HOT_KEY_MODIFIERS(0), VK_UP, Key::Nudge(0, -1)),
@@ -129,7 +133,7 @@ struct Shared {
     toolbar_window: Cell<Option<HWND>>,
     /// The toolbar's monitor and its physical pixels per DIP (F-05).
     toolbar: Option<(RECT, f32)>,
-    focus: Cell<Control>,
+    focus: Cell<ToolbarControl>,
     mirror: Mirror,
     palette: Palette,
 }
@@ -179,9 +183,9 @@ impl Shared {
             }
             (Key::Choose(control), _) => self.choose(control),
             (Key::Press, _) => self.choose(self.focus.get()),
-            (Key::Focus(step), _) => {
+            (Key::Focus(direction), _) => {
                 let off = |control| self.mirror.off(control).is_some();
-                self.focus(self.focus.get().step(step, off));
+                self.focus(Toolbar::Overlay.step(self.focus.get(), direction, off));
             }
             (Key::Nudge(dx, dy), Some(selected)) => self.select(Some(nudged(selected, dx, dy))),
             (Key::Nudge(..) | Key::SaveAs, None) => {}
@@ -196,12 +200,19 @@ impl Shared {
                 self.mode.set(Mode::Region);
                 self.changed();
             }
-            Key::Focus(step) => self.hover(next_window(self.pickable.len(), hovered, step)),
+            Key::Focus(direction) => {
+                self.hover(next_window(self.pickable.len(), hovered, direction));
+            }
             Key::Press => self.pick(hovered),
-            Key::Choose(Control::Cancel) => self.send(OverlayEvent::Cancelled),
-            Key::Choose(Control::Copy | Control::Save | Control::Edit)
+            Key::Choose(ToolbarControl::Cancel) => self.send(OverlayEvent::Cancelled),
+            Key::Choose(ToolbarControl::Copy | ToolbarControl::Save | ToolbarControl::Edit)
             | Key::Nudge(..)
             | Key::SaveAs => {}
+            Key::Choose(
+                control @ (ToolbarControl::Mode(_)
+                | ToolbarControl::Timer
+                | ToolbarControl::Capture),
+            ) => self.choose(control),
         }
     }
 
@@ -257,34 +268,37 @@ impl Shared {
         }
     }
 
-    fn focus(&self, control: Control) {
+    fn focus(&self, control: ToolbarControl) {
         self.focus.set(control);
         self.changed();
     }
 
     /// F-05: Cancel always closes; the others need a selection to act on.
-    fn choose(&self, control: Control) {
+    fn choose(&self, control: ToolbarControl) {
         match (control, self.selected.get()) {
-            (Control::Cancel, _) => self.send(OverlayEvent::Cancelled),
-            (Control::Copy, Some(selected)) => self.send(OverlayEvent::Copy(selected)),
-            (Control::Save, Some(selected)) => self.send(OverlayEvent::Save(selected)),
-            (Control::Edit, Some(selected)) => self.send(OverlayEvent::Edit(selected)),
-            (Control::Copy | Control::Save | Control::Edit, None) => {}
+            (ToolbarControl::Cancel, _) => self.send(OverlayEvent::Cancelled),
+            (ToolbarControl::Copy, Some(selected)) => self.send(OverlayEvent::Copy(selected)),
+            (ToolbarControl::Save, Some(selected)) => self.send(OverlayEvent::Save(selected)),
+            (ToolbarControl::Edit, Some(selected)) => self.send(OverlayEvent::Edit(selected)),
+            (ToolbarControl::Copy | ToolbarControl::Save | ToolbarControl::Edit, None) => {}
+            (ToolbarControl::Mode(_) | ToolbarControl::Timer | ToolbarControl::Capture, _) => {
+                unreachable!("the overlay toolbar shows no capture panel control")
+            }
         }
     }
 }
 
 /// The window `step` places along from `hovered` in a list of `count`, wrapping at either
 /// end; from a monitor or none, the first forwards and the last backwards.
-fn next_window(count: usize, hovered: Option<Pick>, step: i32) -> Option<Pick> {
-    let next = match hovered {
-        Some(Pick::Window(at)) => {
-            (at + count).checked_add_signed(isize::try_from(step).ok()?)? % count.max(1)
-        }
-        Some(Pick::Monitor(_)) | None if step < 0 => count.checked_sub(1)?,
-        Some(Pick::Monitor(_)) | None => 0,
+fn next_window(count: usize, hovered: Option<Pick>, direction: TabDirection) -> Option<Pick> {
+    let last = count.checked_sub(1)?;
+    let next = match (hovered, direction) {
+        (Some(Pick::Window(at)), TabDirection::Forward) => (at + 1) % count,
+        (Some(Pick::Window(at)), TabDirection::Back) => (at + last) % count,
+        (Some(Pick::Monitor(_)) | None, TabDirection::Forward) => 0,
+        (Some(Pick::Monitor(_)) | None, TabDirection::Back) => last,
     };
-    (next < count).then_some(Pick::Window(next))
+    Some(Pick::Window(next))
 }
 
 /// One topmost, never-activated window per monitor, each showing that monitor's frozen
@@ -356,7 +370,7 @@ impl Overlay {
             windows: RefCell::new(Vec::with_capacity(captures.len())),
             toolbar_window: Cell::new(None),
             toolbar,
-            focus: Cell::new(Control::Copy),
+            focus: Cell::new(ToolbarControl::Copy),
             mirror: Mirror::new(saving_off),
             palette: Palette::current().map_err(Error::Window)?,
         });
@@ -795,6 +809,41 @@ mod tests {
     }
 
     #[test]
+    fn f57_tab_and_shift_tab_move_the_toolbar_focus_past_save_while_saving_is_off() {
+        let _screen = screen();
+        let chosen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&chosen);
+        let selected = monitor().bounds;
+        let off = Some("Saving is off".to_owned());
+        let overlay = Overlay::show(
+            &[monitor()],
+            Some(selected),
+            Vec::new(),
+            off,
+            move |event| {
+                sink.borrow_mut().push(match event {
+                    OverlayEvent::Copy(_) => "Copy",
+                    OverlayEvent::Save(_) => "Save",
+                    OverlayEvent::Edit(_) => "Edit",
+                    OverlayEvent::Cancelled => "Cancel",
+                    OverlayEvent::SaveAs(_) | OverlayEvent::DrawFailed(_) => "other",
+                });
+            },
+        )
+        .expect("the overlay opens");
+        let window = overlay.windows[0];
+        let (tab, back) = (
+            Key::Focus(TabDirection::Forward),
+            Key::Focus(TabDirection::Back),
+        );
+        for key in [tab, Key::Press, back, Key::Press, back, Key::Press] {
+            press(window, key);
+        }
+        drop(overlay);
+        assert_eq!(*chosen.borrow(), ["Edit", "Copy", "Cancel"]);
+    }
+
+    #[test]
     fn f08_after_w_a_click_picks_the_window_under_the_pointer_or_else_its_monitor() {
         let _screen = screen();
         let frame = RECT {
@@ -830,13 +879,21 @@ mod tests {
             right: left + 10,
             bottom: 10,
         };
-        // Two maximised windows share one frame, and Tab still moves past the first.
-        let (shared, other) = (frame(0), frame(20));
-        let (overlay, copied) = picking(vec![shared, shared, other]);
+        // Two maximised windows share one frame, and Tab still moves past the first. From the
+        // last window, Shift+Tab reaches the one before it, never a shared one.
+        let (shared, other, last) = (frame(0), frame(20), frame(40));
+        let (overlay, copied) = picking(vec![shared, shared, other, last]);
         let window = overlay.windows[0];
         for keys in [
-            &[Key::Focus(1), Key::Focus(1), Key::Focus(1)][..],
-            &[Key::Focus(-1), Key::Focus(-1)],
+            &[
+                Key::Focus(TabDirection::Forward),
+                Key::Focus(TabDirection::Forward),
+                Key::Focus(TabDirection::Forward),
+            ][..],
+            &[
+                Key::Focus(TabDirection::Back),
+                Key::Focus(TabDirection::Back),
+            ],
         ] {
             press(window, Key::SwitchMode);
             for &key in keys {
@@ -846,7 +903,7 @@ mod tests {
             press(window, Key::Press);
         }
         drop(overlay);
-        assert_eq!(*copied.borrow(), [other, shared]);
+        assert_eq!(*copied.borrow(), [other, other]);
     }
 
     #[test]
@@ -871,7 +928,7 @@ mod tests {
         let overlay =
             Overlay::show(&[desktop], None, pickable, None, |_| {}).expect("the overlay opens");
         let window = overlay.windows[0];
-        for key in [Key::SwitchMode, Key::Focus(1)] {
+        for key in [Key::SwitchMode, Key::Focus(TabDirection::Forward)] {
             press(window, key);
         }
         let walk = std::thread::spawn(crate::accessibility::controls_in_own_windows);
@@ -920,7 +977,7 @@ mod tests {
         );
         let escape = KEYS
             .iter()
-            .position(|&(_, _, key)| matches!(key, Key::Choose(Control::Cancel)))
+            .position(|&(_, _, key)| matches!(key, Key::Choose(ToolbarControl::Cancel)))
             .expect("Esc is one of the overlay's keys");
         // SAFETY: posting copies no memory, and the window belongs to this thread.
         unsafe {
