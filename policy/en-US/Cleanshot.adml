@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>Cleanshot</displayName>
+  <description>Group Policy settings for Cleanshot, the screenshot and markup tool.</description>
+  <resources>
+    <stringTable>
+      <string id="SUPPORTED_Windows11_22H2">At least Windows 11, version 22H2</string>
+      <string id="Cleanshot">Cleanshot</string>
+      <string id="SaveFolder">Save captures to this folder</string>
+      <string id="SaveFolder_Explain">Sets the folder Cleanshot saves every capture to.
+
+Enabled: give a full path on a drive, such as C:\Screenshots, or on a share, such as \\fileserver\screenshots. Environment variables such as %USERPROFILE% are expanded. The user cannot change the folder in Cleanshot's settings window, and Save As saves only in it or a folder under it. A share is allowed here only: Cleanshot's own settings never accept one, and saving to it connects to that server.
+
+If the folder is not a full path on a drive or a share (for example \\fileserver with no share name, or a relative path), Cleanshot turns saving off and a capture can only be copied. It never falls back to the user's own folder.
+
+Disabled or Not Configured: the user chooses the folder.
+
+Cleanshot reads this setting when it starts, so a change takes effect at its next start.</string>
+      <string id="ClipboardOnly">Copy captures only, never save them</string>
+      <string id="ClipboardOnly_Explain">Enabled: Cleanshot never writes a capture to a file. Save and Save As are turned off, and a capture can only be copied to the clipboard. This setting wins over "Save captures to this folder" and "Save captures as PNG only".
+
+Disabled or Not Configured: captures can be saved.
+
+If the value in the registry is not a number, Cleanshot treats the setting as enabled and logs it when started with --log.
+
+Cleanshot reads this setting when it starts, so a change takes effect at its next start.</string>
+      <string id="ForcePng">Save captures as PNG only</string>
+      <string id="ForcePng_Explain">Enabled: every capture Cleanshot saves is a PNG file, and the format is not offered in its settings window.
+
+Disabled or Not Configured: the user chooses PNG, JPG or BMP.
+
+If the value in the registry is not a number, Cleanshot treats the setting as enabled and logs it when started with --log.
+
+Cleanshot reads this setting when it starts, so a change takes effect at its next start.</string>
+      <string id="HideSettings">Keep the settings window closed</string>
+      <string id="HideSettings_Explain">Enabled: Cleanshot's settings window never opens, and its Settings item is not shown in the tray menu. Cleanshot still reads cleanshot.toml beside its exe; the other policies here override it wherever both set a value.
+
+Disabled or Not Configured: the user can open the settings window.
+
+If the value in the registry is not a number, Cleanshot treats the setting as enabled and logs it when started with --log.
+
+Cleanshot reads this setting when it starts, so a change takes effect at its next start.</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="SaveFolder">
+        <textBox refId="SaveFolder">
+          <label>Folder:</label>
+        </textBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

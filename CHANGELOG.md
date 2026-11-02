@@ -21,6 +21,10 @@ section exists.
 - Speech bubbles (F-42): B, or the Speech bubble button, opens a text box like the text
   tool, and the text sits in a filled rounded box with a tail. Drag the tail's tip to point
   it; T or B on a bubble edits its text.
+- Group Policy template for the F-57 policy values: `Cleanshot.admx` and `Cleanshot.adml`,
+  released beside the exe, under Computer Configuration > Administrative Templates >
+  Cleanshot. Copy the `.admx` to `PolicyDefinitions` and the `.adml` to
+  `PolicyDefinitions\en-US`.
 
 ## [0.1.2] - 2026-11-02
 

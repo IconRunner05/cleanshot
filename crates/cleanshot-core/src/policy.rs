@@ -12,6 +12,9 @@ pub enum PolicyValue {
     Unreadable,
 }
 
+/// The registry key under `HKEY_LOCAL_MACHINE` that holds the policy values (D-86).
+pub const POLICY_KEY: &str = r"SOFTWARE\Policies\Cleanshot";
+
 /// A policy an organisation can set (F-57).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PolicySetting {
@@ -19,6 +22,27 @@ pub enum PolicySetting {
     ClipboardOnly,
     ForcePng,
     HideSettings,
+}
+
+impl PolicySetting {
+    /// Every policy, in the order the Group Policy template lists them.
+    pub const ALL: [Self; 4] = [
+        Self::SaveFolder,
+        Self::ClipboardOnly,
+        Self::ForcePng,
+        Self::HideSettings,
+    ];
+
+    /// The name of its value under [`POLICY_KEY`], as the Group Policy template writes it.
+    #[must_use]
+    pub fn value_name(self) -> &'static str {
+        match self {
+            Self::SaveFolder => "SaveFolder",
+            Self::ClipboardOnly => "ClipboardOnly",
+            Self::ForcePng => "ForcePng",
+            Self::HideSettings => "HideSettings",
+        }
+    }
 }
 
 /// A policy value that was present but not valid, so its strictest setting applies (D-86).
@@ -228,5 +252,65 @@ mod tests {
     fn f57_clipboard_only_wins_over_a_folder_and_png() {
         let (policy, _) = Policy::from_values(text(r"C:\Shots"), Number(1), Number(1), Missing);
         assert_eq!(policy.saving(), &Saving::Off(SavingOff::ClipboardOnly));
+    }
+
+    const ADMX: &str = include_str!("../../../policy/Cleanshot.admx");
+    const ADML: &str = include_str!("../../../policy/en-US/Cleanshot.adml");
+
+    #[test]
+    fn f57_the_group_policy_template_writes_each_value_core_reads_with_its_type_and_no_other() {
+        assert_eq!(ADMX.matches("<policy ").count(), PolicySetting::ALL.len());
+        assert_eq!(ADMX.matches("valueName=").count(), PolicySetting::ALL.len());
+        for setting in PolicySetting::ALL {
+            let name = setting.value_name();
+            let start = ADMX
+                .find(&format!("<policy name=\"{name}\""))
+                .unwrap_or_else(|| panic!("the template has no {name} policy"));
+            let end = start + ADMX[start..].find("</policy>").unwrap();
+            let policy = &ADMX[start..end];
+            assert!(policy.contains(&format!("key=\"{POLICY_KEY}\"")), "{name}");
+            let inside = |open: &str, close: &str| {
+                let start = policy.find(open).map(|at| at + open.len())?;
+                Some(&policy[start..start + policy[start..].find(close)?])
+            };
+            match setting {
+                PolicySetting::SaveFolder => assert!(
+                    policy.contains(&format!(
+                        "<text id=\"{name}\" valueName=\"{name}\" expandable=\"true\""
+                    )),
+                    "{name}"
+                ),
+                PolicySetting::ClipboardOnly
+                | PolicySetting::ForcePng
+                | PolicySetting::HideSettings => {
+                    assert!(policy.contains(&format!("valueName=\"{name}\"")), "{name}");
+                    assert_eq!(
+                        inside("<enabledValue>", "</enabledValue>").map(str::trim),
+                        Some("<decimal value=\"1\" />"),
+                        "{name}"
+                    );
+                    assert_eq!(
+                        inside("<disabledValue>", "</disabledValue>").map(str::trim),
+                        Some("<decimal value=\"0\" />"),
+                        "{name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn f57_every_string_and_presentation_the_template_names_is_in_its_language_file() {
+        for (kind, element) in [("string", "string"), ("presentation", "presentation")] {
+            let reference = format!("$({kind}.");
+            for (at, _) in ADMX.match_indices(&reference) {
+                let id = &ADMX[at + reference.len()..];
+                let id = &id[..id.find(')').unwrap()];
+                assert!(
+                    ADML.contains(&format!("<{element} id=\"{id}\">")),
+                    "{kind} {id}"
+                );
+            }
+        }
     }
 }

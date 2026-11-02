@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="cleanshot" namespace="Cleanshot.Policies.Cleanshot" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_Windows11_22H2" displayName="$(string.SUPPORTED_Windows11_22H2)" />
+    </definitions>
+  </supportedOn>
+  <categories>
+    <category name="Cleanshot" displayName="$(string.Cleanshot)" />
+  </categories>
+  <policies>
+    <policy name="SaveFolder" class="Machine" displayName="$(string.SaveFolder)" explainText="$(string.SaveFolder_Explain)" presentation="$(presentation.SaveFolder)" key="SOFTWARE\Policies\Cleanshot">
+      <parentCategory ref="Cleanshot" />
+      <supportedOn ref="SUPPORTED_Windows11_22H2" />
+      <elements>
+        <text id="SaveFolder" valueName="SaveFolder" expandable="true" required="true" />
+      </elements>
+    </policy>
+    <policy name="ClipboardOnly" class="Machine" displayName="$(string.ClipboardOnly)" explainText="$(string.ClipboardOnly_Explain)" key="SOFTWARE\Policies\Cleanshot" valueName="ClipboardOnly">
+      <parentCategory ref="Cleanshot" />
+      <supportedOn ref="SUPPORTED_Windows11_22H2" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+    <policy name="ForcePng" class="Machine" displayName="$(string.ForcePng)" explainText="$(string.ForcePng_Explain)" key="SOFTWARE\Policies\Cleanshot" valueName="ForcePng">
+      <parentCategory ref="Cleanshot" />
+      <supportedOn ref="SUPPORTED_Windows11_22H2" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+    <policy name="HideSettings" class="Machine" displayName="$(string.HideSettings)" explainText="$(string.HideSettings_Explain)" key="SOFTWARE\Policies\Cleanshot" valueName="HideSettings">
+      <parentCategory ref="Cleanshot" />
+      <supportedOn ref="SUPPORTED_Windows11_22H2" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+  </policies>
+</policyDefinitions>

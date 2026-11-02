@@ -57,13 +57,18 @@ jobs:
       - name: Install cargo-cyclonedx (D-70)
         run: cargo install --locked cargo-cyclonedx@0.5.9
 
-      - name: Release files are the exe, its SBOM and their checksums
+      - name: The Group Policy template is well-formed XML (F-57)
+        run: python3 -c 'import sys, xml.dom.minidom; [xml.dom.minidom.parse(path) for path in sys.argv[1:]]' policy/Cleanshot.admx policy/en-US/Cleanshot.adml
+
+      - name: Release files are the exe, its SBOM, the Group Policy template and their checksums
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir dist
           cp "$RUNNER_TEMP/exe/cleanshot.exe" "dist/cleanshot-$VERSION-x64.exe"
+          # F-57: Group Policy pairs an .adml with its .admx by name, so neither carries the version.
+          cp policy/Cleanshot.admx policy/en-US/Cleanshot.adml dist/
           cargo cyclonedx --manifest-path crates/cleanshot-app/Cargo.toml --format json \
             --spec-version 1.5 --target x86_64-pc-windows-msvc --override-filename sbom
           cp crates/cleanshot-app/sbom.json "dist/cleanshot-$VERSION-x64.cdx.json"
