@@ -13,6 +13,12 @@ use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
 use crate::Session;
 use crate::delivery::deliver;
+use crate::thumbnail;
+
+/// Runs a job on GPUI's executor after a wait, outside any window procedure.
+pub(super) type Defer = dyn Fn(Duration, Box<dyn FnOnce()>);
+/// Hands an image on to the editor or the Save As dialog.
+pub(super) type PassOn = dyn Fn(RgbaImage, Handoff);
 
 /// Where the overlay hands a selection on to GPUI: the editor (F-05), or the Save As dialog
 /// once the overlay has closed (F-22).
@@ -20,6 +26,15 @@ use crate::delivery::deliver;
 pub(super) enum Handoff {
     Editor,
     SaveAs,
+}
+
+/// What follows an overlay event once the overlay has closed.
+enum Next {
+    Nothing,
+    /// F-22: the Save As dialog for this image.
+    SaveAs(RgbaImage),
+    /// F-09: the thumbnail of a capture copied or saved from this selection.
+    Thumbnail(Arc<RgbaImage>, RECT),
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,7 +76,11 @@ pub(super) fn capture(
     if session.overlay.borrow().is_some() {
         return;
     }
+    // The thumbnail is topmost, so it would be in the copy of the screen.
+    thumbnail::close_now(session);
     session.captures_started.update(|started| started + 1);
+    let defer: Rc<Defer> = Rc::new(defer);
+    let pass_on: Rc<PassOn> = Rc::new(pass_on);
     let Desktop {
         monitors: captures,
         copied,
@@ -88,20 +107,20 @@ pub(super) fn capture(
     ) {
         None => {
             session.log_capture(&copied, &outputs, &captures);
-            return session.sample_after_use(&defer);
+            return session.sample_after_use(&*defer);
         }
         Some(Plan::Overlay(selected)) => selected,
         Some(Plan::Copy(selected)) => {
-            finish(session, &captures, selected, Output::Copy);
+            if let Some(image) = finish(session, &captures, selected, Output::Copy) {
+                thumbnail::show(session, image, selected, &defer, &pass_on);
+            }
             session.log_capture(&copied, &outputs, &captures);
-            return session.sample_after_use(&defer);
+            return session.sample_after_use(&*defer);
         }
     };
-    let defer = Rc::new(defer);
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
     let finishing = Rc::clone(session);
-    let pass_on = Rc::new(pass_on);
     let saving_off = match session.policy.saving() {
         Saving::Off(off) => Some(delivery_notice(&Err(DeliveryError::SavingOff(*off)))),
         Saving::Allowed { .. } => None,
@@ -109,7 +128,7 @@ pub(super) fn capture(
     let shown = Overlay::show(&captures, selected, saving_off, move |event| {
         // F-13 (D-68): the editor takes over from the overlay with no fade between them.
         let handoff = matches!(event, OverlayEvent::Edit(_));
-        let saving_as = on_overlay_event(&finishing, &frozen, event, &*pass_on);
+        let next = on_overlay_event(&finishing, &frozen, event, &*pass_on);
         // The event arrives inside an overlay window's procedure, so the windows close
         // after it returns, and the Save As dialog opens over the desktop, not the overlay.
         let closing = Rc::clone(&finishing);
@@ -126,8 +145,12 @@ pub(super) fn capture(
                         closing.warn(&format!("The overlay could not fade out: {error}."));
                     }
                 }
-                if let Some(image) = saving_as {
-                    pass_on(image, Handoff::SaveAs);
+                match next {
+                    Next::Nothing => {}
+                    Next::SaveAs(image) => pass_on(image, Handoff::SaveAs),
+                    Next::Thumbnail(image, selected) => {
+                        thumbnail::show(&closing, image, selected, &sampling, &pass_on);
+                    }
                 }
                 closing.sample_after_use(&*sampling);
             }),
@@ -145,32 +168,36 @@ pub(super) fn capture(
 }
 
 /// What the overlay's `event` does as it arrives: copy, save or edit the selection from
-/// `frozen`. For Save As, the image to save once the overlay has closed.
+/// `frozen`, and what follows once the overlay has closed.
 fn on_overlay_event(
     session: &Session,
     frozen: &[MonitorImage],
     event: OverlayEvent,
-    pass_on: &dyn Fn(RgbaImage, Handoff),
-) -> Option<RgbaImage> {
+    pass_on: &PassOn,
+) -> Next {
     match event {
         OverlayEvent::Cancelled => {}
         OverlayEvent::Copy(selected) => {
             session.last_selection.set(Some(selected));
-            finish(session, frozen, selected, Output::Copy);
+            if let Some(image) = finish(session, frozen, selected, Output::Copy) {
+                return Next::Thumbnail(image, selected);
+            }
         }
         OverlayEvent::Save(selected) => {
             session.last_selection.set(Some(selected));
-            finish(session, frozen, selected, Output::Save);
+            if let Some(image) = finish(session, frozen, selected, Output::Save) {
+                return Next::Thumbnail(image, selected);
+            }
         }
         OverlayEvent::SaveAs(selected) => {
             session.last_selection.set(Some(selected));
             // F-57: no Save As dialog opens when the policy turns saving off.
             if let Saving::Off(off) = session.policy.saving() {
                 session.warn(&delivery_notice(&Err(DeliveryError::SavingOff(*off))));
-                return None;
+                return Next::Nothing;
             }
             match region(frozen, selected) {
-                Ok(image) => return Some(image),
+                Ok(image) => return Next::SaveAs(image),
                 Err(error) => session.warn(&format!("The capture did not finish: {error}.")),
             }
         }
@@ -182,20 +209,28 @@ fn on_overlay_event(
             session.warn(&format!("The overlay could not draw: {error}."));
         }
     }
-    None
+    Next::Nothing
 }
 
 // The selection becomes a document with nothing drawn on it, so the overlay delivers through
-// the same path as the editor.
-fn finish(session: &Session, captures: &[MonitorImage], selected: RECT, output: Output) {
+// the same path as the editor. The image delivered, for the thumbnail (F-09).
+fn finish(
+    session: &Session,
+    captures: &[MonitorImage],
+    selected: RECT,
+    output: Output,
+) -> Option<Arc<RgbaImage>> {
     let started = Instant::now();
     let image = match region(captures, selected) {
-        Ok(image) => image,
-        Err(error) => return session.warn(&format!("The capture did not finish: {error}.")),
+        Ok(image) => Arc::new(image),
+        Err(error) => {
+            session.warn(&format!("The capture did not finish: {error}."));
+            return None;
+        }
     };
     match deliver(
         output,
-        &Document::new(Arc::new(image)),
+        &Document::new(Arc::clone(&image)),
         &session.saving_settings(),
         session.policy.saving(),
     ) {
@@ -203,8 +238,12 @@ fn finish(session: &Session, captures: &[MonitorImage], selected: RECT, output: 
             session.perf(|_| format!("P-02 copied_ms={}", started.elapsed().as_millis()));
         }
         Ok(Delivered::Saved(_)) => {}
-        Err(error) => session.warn(&delivery_notice(&Err(error))),
+        Err(error) => {
+            session.warn(&delivery_notice(&Err(error)));
+            return None;
+        }
     }
+    Some(image)
 }
 
 #[cfg(test)]

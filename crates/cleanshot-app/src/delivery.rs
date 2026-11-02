@@ -1,10 +1,14 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use cleanshot_core::{Delivered, DeliveryError, Document, Output, SaveFormat, Saving, Settings};
+use cleanshot_core::{
+    Delivered, DeliveryError, Document, Output, RgbaImage, SaveFormat, Saving, Settings,
+};
 use cleanshot_render::{Flattened, Format, encode, flatten};
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
 use cleanshot_win::text;
+use cleanshot_win::thumbnail::Dragged;
 
 const FILE_NAME_TEMPLATE: &str = "Screenshot {date} {time}";
 
@@ -41,6 +45,19 @@ pub(crate) fn deliver(
                 .map_err(|error| from_save(error, &folder))
         }
     }
+}
+
+/// D-94: what a drag from the thumbnail offers: `image` as a PNG named as Save names one
+/// (F-21), and as the clipboard's bitmap, made in memory.
+pub(crate) fn dragged(image: &Arc<RgbaImage>) -> Result<Dragged, DeliveryError> {
+    let image = flattened(&Document::new(Arc::clone(image)))?;
+    let name = save::offered_name(FILE_NAME_TEMPLATE, Stamp::now(), "png")
+        .unwrap_or_else(|error| panic!("the file-name template is a safe constant: {error}"));
+    Ok(Dragged {
+        name,
+        png: encode(&image, Format::Png).map_err(|error| from_render(&error))?,
+        bitmap: encode(&image, Format::ClipboardBitmap).map_err(|error| from_render(&error))?,
+    })
 }
 
 fn flattened(document: &Document) -> Result<Flattened, DeliveryError> {
@@ -264,6 +281,26 @@ mod tests {
         let median = copies[2];
         // cleanshot-fieldtest --budgets --copy judges this line (P-02, D-90).
         println!("perf P-02 median_us={} all={copies:?}", median.as_micros());
+    }
+
+    #[test]
+    fn f09_a_drag_offers_the_capture_as_a_png_named_as_save_names_one_and_as_a_bitmap() {
+        let image = Arc::new(RgbaImage::new(4, 2, vec![200; 4 * 2 * 4]).expect("4x2 RGBA"));
+        let offered = dragged(&image).expect("the drag's formats are made");
+        assert!(offered.name.starts_with("Screenshot "), "{}", offered.name);
+        assert_eq!(
+            Path::new(&offered.name).extension(),
+            Some("png".as_ref()),
+            "{}",
+            offered.name
+        );
+        assert!(offered.png.starts_with(b"\x89PNG"), "the PNG's signature");
+        let expected = encode(
+            &flattened(&Document::new(image)).expect("flattened"),
+            Format::ClipboardBitmap,
+        )
+        .expect("the clipboard's bitmap");
+        assert_eq!(offered.bitmap, expected);
     }
 
     #[test]

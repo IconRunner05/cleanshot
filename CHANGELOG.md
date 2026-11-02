@@ -11,6 +11,10 @@ section exists.
 
 ### Added
 
+- After you copy or save a capture from the toolbar, a thumbnail of it slides in at the
+  bottom right for 5 seconds (F-09): click it to edit, drag it into any app, or use its Save
+  and Dismiss. It never takes the keyboard focus; while it shows, the tray menu also has Edit
+  last capture and Save last capture. Show thumbnail in the settings turns it off.
 - An organisation can set Cleanshot's policy under `HKLM\SOFTWARE\Policies\Cleanshot` (F-57):
   a fixed save folder, which may be a network share and which Save As cannot leave; copying
   only, which greys out Save and says why; PNG only; and no Settings item in the tray menu.

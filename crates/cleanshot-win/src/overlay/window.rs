@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cleanshot_core::{RgbaImage, box_handles};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
@@ -138,7 +138,13 @@ impl Surface {
         match (&self.toolbar, self.shared.toolbar()) {
             (Some(paint), Some(placed)) => {
                 if let Some(tip) = &self.off_tip {
-                    tip.place(&placed, self.origin);
+                    let at = placed.area(Control::Save);
+                    tip.place(RECT {
+                        left: at.left - self.origin.x,
+                        top: at.top - self.origin.y,
+                        right: at.right - self.origin.x,
+                        bottom: at.bottom - self.origin.y,
+                    });
                 }
                 paint.draw(&placed, self.origin, self.shared.focus.get(), |control| {
                     self.shared.mirror.off(control).is_some()
@@ -335,7 +341,7 @@ fn surface(
             (true | false, _) => None,
         };
         let off_tip = match (&toolbar, shared.mirror.off(Control::Save)) {
-            (Some(_), Some(reason)) => Some(OffTip::new(window, Control::Save, reason)?),
+            (Some(_), Some(reason)) => Some(OffTip::new(window, reason)?),
             (Some(_) | None, _) => None,
         };
         let scale = dpi_scale(capture.bounds)?;

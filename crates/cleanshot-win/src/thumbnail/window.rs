@@ -26,13 +26,14 @@ use windows::core::{Interface, PCWSTR, w};
 
 use super::drag::{self, Dragged, Ended, left_the_press};
 use super::{
-    Button, INSET, RADIUS, STAY, ThumbnailEvent, button_at, buttons, centred, left_after, place,
-    slid, window_size,
+    Button, INSET, RADIUS, STAY, Saving, ThumbnailEvent, button_at, buttons, centred, left_after,
+    place, slid, window_size,
 };
 use crate::Error;
 use crate::overlay::{bgra, client_point, target_and_bitmap};
 use crate::palette::Palette;
 use crate::text::{Fonts, TextStyle};
+use crate::toolbar::OffTip;
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotThumbnail");
 const SLIDE_TIMER: usize = 1;
@@ -50,6 +51,9 @@ struct Surface {
     material: ID2D1SolidColorBrush,
     hairline: ID2D1SolidColorBrush,
     label: ID2D1SolidColorBrush,
+    label_off: ID2D1SolidColorBrush,
+    /// Under a policy that turns saving off, the tooltip saying why over the greyed Save.
+    save_off: Option<OffTip>,
     text: TextStyle,
     buttons: [(Button, RECT); 2],
     rest: RECT,
@@ -120,12 +124,12 @@ impl Surface {
                         HAIRLINE,
                         None,
                     );
-                    self.text.draw(
-                        &self.target.cast()?,
-                        button.label(),
-                        &pill.rect,
-                        &self.label,
-                    );
+                    let brush = match (button, &self.save_off) {
+                        (Button::Save, Some(_)) => &self.label_off,
+                        (Button::Save | Button::Dismiss, _) => &self.label,
+                    };
+                    self.text
+                        .draw(&self.target.cast()?, button.label(), &pill.rect, brush);
                 }
             }
             let edge = D2D1_ROUNDED_RECT {
@@ -222,7 +226,7 @@ pub(super) fn open_window(
     work: RECT,
     scale: f32,
     slide: bool,
-    drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
+    saving: Saving,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> Result<HWND, Error> {
     let (Ok(width), Ok(height)) = (
@@ -255,7 +259,7 @@ pub(super) fn open_window(
     }
     .map_err(Error::Window)?;
     let made =
-        surface(window, preview, rest, distance, scale, drag, listener).and_then(|surface| {
+        surface(window, preview, rest, distance, scale, saving, listener).and_then(|surface| {
             round_corners(window, client_width, client_height, px(RADIUS))?;
             // SAFETY: `window` exists, so WM_NCDESTROY will give up this count once. The timers
             // die with the window.
@@ -287,7 +291,7 @@ fn surface(
     rest: RECT,
     distance: i32,
     scale: f32,
-    drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
+    saving: Saving,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> windows::core::Result<Surface> {
     // SAFETY: D2D1CreateFactory has no preconditions.
@@ -313,23 +317,36 @@ fn surface(
     )?;
     let palette = Palette::current()?;
     // SAFETY: each colour lives in `palette`, which outlives its call.
-    let (material, hairline, label) = unsafe {
+    let (material, hairline, label, label_off) = unsafe {
         (
             target.CreateSolidColorBrush(&raw const palette.material, None)?,
             target.CreateSolidColorBrush(&raw const palette.hairline, None)?,
             target.CreateSolidColorBrush(&raw const palette.label, None)?,
+            target.CreateSolidColorBrush(&raw const palette.label_off, None)?,
         )
+    };
+    let buttons = buttons(client.0, client.1, scale);
+    let (drag, save_off) = match saving {
+        Saving::On { drag } => (Some(drag), None),
+        Saving::Off(reason) => {
+            let tip = OffTip::new(window, &reason)?;
+            let [(_, save), _] = buttons;
+            tip.place(save);
+            (None, Some(tip))
+        }
     };
     let now = Instant::now();
     Ok(Surface {
         text: Fonts::inter()?.text_style(TEXT_SIZE * scale)?.centred()?,
-        buttons: buttons(rest.right - rest.left, rest.bottom - rest.top, scale),
+        buttons,
         target,
         preview,
         framed,
         material,
         hairline,
         label,
+        label_off,
+        save_off,
         rest,
         distance,
         radius: RADIUS * scale,
@@ -435,6 +452,7 @@ unsafe extern "system" fn window_procedure(
                 return LRESULT(0);
             }
             surface.send(match button_at(&surface.buttons, client_point(lparam)) {
+                Some(Button::Save) if surface.save_off.is_some() => return LRESULT(0),
                 Some(Button::Save) => ThumbnailEvent::Save,
                 Some(Button::Dismiss) => ThumbnailEvent::Dismiss,
                 None => ThumbnailEvent::Open,

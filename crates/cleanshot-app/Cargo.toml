@@ -25,6 +25,10 @@ harness = false
 name = "text_drift"
 harness = false
 
+[[test]]
+name = "thumbnail_automation"
+harness = false
+
 [dependencies]
 cleanshot-core.workspace = true
 cleanshot-render.workspace = true

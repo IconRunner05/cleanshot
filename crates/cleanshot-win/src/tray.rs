@@ -14,11 +14,12 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    FindWindowW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, MB_ICONWARNING, MB_OK, MF_STRING,
-    MessageBoxW, PostMessageW, RegisterWindowMessageW, SetForegroundWindow, SetWindowLongPtrW,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_CONTEXTMENU,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL,
-    WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    FindWindowW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, MB_ICONWARNING, MB_OK,
+    MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING, MessageBoxW, PostMessageW, RegisterWindowMessageW,
+    SetForegroundWindow, SetWindowLongPtrW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
+    WM_CLOSE, WM_CONTEXTMENU, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDBLCLK,
+    WM_NCDESTROY, WM_NULL, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WNDCLASSEXW, WS_EX_TOOLWINDOW,
+    WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -34,13 +35,30 @@ const MENU_CAPTURE_REGION: usize = 1;
 const MENU_CAPTURE_SCREEN: usize = 2;
 const MENU_EXIT: usize = 3;
 const MENU_SETTINGS: usize = 4;
+const MENU_EDIT_LAST: usize = 5;
+const MENU_SAVE_LAST: usize = 6;
 
 /// What the user asked for through the tray icon, its menu or a global hotkey.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Capture(HotkeyAction),
+    /// What a click on the post-capture thumbnail does, for keyboard users (D-96).
+    EditLastCapture,
+    /// What the thumbnail's Save does (D-96).
+    SaveLastCapture,
     OpenSettings,
     Exit,
+}
+
+/// The tray menu's items for the capture the thumbnail shows, which it holds only while the
+/// thumbnail shows (D-96).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LastCaptureItems {
+    Hidden,
+    /// Save last capture is greyed when the organisation's policy turns saving off (F-57).
+    Shown {
+        saving_off: bool,
+    },
 }
 
 struct State {
@@ -50,6 +68,7 @@ struct State {
     icon_shown: Cell<bool>,
     /// F-57: off under the organisation's `HideSettings` policy.
     settings_item: Cell<bool>,
+    last_capture: Cell<LastCaptureItems>,
     /// The icon the shell shows, kept until the shell has the next one (D-92).
     icon: RefCell<Option<TrayIcon>>,
     /// The request each registered hotkey sends; hotkey id `n` is entry `n - 1`.
@@ -126,6 +145,7 @@ impl Tray {
             hotkey_requests: hotkeys.iter().map(|(request, _)| *request).collect(),
             icon_shown: Cell::new(false),
             settings_item: Cell::new(true),
+            last_capture: Cell::new(LastCaptureItems::Hidden),
             icon: RefCell::new(None),
         });
         // SAFETY: `window` exists, so it will get WM_NCDESTROY, where the window procedure
@@ -182,6 +202,11 @@ impl Tray {
     /// Leaves Settings out of the tray menu, for the organisation's `HideSettings` policy (F-57).
     pub fn hide_settings_item(&self) {
         self.state().settings_item.set(false);
+    }
+
+    /// Shows or hides the menu's items for the thumbnail's capture (D-96).
+    pub fn set_last_capture_items(&self, items: LastCaptureItems) {
+        self.state().last_capture.set(items);
     }
 
     /// Whether the shell took the icon at the last try: at creation or when the taskbar last
@@ -446,32 +471,45 @@ fn redraw_icon(window: HWND, state: &State) {
     }
 }
 
-/// The tray menu's items in order, each with its command id.
-fn menu_items(settings_item: bool) -> Vec<(usize, HSTRING)> {
-    let mut items = vec![
-        (
-            MENU_CAPTURE_REGION,
-            HSTRING::from(HotkeyAction::Region.name()),
-        ),
-        (
-            MENU_CAPTURE_SCREEN,
-            HSTRING::from(HotkeyAction::FullScreen.name()),
-        ),
-    ];
-    if settings_item {
-        items.push((MENU_SETTINGS, HSTRING::from("Settings")));
+/// The tray menu's items in order, each with its command id and flags.
+fn menu_items(
+    settings_item: bool,
+    last_capture: LastCaptureItems,
+) -> Vec<(usize, HSTRING, MENU_ITEM_FLAGS)> {
+    let mut items = Vec::new();
+    if let LastCaptureItems::Shown { saving_off } = last_capture {
+        let save = if saving_off { MF_GRAYED } else { MF_STRING };
+        items.push((
+            MENU_EDIT_LAST,
+            HSTRING::from("Edit last capture"),
+            MF_STRING,
+        ));
+        items.push((MENU_SAVE_LAST, HSTRING::from("Save last capture"), save));
     }
-    items.push((MENU_EXIT, HSTRING::from("Exit")));
+    items.push((
+        MENU_CAPTURE_REGION,
+        HSTRING::from(HotkeyAction::Region.name()),
+        MF_STRING,
+    ));
+    items.push((
+        MENU_CAPTURE_SCREEN,
+        HSTRING::from(HotkeyAction::FullScreen.name()),
+        MF_STRING,
+    ));
+    if settings_item {
+        items.push((MENU_SETTINGS, HSTRING::from("Settings"), MF_STRING));
+    }
+    items.push((MENU_EXIT, HSTRING::from("Exit"), MF_STRING));
     items
 }
 
-fn show_menu(window: HWND, settings_item: bool) -> Option<Request> {
+fn show_menu(window: HWND, state: &State) -> Option<Request> {
     // SAFETY: the menu is created, shown and destroyed here, all on this window's thread.
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        let built = menu_items(settings_item)
+        let built = menu_items(state.settings_item.get(), state.last_capture.get())
             .iter()
-            .try_for_each(|(id, text)| AppendMenuW(menu, MF_STRING, *id, text));
+            .try_for_each(|(id, text, flags)| AppendMenuW(menu, *flags, *id, text));
         let mut cursor = POINT::default();
         let chosen = if built.is_ok() && GetCursorPos(&raw mut cursor).is_ok() {
             // The menu closes on an outside click only if its window is in the foreground; when
@@ -498,6 +536,8 @@ fn show_menu(window: HWND, settings_item: bool) -> Option<Request> {
         match chosen? {
             MENU_CAPTURE_REGION => Some(Request::Capture(HotkeyAction::Region)),
             MENU_CAPTURE_SCREEN => Some(Request::Capture(HotkeyAction::FullScreen)),
+            MENU_EDIT_LAST => Some(Request::EditLastCapture),
+            MENU_SAVE_LAST => Some(Request::SaveLastCapture),
             MENU_SETTINGS => Some(Request::OpenSettings),
             MENU_EXIT => Some(Request::Exit),
             _ => None,
@@ -540,7 +580,7 @@ unsafe extern "system" fn window_procedure(
         WM_CLOSE => Some(Request::Exit),
         ICON_MESSAGE => match u32::try_from(lparam.0 & 0xFFFF) {
             Ok(WM_LBUTTONDBLCLK) => Some(Request::Capture(HotkeyAction::Region)),
-            Ok(WM_CONTEXTMENU) => show_menu(window, state.settings_item.get()),
+            Ok(WM_CONTEXTMENU) => show_menu(window, state),
             _ => None,
         },
         message if message == state.capture_signal => Some(Request::Capture(HotkeyAction::Region)),
@@ -761,9 +801,9 @@ mod tests {
     #[test]
     fn f57_the_tray_menu_leaves_out_settings_only_under_hide_settings() {
         let ids = |shown| {
-            menu_items(shown)
+            menu_items(shown, LastCaptureItems::Hidden)
                 .into_iter()
-                .map(|(id, _)| id)
+                .map(|(id, _, _)| id)
                 .collect::<Vec<_>>()
         };
         assert_eq!(
@@ -778,6 +818,33 @@ mod tests {
         assert_eq!(
             ids(false),
             [MENU_CAPTURE_REGION, MENU_CAPTURE_SCREEN, MENU_EXIT]
+        );
+    }
+
+    #[test]
+    fn f09_while_the_thumbnail_shows_the_menu_leads_with_its_items_and_greys_save_under_saving_off()
+    {
+        let leading = |items| {
+            menu_items(true, items)
+                .into_iter()
+                .take(2)
+                .map(|(id, _, flags)| (id, flags))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            leading(LastCaptureItems::Shown { saving_off: false }),
+            [(MENU_EDIT_LAST, MF_STRING), (MENU_SAVE_LAST, MF_STRING)]
+        );
+        assert_eq!(
+            leading(LastCaptureItems::Shown { saving_off: true }),
+            [(MENU_EDIT_LAST, MF_STRING), (MENU_SAVE_LAST, MF_GRAYED)]
+        );
+        assert_eq!(
+            leading(LastCaptureItems::Hidden),
+            [
+                (MENU_CAPTURE_REGION, MF_STRING),
+                (MENU_CAPTURE_SCREEN, MF_STRING)
+            ]
         );
     }
 }

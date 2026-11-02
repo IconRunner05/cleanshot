@@ -89,7 +89,10 @@ fn apply_settings(session: &Session, changed: Settings) -> Applied {
         .into_iter()
         .filter_map(|request| match request {
             Request::Capture(action) => Some(action),
-            Request::OpenSettings | Request::Exit => None,
+            Request::EditLastCapture
+            | Request::SaveLastCapture
+            | Request::OpenSettings
+            | Request::Exit => None,
         })
         .collect();
     let in_force = Applied {

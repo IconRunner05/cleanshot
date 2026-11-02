@@ -50,6 +50,18 @@ pub enum ThumbnailEvent {
     DrawFailed(windows::core::Error),
 }
 
+/// Whether the thumbnail saves and drags out, which the organisation's policy can turn off
+/// (F-57).
+pub enum Saving {
+    /// Save works, and a drag offers what `drag` makes when it starts, or nothing for `None`.
+    On {
+        drag: Box<dyn Fn() -> Option<Dragged>>,
+    },
+    /// Save shows greyed with this sentence as its tooltip and sends nothing, as the toolbar's
+    /// does (D-95), and nothing drags out.
+    Off(String),
+}
+
 /// A button the thumbnail shows while the pointer is on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Button {
@@ -89,14 +101,14 @@ impl Thumbnail {
     pub fn show(
         preview: &RgbaImage,
         monitor: RECT,
-        drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
+        saving: Saving,
         on_event: impl FnMut(ThumbnailEvent) + 'static,
     ) -> Result<Self, Error> {
         window::register_class()?;
         let work = work_area(monitor).map_err(Error::Window)?;
         let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Window)?;
         let slide = fade::animations_on().map_err(Error::Window)?;
-        let window = window::open_window(preview, work, scale, slide, drag, Box::new(on_event))?;
+        let window = window::open_window(preview, work, scale, slide, saving, Box::new(on_event))?;
         // SAFETY: `window` was created above on this thread; D-96 shows it without activation.
         let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
         let thumbnail = Self { window };
@@ -379,12 +391,15 @@ mod tests {
         }
     }
 
-    fn shown(
-        events: &Rc<RefCell<Vec<String>>>,
-        drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
-    ) -> Thumbnail {
+    fn no_drag() -> Saving {
+        Saving::On {
+            drag: Box::new(|| None),
+        }
+    }
+
+    fn shown(events: &Rc<RefCell<Vec<String>>>, saving: Saving) -> Thumbnail {
         let sink = Rc::clone(events);
-        Thumbnail::show(&preview(), RECT::default(), drag, move |event| {
+        Thumbnail::show(&preview(), RECT::default(), saving, move |event| {
             sink.borrow_mut().push(format!("{event:?}"));
         })
         .expect("the thumbnail opens")
@@ -395,7 +410,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         // SAFETY: reads which window is in the foreground.
         let before = unsafe { GetForegroundWindow() };
-        let thumbnail = shown(&events, None);
+        let thumbnail = shown(&events, no_drag());
         let window = thumbnail.window;
         pump_until(Duration::from_millis(300), || false);
         // SAFETY: reads the window's own style and the foreground window.
@@ -430,7 +445,7 @@ mod tests {
             asking.set(asking.get() + 1);
             None
         });
-        let thumbnail = shown(&events, Some(drag));
+        let thumbnail = shown(&events, Saving::On { drag });
         let (press, near, far) = (0x000A_000A, 0x000A_000B, 0x0028_0028);
         click(
             thumbnail.window,
@@ -462,7 +477,7 @@ mod tests {
             pump_until(STAY + Duration::from_secs(1), || !seen.borrow().is_empty());
             None
         });
-        let thumbnail = shown(&events, Some(drag));
+        let thumbnail = shown(&events, Saving::On { drag });
         click(
             thumbnail.window,
             &[(WM_LBUTTONDOWN, PRESS), (WM_MOUSEMOVE, FAR)],
@@ -497,9 +512,14 @@ mod tests {
             report.set(Some(watching.get()));
             None
         });
-        let thumbnail = Thumbnail::show(&preview(), RECT::default(), Some(drag), move |_| {
-            let Freed(_) = &guard;
-        })
+        let thumbnail = Thumbnail::show(
+            &preview(),
+            RECT::default(),
+            Saving::On { drag },
+            move |_| {
+                let Freed(_) = &guard;
+            },
+        )
         .expect("the thumbnail opens");
         let window = thumbnail.window;
         *slot.borrow_mut() = Some(thumbnail);
@@ -515,9 +535,42 @@ mod tests {
     }
 
     #[test]
+    fn f57_with_saving_off_a_click_on_save_sends_nothing_and_a_click_on_the_preview_still_opens() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let thumbnail = shown(
+            &events,
+            Saving::Off(String::from("Your organisation has turned saving off.")),
+        );
+        let scale = crate::overlay::dpi_scale(RECT::default()).expect("the primary monitor's dpi");
+        let (width, height) = window_size(120, 80, scale);
+        let [(_, save), _] = buttons(width, height, scale);
+        let at = |x: i32, y: i32| isize::try_from((y << 16) | x).expect("a client point fits");
+        let on_save = at(
+            save.left.midpoint(save.right),
+            save.top.midpoint(save.bottom),
+        );
+        click(
+            thumbnail.window,
+            &[
+                (WM_MOUSEMOVE, on_save),
+                (WM_LBUTTONDOWN, on_save),
+                (WM_LBUTTONUP, on_save),
+            ],
+        );
+        assert!(events.borrow().is_empty(), "{:?}", events.borrow());
+        let on_preview = at(width / 2, 4);
+        click(
+            thumbnail.window,
+            &[(WM_LBUTTONDOWN, on_preview), (WM_LBUTTONUP, on_preview)],
+        );
+        assert_eq!(*events.borrow(), ["Open"]);
+        drop(thumbnail);
+    }
+
+    #[test]
     fn f09_the_thumbnail_times_out_after_five_seconds_with_the_pointer_off_it() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let thumbnail = shown(&events, None);
+        let thumbnail = shown(&events, no_drag());
         let start = Instant::now();
         pump_until(Duration::from_secs(4), || !events.borrow().is_empty());
         assert!(

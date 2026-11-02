@@ -157,6 +157,14 @@ fn overlaps(a: RECT, b: RECT) -> bool {
 }
 
 impl Layout {
+    /// Where `control` sits, in screen pixels.
+    pub(crate) fn area(&self, control: Control) -> RECT {
+        self.controls
+            .iter()
+            .find_map(|&(placed, at)| (placed == control).then_some(at))
+            .expect("the layout places every control")
+    }
+
     /// The control under `point`, if any.
     pub(crate) fn control_at(&self, point: POINT) -> Option<Control> {
         self.controls
@@ -168,19 +176,25 @@ impl Layout {
     }
 }
 
-/// The tooltip over a control that is off, saying why (F-57). It belongs to the toolbar's
-/// window, which destroys it with itself.
+/// The tooltip over a button that is off, saying why (F-57). It belongs to the window that
+/// shows the button, which destroys it with itself.
 pub(crate) struct OffTip {
     window: HWND,
     owner: HWND,
-    control: Control,
 }
 
 const TIP_ID: usize = 1;
+// The size before lpReserved, which comctl32 v5 accepts as well as v6: a binary without the
+// v6 manifest, such as this crate's tests, loads v5 and refuses the whole struct.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "an offset inside a small struct"
+)]
+const TOOL_SIZE: u32 = std::mem::offset_of!(TTTOOLINFOW, lpReserved) as u32;
 
 impl OffTip {
-    /// A tooltip on `owner`, the window that shows the toolbar, for `control`, saying `reason`.
-    pub(crate) fn new(owner: HWND, control: Control, reason: &str) -> windows::core::Result<Self> {
+    /// A tooltip on `owner`, the window that shows the button, saying `reason`.
+    pub(crate) fn new(owner: HWND, reason: &str) -> windows::core::Result<Self> {
         let classes = INITCOMMONCONTROLSEX {
             dwSize: struct_size::<INITCOMMONCONTROLSEX>(),
             dwICC: ICC_TAB_CLASSES,
@@ -207,7 +221,7 @@ impl OffTip {
         }?;
         let text = HSTRING::from(reason);
         let tool = TTTOOLINFOW {
-            cbSize: struct_size::<TTTOOLINFOW>(),
+            cbSize: TOOL_SIZE,
             uFlags: TTF_SUBCLASS,
             hwnd: owner,
             uId: TIP_ID,
@@ -226,33 +240,16 @@ impl OffTip {
         if added.0 == 0 {
             return Err(windows::core::Error::from_thread());
         }
-        Ok(Self {
-            window,
-            owner,
-            control,
-        })
+        Ok(Self { window, owner })
     }
 
-    /// Moves the tooltip's hover area onto its control in `layout`, shifted by `origin` into
-    /// the owner's pixels.
-    pub(crate) fn place(&self, layout: &Layout, origin: POINT) {
-        let Some(&(_, at)) = layout
-            .controls
-            .iter()
-            .find(|(control, _)| *control == self.control)
-        else {
-            return;
-        };
+    /// Moves the tooltip's hover area onto `at`, in the owner's client pixels.
+    pub(crate) fn place(&self, at: RECT) {
         let tool = TTTOOLINFOW {
-            cbSize: struct_size::<TTTOOLINFOW>(),
+            cbSize: TOOL_SIZE,
             hwnd: self.owner,
             uId: TIP_ID,
-            rect: RECT {
-                left: at.left - origin.x,
-                top: at.top - origin.y,
-                right: at.right - origin.x,
-                bottom: at.bottom - origin.y,
-            },
+            rect: at,
             ..Default::default()
         };
         // SAFETY: the tooltip reads `tool` during the call.

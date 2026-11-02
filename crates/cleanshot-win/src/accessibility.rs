@@ -111,7 +111,14 @@ pub fn wait_for_toolbar(
     }
 }
 
-fn controls_in_own_windows() -> Result<Vec<Control>, Error> {
+/// Every element UI Automation reports under this process's top-level windows, the windows
+/// themselves included (F-58). Call it from a thread that owns no window, as for
+/// [`wait_for_toolbar`].
+///
+/// # Errors
+///
+/// [`Error::Accessibility`] if COM or the walk fails.
+pub fn controls_in_own_windows() -> Result<Vec<Control>, Error> {
     // SAFETY: COM is initialised for this thread and released below once the walk ends.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()

@@ -28,6 +28,7 @@ use cleanshot_win::tray::{
 mod capture;
 mod delivery;
 mod settings_window;
+mod thumbnail;
 
 use capture::{Handoff, capture};
 use delivery::{deliver, save_as_start, save_to};
@@ -113,6 +114,10 @@ fn main() {
                     cx.update(|cx| {
                         let action = match request {
                             Request::Capture(action) => action,
+                            Request::EditLastCapture => {
+                                return thumbnail::edit_last(&session, &pass_on);
+                            }
+                            Request::SaveLastCapture => return thumbnail::save_last(&session),
                             Request::OpenSettings => return open_settings(cx, &session),
                             Request::Exit => return cx.quit(),
                         };
@@ -232,6 +237,10 @@ struct Session {
     policy: Policy,
     tray: RefCell<Tray>,
     overlay: RefCell<Option<Overlay>>,
+    /// F-09: the thumbnail of the last capture copied or saved, while it shows.
+    thumbnail: RefCell<Option<thumbnail::Shown>>,
+    /// How many thumbnails have shown, so an event from a replaced one does nothing.
+    thumbnails_shown: Cell<u64>,
     /// F-06: the last selection copied or saved, kept in memory only (C-20).
     last_selection: Cell<Option<RECT>>,
     /// So a P-04 after-use sample knows whether a capture started after it was set.
@@ -248,6 +257,8 @@ impl Session {
             policy,
             tray: RefCell::new(tray),
             overlay: RefCell::new(None),
+            thumbnail: RefCell::new(None),
+            thumbnails_shown: Cell::new(0),
             last_selection: Cell::new(None),
             captures_started: Cell::new(0),
             log,
