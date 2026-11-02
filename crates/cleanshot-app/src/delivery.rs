@@ -51,10 +51,8 @@ pub(crate) fn deliver(
 /// (F-21), and as the clipboard's bitmap, made in memory.
 pub(crate) fn dragged(image: &Arc<RgbaImage>) -> Result<Dragged, DeliveryError> {
     let image = flattened(&Document::new(Arc::clone(image)))?;
-    let name = save::offered_name(FILE_NAME_TEMPLATE, Stamp::now(), "png")
-        .unwrap_or_else(|error| panic!("the file-name template is a safe constant: {error}"));
     Ok(Dragged {
-        name,
+        name: offered_name("png"),
         png: encode(&image, Format::Png).map_err(|error| from_render(&error))?,
         bitmap: encode(&image, Format::ClipboardBitmap).map_err(|error| from_render(&error))?,
     })
@@ -89,9 +87,12 @@ pub(crate) fn save_as_start(
     // there, and a save into it reports its own failure.
     let folder = save::save_folder(settings.save_folder.as_deref()).unwrap_or_default();
     let (_, extension) = encoding(settings.save_format);
-    let name = save::offered_name(FILE_NAME_TEMPLATE, Stamp::now(), extension)
-        .unwrap_or_else(|error| panic!("the file-name template is a safe constant: {error}"));
-    Ok((folder, name))
+    Ok((folder, offered_name(extension)))
+}
+
+fn offered_name(extension: &str) -> String {
+    save::offered_name(FILE_NAME_TEMPLATE, Stamp::now(), extension)
+        .unwrap_or_else(|error| panic!("the file-name template is a safe constant: {error}"))
 }
 
 /// F-22 (D-66): flattens `document` and writes it to `path`, the name the user confirmed in
