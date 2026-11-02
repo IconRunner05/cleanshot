@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use cleanshot_core::{
     AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, Policy, SaveFormat, Saving, SavingOff,
-    Settings, SettingsNotice, SettingsProblem, settings_notice,
+    Settings, SettingsNotice, SettingsProblem, StartupEntryError, settings_notice,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -19,6 +19,13 @@ use crate::theme::{ACCENT, Theme};
 
 type Apply = Rc<dyn Fn(Settings) -> Applied>;
 
+/// F-56, D-93: whether Windows starts this exe at sign-in, read when the window opens, and how
+/// to change it.
+struct StartWithWindows {
+    on: bool,
+    set: Box<dyn Fn(bool) -> Result<(), StartupEntryError>>,
+}
+
 /// The settings window while it is open, so a second Settings click brings it forward.
 struct OpenSettings(WindowHandle<SettingsView>);
 
@@ -26,7 +33,9 @@ impl Global for OpenSettings {}
 
 /// Shows the settings window (F-55) for `current`, or brings forward the one already open.
 /// Each change is first checked as the settings file would read it, then handed to `apply`,
-/// whose outcome the window shows. What `policy` sets is shown, not offered (D-86).
+/// whose outcome the window shows. What `policy` sets is shown, not offered (D-86). The
+/// start-with-Windows switch shows `starts_with_windows` and calls `set_start_with_windows` with
+/// the state the user picked; its error is shown and the switch keeps its state (F-56, D-93).
 ///
 /// # Errors
 ///
@@ -37,6 +46,8 @@ pub fn open_settings(
     current: Settings,
     policy: Policy,
     apply: impl Fn(Settings) -> Applied + 'static,
+    starts_with_windows: bool,
+    set_start_with_windows: impl Fn(bool) -> Result<(), StartupEntryError> + 'static,
 ) -> Result<(), Error> {
     if policy.settings_hidden() {
         return Err(Error::SettingsHidden);
@@ -51,6 +62,10 @@ pub fn open_settings(
     }
     register_inter(cx)?;
     let apply: Apply = Rc::new(apply);
+    let startup = StartWithWindows {
+        on: starts_with_windows,
+        set: Box::new(set_start_with_windows),
+    };
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
@@ -66,7 +81,7 @@ pub fn open_settings(
     };
     let handle = cx
         .open_window(options, |window, cx| {
-            cx.new(|cx| SettingsView::new(current, policy, apply, window, cx))
+            cx.new(|cx| SettingsView::new(current, policy, apply, startup, window, cx))
         })
         .map_err(|error| Error::WindowOpen(error.into()))?;
     cx.set_global(OpenSettings(handle));
@@ -78,6 +93,7 @@ struct SettingsView {
     settings: Settings,
     policy: Policy,
     apply: Apply,
+    startup: StartWithWindows,
     /// The action whose hotkey the next key press sets.
     recording: Option<HotkeyAction>,
     notice: Option<SharedString>,
@@ -90,6 +106,7 @@ impl SettingsView {
         settings: Settings,
         policy: Policy,
         apply: Apply,
+        startup: StartWithWindows,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -99,6 +116,7 @@ impl SettingsView {
             settings,
             policy,
             apply,
+            startup,
             recording: None,
             notice: None,
             focus,
@@ -216,17 +234,19 @@ impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
         let settings = &self.settings;
-        let capture = section("Capture", theme).child(radio_group(
-            "After capture",
-            [
-                (AfterCapture::ShowToolbar, "Show the toolbar"),
-                (AfterCapture::Copy, "Copy to the clipboard"),
-            ],
-            settings.after_capture,
-            theme,
-            cx,
-            |settings, choice| settings.after_capture = choice,
-        ));
+        let capture = section("Capture", theme)
+            .child(radio_group(
+                "After capture",
+                [
+                    (AfterCapture::ShowToolbar, "Show the toolbar"),
+                    (AfterCapture::Copy, "Copy to the clipboard"),
+                ],
+                settings.after_capture,
+                theme,
+                cx,
+                |settings, choice| settings.after_capture = choice,
+            ))
+            .child(self.start_with_windows_row(theme, cx));
         let saving = self.saving_section(theme, cx);
         let hotkeys = section("Hotkeys", theme)
             .children(HotkeyAction::ALL.map(|action| self.hotkey_row(action, theme, cx)));
@@ -259,6 +279,34 @@ impl Render for SettingsView {
 }
 
 impl SettingsView {
+    fn start_with_windows_row(&self, theme: Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let on = self.startup.on;
+        row().child(label("Start with Windows", theme)).child(
+            control(
+                "Start with Windows",
+                "Start with Windows",
+                Role::CheckBox,
+                on,
+                theme,
+            )
+            .aria_toggled(if on { Toggled::True } else { Toggled::False })
+            .on_click(cx.listener(move |view, _, _, cx| {
+                let wanted = !view.startup.on;
+                match (view.startup.set)(wanted) {
+                    Ok(()) => {
+                        view.startup.on = wanted;
+                        view.notice = None;
+                    }
+                    Err(error) => {
+                        view.tell(&SettingsNotice::StartWithWindowsUnchanged { wanted, error });
+                    }
+                }
+                cx.notify();
+            }))
+            .child("Start Cleanshot when you sign in"),
+        )
+    }
+
     /// The save folder and format, with what the organisation's policy sets shown as set and
     /// not offered for change, and neither shown when the policy turns saving off (D-86).
     fn saving_section(&self, theme: Theme, cx: &mut Context<Self>) -> Stateful<Div> {

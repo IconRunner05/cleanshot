@@ -15,6 +15,7 @@ mod policy;
 mod selection;
 mod settings;
 mod settings_change;
+mod startup;
 mod step;
 mod text;
 mod text_edit;
@@ -41,6 +42,7 @@ pub use settings::{
     SaveFormat, Settings, SettingsProblem,
 };
 pub use settings_change::{Applied, SettingsNotice, SettingsSaveError, settings_notice};
+pub use startup::{StartupEntryError, run_command, starts};
 pub use step::{STEP_DIAMETER, Step};
 pub use text::{
     DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,

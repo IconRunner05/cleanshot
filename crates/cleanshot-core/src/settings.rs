@@ -13,10 +13,6 @@ const _: () = assert!(MAX_SAVE_FOLDER_BYTES <= 32_767);
 
 /// Everything `cleanshot.toml` holds (F-54). Each field has the default [`Settings::default`]
 /// gives it.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "each is its own on/off setting in the file"
-)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     /// `None` means the default folder, Pictures\Screenshots, which the caller resolves.
@@ -26,7 +22,6 @@ pub struct Settings {
     pub show_thumbnail: bool,
     pub show_pointer: bool,
     pub remember_last_selection: bool,
-    pub start_with_windows: bool,
     pub hotkeys: Hotkeys,
 }
 
@@ -136,7 +131,6 @@ impl Default for Settings {
             show_thumbnail: true,
             show_pointer: false,
             remember_last_selection: false,
-            start_with_windows: false,
             hotkeys: Hotkeys::default(),
         }
     }
@@ -243,9 +237,6 @@ impl Settings {
             remember_last_selection: reader
                 .read("remember_last_selection", Value::as_bool)
                 .unwrap_or(defaults.remember_last_selection),
-            start_with_windows: reader
-                .read("start_with_windows", Value::as_bool)
-                .unwrap_or(defaults.start_with_windows),
             hotkeys: reader.hotkeys(defaults.hotkeys),
         };
         (settings, reader.problems)
@@ -276,7 +267,6 @@ impl Settings {
             "remember_last_selection".into(),
             self.remember_last_selection.into(),
         );
-        table.insert("start_with_windows".into(), self.start_with_windows.into());
         let mut hotkeys = Table::new();
         for (key, hotkey) in self.hotkeys.named() {
             hotkeys.insert(key.into(), hotkey.to_string().into());
@@ -541,6 +531,15 @@ mod tests {
     }
 
     #[test]
+    fn d93_a_file_with_start_with_windows_reads_without_a_problem_and_is_written_back_without_it() {
+        let (settings, problems) =
+            Settings::from_toml(b"start_with_windows = true\nshow_pointer = true\n");
+        assert_eq!(problems, []);
+        assert!(settings.show_pointer);
+        assert!(!settings.to_toml().contains("start_with_windows"));
+    }
+
+    #[test]
     fn f54_an_invalid_value_falls_back_to_its_default_and_is_reported() {
         let text = "save_format = \"gif\"\nshow_pointer = \"yes\"\nstart_with_windows = true\n\
                     [hotkeys]\nregion = \"Ctrl+Ctrl+4\"\nwindow = \"Win+W\"\n";
@@ -549,7 +548,6 @@ mod tests {
         assert_eq!(settings.save_format, SaveFormat::Png);
         assert!(!settings.show_pointer);
         assert_eq!(settings.hotkeys.region, hotkey("PrtSc"));
-        assert!(settings.start_with_windows);
         assert_eq!(settings.hotkeys.window, hotkey("Win+W"));
         let keys: Vec<_> = problems
             .iter()
@@ -608,7 +606,6 @@ mod tests {
             show_thumbnail: false,
             show_pointer: true,
             remember_last_selection: true,
-            start_with_windows: true,
             hotkeys: Hotkeys {
                 region: hotkey("Ctrl+Shift+4"),
                 ..Hotkeys::default()
@@ -782,18 +779,17 @@ mod tests {
 
     const EVERY_SETTING: &str = "save_folder = 'D:\\Shots\\Bildschirmfotos \u{1F4F7}'\n\
         save_format = \"jpg\"\nafter_capture = \"copy\"\nshow_thumbnail = false\n\
-        show_pointer = true\nremember_last_selection = true\nstart_with_windows = true\n\
+        show_pointer = true\nremember_last_selection = true\n\
         [hotkeys]\nregion = \"Ctrl+Shift+4\"\nlast_region = \"Shift+PrtSc\"\n\
         full_screen = \"Ctrl+PrtSc\"\nwindow = \"Alt+F24\"\ncapture_panel = \"Win+5\"\n";
 
-    const KEYS: [&str; 13] = [
+    const KEYS: [&str; 12] = [
         "save_folder",
         "save_format",
         "after_capture",
         "show_thumbnail",
         "show_pointer",
         "remember_last_selection",
-        "start_with_windows",
         "hotkeys",
         "hotkeys.region",
         "hotkeys.last_region",

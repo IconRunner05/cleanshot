@@ -2,6 +2,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use crate::settings::{Hotkey, HotkeyAction, HotkeyRefusal, Settings, SettingsProblem};
+use crate::startup::StartupEntryError;
 
 /// What applying a change from the settings window did (F-55).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +68,11 @@ pub enum SettingsNotice {
     /// The settings file could not hold the change, so it was not made.
     Refused(Vec<SettingsProblem>),
     NoFolderDialog,
+    /// Windows did not take the change to whether Cleanshot starts with it (F-56).
+    StartWithWindowsUnchanged {
+        wanted: bool,
+        error: StartupEntryError,
+    },
 }
 
 /// The sentence the settings window shows for `notice`: what happened and what to do.
@@ -101,6 +107,19 @@ pub fn settings_notice(notice: &SettingsNotice) -> String {
         }
         SettingsNotice::NoFolderDialog => {
             "The folder dialog did not open, so the save folder did not change.".to_owned()
+        }
+        SettingsNotice::StartWithWindowsUnchanged { wanted, error } => {
+            let change = if *wanted { "add" } else { "remove" };
+            match error {
+                StartupEntryError::NoExePath => format!(
+                    "Cleanshot could not read where it is stored, so it cannot {change} its \
+                     start-with-Windows entry."
+                ),
+                StartupEntryError::Refused { code } => format!(
+                    "Windows did not let Cleanshot {change} its start-with-Windows entry \
+                     (error {code:#010x}). Try again."
+                ),
+            }
         }
         SettingsNotice::Refused(problems) => {
             problems.iter().map(refusal).collect::<Vec<_>>().join(" ")
@@ -208,6 +227,28 @@ mod tests {
         assert_eq!(
             settings_notice(&folder),
             "The settings file cannot hold that folder's path, so the save folder did not change."
+        );
+    }
+
+    #[test]
+    fn f56_a_start_with_windows_notice_names_the_change_and_windows_error() {
+        let refused = SettingsNotice::StartWithWindowsUnchanged {
+            wanted: true,
+            error: StartupEntryError::Refused { code: 0x8007_0005 },
+        };
+        assert_eq!(
+            settings_notice(&refused),
+            "Windows did not let Cleanshot add its start-with-Windows entry (error 0x80070005). \
+             Try again."
+        );
+        let no_path = SettingsNotice::StartWithWindowsUnchanged {
+            wanted: false,
+            error: StartupEntryError::NoExePath,
+        };
+        assert_eq!(
+            settings_notice(&no_path),
+            "Cleanshot could not read where it is stored, so it cannot remove its \
+             start-with-Windows entry."
         );
     }
 }
