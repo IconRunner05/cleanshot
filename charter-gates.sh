@@ -11,10 +11,18 @@ cd "$(dirname "$0")"
 llvm_bin=${LLVM_BIN:-/opt/homebrew/opt/llvm@22/bin}
 lld_link=${LLD_LINK:-/opt/homebrew/opt/lld@22/bin/lld-link}
 release_inputs=(Cargo.lock Cargo.toml .cargo rust-toolchain.toml crates charter-gates.sh)
-system_dlls=(
-    advapi32.dll bcryptprimitives.dll combase.dll comctl32.dll d2d1.dll d3d11.dll dcomp.dll
-    dwmapi.dll dwrite.dll dxgi.dll gdi32.dll icuuc.dll imm32.dll kernel32.dll ntdll.dll
-    ole32.dll oleaut32.dll shell32.dll uiautomationcore.dll user32.dll winmm.dll
+# C-12: Windows maps these from System32 before any search, so they may be imported statically:
+# the KnownDLLs key on windows-latest, and ntdll, which every process has.
+known_dlls=(
+    advapi32.dll clbcatq.dll combase.dll comdlg32.dll coml2.dll gdi32.dll gdiplus.dll
+    imagehlp.dll imm32.dll kernel32.dll msctf.dll msvcrt.dll normaliz.dll nsi.dll ntdll.dll
+    ole32.dll oleaut32.dll psapi.dll rpcrt4.dll sechost.dll setupapi.dll shcore.dll shell32.dll
+    shlwapi.dll user32.dll wldap32.dll
+)
+# Windows DLLs that build.rs delay-loads, so they load after main limits search to System32.
+delay_loaded_dlls=(
+    bcryptprimitives.dll comctl32.dll d2d1.dll d3d11.dll dcomp.dll dwmapi.dll dwrite.dll
+    dxgi.dll icuuc.dll uiautomationcore.dll winmm.dll
 )
 
 case ${1:-} in
@@ -25,7 +33,7 @@ case ${1:-} in
     "")
         exe=target/x86_64-pc-windows-msvc/scan-only/cleanshot.exe
         kind="scan-only exe"
-        system_dlls+=(d3dcompiler_47.dll)
+        known_dlls+=(d3dcompiler_47.dll)
         ;;
     *)
         echo "usage: $0 [--release-exe PATH]" >&2
@@ -87,8 +95,16 @@ if [[ $kind == "scan-only exe" ]]; then
 fi
 
 imports=$("$llvm_bin/llvm-readobj" --coff-imports "$exe")
-dlls=$(printf '%s\n' "$imports" | sed -n 's/^  Name: //p' | tr '[:upper:]' '[:lower:]' | sort -u)
-functions=$(printf '%s\n' "$imports" | sed -n 's/^  Symbol: \([^ ]*\).*/\1/p' | sort -u)
+# llvm-readobj lists each DLL in an "Import {" block, or "DelayImport {" when it is delay-loaded.
+imported() {
+    printf '%s\n' "$imports" |
+        awk -v kind="$1" '/^[A-Za-z]+ [{]$/ { in_kind = ($1 == kind) } in_kind && /^  Name: / { print tolower($2) }' |
+        sort -u
+}
+static_dlls=$(imported Import)
+delayed_dlls=$(imported DelayImport)
+dlls=$(printf '%s\n%s\n' "$static_dlls" "$delayed_dlls" | sed '/^$/d' | sort -u)
+functions=$(printf '%s\n' "$imports" | sed -n 's/^ *Symbol: \([^ ]*\).*/\1/p' | sort -u)
 [[ -n $dlls ]] || fail "C-02: llvm-readobj listed no DLLs for $exe, so the import scan did not run."
 
 for dll in $dlls; do
@@ -99,8 +115,13 @@ for dll in $dlls; do
             fail "C-02: the $kind imports the C runtime DLL $dll; the CRT must be linked statically." ;;
         api-ms-win-*) ;;
         *)
-            [[ " ${system_dlls[*]} " == *" $dll "* ]] ||
-                fail "C-02: the $kind imports $dll, which is not on the system DLL list in charter-gates.sh." ;;
+            if grep -qx -F "$dll" <<<"$static_dlls"; then
+                [[ " ${known_dlls[*]} " == *" $dll "* ]] ||
+                    fail "C-12: the $kind imports $dll statically, and it is not a KnownDLL, so a copy beside the exe loads before main; delay-load it in build.rs."
+            else
+                [[ " ${delay_loaded_dlls[*]} " == *" $dll "* ]] ||
+                    fail "C-02: the $kind delay-loads $dll, which is not on the delay-loaded DLL list in charter-gates.sh."
+            fi ;;
     esac
 done
 

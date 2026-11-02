@@ -89,7 +89,7 @@ control what they do.
 
 | Measure | Rule | Proof |
 | --- | --- | --- |
-| After start-up, a DLL loaded by name is searched for in System32 only: `SetDefaultDllDirectories` is the first call in `main`. DLLs Windows loads by full path (COM servers registered per user or per machine, shell extensions, the graphics driver, input methods) load from wherever they are installed. DLLs resolved before `main` are a gap: see below. | C-12 | Gate (the exe must import `SetDefaultDllDirectories`); review that it runs first |
+| After start-up, a DLL loaded by name is searched for in System32 only: `SetDefaultDllDirectories` is the first call in `main`. DLLs Windows loads by full path (COM servers registered per user or per machine, shell extensions, the graphics driver, input methods) load from wherever they are installed. Before `main`, Windows resolves only the exe's static imports, and each of those is on Windows' KnownDLLs list, which it maps from System32 without a search; every other DLL the exe imports (`d3d11`, `dxgi`, `d2d1`, `dwrite`, `dcomp`, `dwmapi`, `winmm`, `uiautomationcore`, `icuuc`, `comctl32`, `bcryptprimitives`) is delay-loaded on first use, after that call. | C-12 | Gate (the exe must import `SetDefaultDllDirectories`, and every static import must be a KnownDLL); CI starts the release exe beside a decoy DLL named for each DLL it loads that is not a KnownDLL and fails if it loads one; review that the call runs first |
 | ASLR, DEP and Control Flow Guard are on for the release exe. Rust's prebuilt standard library is not instrumented for Control Flow Guard. | C-17 | Gate (exe headers) |
 | Cleanshot's code is Rust. `unsafe` code is allowed only in `cleanshot-win`, which holds its Windows API calls; every other crate forbids it, and every `unsafe` block must carry a `// SAFETY:` comment. GPUI and the `windows` crate have their own `unsafe` code. | C-16 | Gate (`unsafe` scan; clippy's `undocumented_unsafe_blocks` denied) |
 | Redaction (blur, pixelate) replaces the covered pixels in every copy and save with averages over 16-pixel cells; the original pixels are not kept underneath. Large pixelated text in a known font can sometimes be partly guessed back. | C-22 | Test (the `c22_` tests, among them `c22_a_saved_capture_holds_the_redacted_pixels_not_the_capture`) |
@@ -99,10 +99,6 @@ control what they do.
 Each of these is where Cleanshot's own code falls short of a charter rule today. Its entry
 changes in the commit that closes it.
 
-- **C-12, DLL planting.** The exe statically imports DLLs that are not on Windows' KnownDLLs
-  list, among them `winmm`, `dwmapi`, `d3d11`, `dxgi`, `d2d1`, `dwrite`, `dcomp` and
-  `uiautomationcore`. Windows resolves these before `main` runs, searching the exe's own folder
-  first, so a DLL of one of these names placed beside the exe (in Downloads, say) can be loaded.
 - **C-10, network paths.** The configured save folder may be a network (UNC) path such as
   `\\server\share`. Saving there, or opening Save As on it, makes Windows connect to that
   server, and depending on the PC's network policy sign in to it with the user's Windows

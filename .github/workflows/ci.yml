@@ -100,6 +100,82 @@ jobs:
           fi
           taskkill //F //IM cleanshot.exe
 
+      - name: Release exe loads no DLL planted beside it, under any name it loads that is not a KnownDLL (C-12)
+        shell: pwsh
+        run: |
+          $exe = 'target/x86_64-pc-windows-msvc/release/cleanshot.exe'
+          $run = Join-Path $env:RUNNER_TEMP 'planted'
+          New-Item -ItemType Directory -Force $run | Out-Null
+          Copy-Item $exe $run
+          Set-Content (Join-Path $run 'cleanshot.toml') ''
+          $knownKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs'
+          $knownValues = Get-ItemProperty $knownKey
+          $known = (Get-Item $knownKey).GetValueNames() |
+            ForEach-Object { $knownValues.$_ } | Where-Object { $_ -like '*.dll' } |
+            ForEach-Object { $_.ToLowerInvariant() }
+          Write-Output "KnownDLLs: $($known -join ' ')"
+          $imports = & 'C:/Program Files/LLVM/bin/llvm-readobj.exe' --coff-imports $exe
+          $static = @(); $delayed = @(); $section = ''
+          foreach ($line in $imports) {
+            if ($line -match '^(Delay)?Import \{') { $section = $Matches[0] }
+            elseif ($line -match '^  Name: (.+)$') {
+              if ($section -like 'Delay*') { $delayed += $Matches[1].ToLowerInvariant() }
+              else { $static += $Matches[1].ToLowerInvariant() }
+            }
+          }
+          Write-Output "Static imports: $($static -join ' ')"
+          Write-Output "Delay-loaded imports: $($delayed -join ' ')"
+          # Stop one start and wait for its exit, so the next is not a second launch (C-14).
+          function Stop-Cleanshot($process) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit(10000) | Out-Null
+          }
+          # Starts the copy with --log; returns the modules it holds once the tray is ready, or
+          # $null if it is not ready within 10 s.
+          function Start-Cleanshot {
+            $log = Join-Path $run 'cleanshot.log'
+            Remove-Item $log -ErrorAction SilentlyContinue
+            $process = Start-Process (Join-Path $run 'cleanshot.exe') '--log' -PassThru
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline -and -not ((Test-Path $log) -and (Select-String -Quiet 'perf P-03' $log))) {
+              Start-Sleep -Milliseconds 250
+            }
+            $modules = $null
+            if ((Test-Path $log) -and (Select-String -Quiet 'perf P-03' $log)) {
+              $process.Refresh()
+              $modules = @($process.Modules | ForEach-Object FileName)
+            }
+            Stop-Cleanshot $process
+            $modules
+          }
+          # The C-02 step's exe may still be exiting.
+          Get-Process cleanshot -ErrorAction SilentlyContinue | ForEach-Object { Stop-Cleanshot $_ }
+          $clean = Start-Cleanshot
+          if ($null -eq $clean) { Write-Output 'FAIL C-12: cleanshot.exe did not start with nothing planted'; exit 1 }
+          $system = [Environment]::GetFolderPath('System')
+          $loaded = $clean | Where-Object { $_ -like "$system\*" } |
+            ForEach-Object { [IO.Path]::GetFileName($_).ToLowerInvariant() }
+          $names = @($static + $delayed + $loaded) | Sort-Object -Unique |
+            Where-Object { $_ -notin $known -and $_ -notlike 'api-ms-*' -and $_ -notlike 'ext-ms-*' }
+          Write-Output "Planted, one at a time: $($names -join ' ')"
+          $decoy = Join-Path $system 'version.dll'
+          $failed = $false
+          foreach ($name in $names) {
+            $planted = Join-Path $run $name
+            Copy-Item $decoy $planted
+            $modules = Start-Cleanshot
+            Remove-Item $planted -Force
+            if ($null -eq $modules) {
+              Write-Output "FAIL C-12: with $name planted beside it, cleanshot.exe did not start, so it loaded the decoy"
+              $failed = $true
+            } elseif ($modules | Where-Object { $_ -ieq $planted }) {
+              Write-Output "FAIL C-12: cleanshot.exe loaded the $name planted beside it"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Output "C-12: none of $($names.Count) planted DLLs loaded"
+
       - name: Budget judge builds
         run: cargo build --release --locked -p cleanshot-fieldtest
 

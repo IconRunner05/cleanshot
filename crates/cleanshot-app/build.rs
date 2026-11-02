@@ -13,6 +13,19 @@ const FIXED_LAYOUT_1_0: u32 = 0x0001_0000;
 const ALL_FILE_FLAGS: u32 = 0x3F;
 const VOS_NT_WINDOWS32: u32 = 0x0004_0004;
 const VFT_APP: u32 = 1;
+const DELAY_LOADED: [&str; 11] = [
+    "bcryptprimitives.dll",
+    "comctl32.dll",
+    "d2d1.dll",
+    "d3d11.dll",
+    "dcomp.dll",
+    "dwmapi.dll",
+    "dwrite.dll",
+    "dxgi.dll",
+    "icuuc.dll",
+    "uiautomationcore.dll",
+    "winmm.dll",
+];
 
 fn resource_entry(resource_type: u16, name: u16, language: u16, data: &[u8]) -> Vec<u8> {
     let size = u32::try_from(data.len()).expect("a resource is smaller than 4 GB");
@@ -170,5 +183,10 @@ fn main() {
     // as much as the exe does. The field-test probe has no test target.
     if std::env::var("CARGO_PKG_NAME").as_deref() == Ok("cleanshot-app") {
         println!("cargo:rustc-link-arg-tests={}", resource_file.display());
+        // C-12: a DLL outside KnownDLLs loads on first use, after main limits search to System32.
+        for dll in DELAY_LOADED {
+            println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{dll}");
+        }
+        println!("cargo:rustc-link-arg-bins=delayimp.lib");
     }
 }
