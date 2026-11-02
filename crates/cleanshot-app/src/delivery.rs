@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use cleanshot_core::{Delivered, DeliveryError, Document, Output, SaveFormat, Settings};
+use cleanshot_core::{Delivered, DeliveryError, Document, Output, SaveFormat, Saving, Settings};
 use cleanshot_render::{Flattened, Format, encode, flatten};
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
@@ -10,11 +10,16 @@ const FILE_NAME_TEMPLATE: &str = "Screenshot {date} {time}";
 
 /// Flattens `document`, redaction included (C-22), and copies it (F-20) or saves it in the
 /// configured folder and format (F-21). The overlay and the editor both finish here (D-48).
+/// A save the organisation's policy turns off is refused before anything is drawn (F-57).
 pub(crate) fn deliver(
     output: Output,
     document: &Document,
     settings: &Settings,
+    saving: &Saving,
 ) -> Result<Delivered, DeliveryError> {
+    if let (Output::Save, Saving::Off(off)) = (output, saving) {
+        return Err(DeliveryError::SavingOff(*off));
+    }
     let image = flattened(document)?;
     match output {
         Output::Copy => {
@@ -67,14 +72,35 @@ pub(crate) fn save_as_start(settings: &Settings) -> (PathBuf, String) {
 
 /// F-22 (D-66): flattens `document` and writes it to `path`, the name the user confirmed in
 /// Save As, replacing a file there. The extension picks the format; any other name is written
-/// in the configured format, under exactly that name.
+/// in the configured format, under exactly that name. The organisation's policy may refuse it
+/// (F-57): when saving is off, or for a path outside the policy's folder.
 pub(crate) fn save_to(
     path: &Path,
     document: &Document,
     settings: &Settings,
+    saving: &Saving,
 ) -> Result<Delivered, DeliveryError> {
+    match saving {
+        Saving::Off(off) => return Err(DeliveryError::SavingOff(*off)),
+        Saving::Allowed {
+            folder: Some(folder),
+            ..
+        } if !save::is_inside(path, Path::new(folder)) => {
+            return Err(DeliveryError::OutsidePolicyFolder {
+                folder: folder.clone(),
+            });
+        }
+        Saving::Allowed { .. } => {}
+    }
     let image = flattened(document)?;
-    let (format, _) = encoding(typed_format(path).unwrap_or(settings.save_format));
+    // F-57: ForcePng wins over the typed extension.
+    let format = match saving {
+        Saving::Allowed { png_only: true, .. } => SaveFormat::Png,
+        Saving::Allowed { .. } | Saving::Off(_) => {
+            typed_format(path).unwrap_or(settings.save_format)
+        }
+    };
+    let (format, _) = encoding(format);
     let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
     let folder = path.parent().unwrap_or(path);
     match save::replace(path, &bytes) {
@@ -154,7 +180,14 @@ mod tests {
         Color, Command, History, PointF, RectF, RedactMode, RgbaImage, Shape, Style, TextBlock,
     };
 
+    use cleanshot_core::SavingOff;
+
     use super::*;
+
+    const NO_POLICY: Saving = Saving::Allowed {
+        folder: None,
+        png_only: false,
+    };
 
     fn redacted_document() -> Document {
         let pixels = (0..=255u8)
@@ -215,7 +248,7 @@ mod tests {
         let mut copies: Vec<Duration> = (0..5)
             .map(|_| {
                 let started = Instant::now();
-                let copied = deliver(Output::Copy, &document, &Settings::default());
+                let copied = deliver(Output::Copy, &document, &Settings::default(), &NO_POLICY);
                 assert_eq!(copied, Ok(Delivered::Copied));
                 started.elapsed()
             })
@@ -237,7 +270,7 @@ mod tests {
         let bare = folder.join("Shot");
         let saved = [&typed, &bare].map(|path| {
             assert_eq!(
-                save_to(path, &document, &settings),
+                save_to(path, &document, &settings, &NO_POLICY),
                 Ok(Delivered::Saved(path.clone()))
             );
             std::fs::read(path).expect("the saved file is readable")
@@ -258,7 +291,12 @@ mod tests {
         let folder = std::env::temp_dir();
         let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
         assert_eq!(
-            save_to(&folder.join(".."), &redacted_document(), &settings),
+            save_to(
+                &folder.join(".."),
+                &redacted_document(),
+                &settings,
+                &NO_POLICY
+            ),
             Err(DeliveryError::NotWritten { folder })
         );
     }
@@ -269,7 +307,8 @@ mod tests {
         std::fs::create_dir_all(&folder).expect("the test folder is created");
         let document = redacted_document();
         let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
-        let Ok(Delivered::Saved(path)) = deliver(Output::Save, &document, &settings) else {
+        let Ok(Delivered::Saved(path)) = deliver(Output::Save, &document, &settings, &NO_POLICY)
+        else {
             panic!("the save did not deliver a file");
         };
         let written = std::fs::read(&path).expect("the saved file is readable");
@@ -304,7 +343,7 @@ mod tests {
             .expect("the text is added");
         let document = history.document().clone();
         let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
-        let saved = deliver(Output::Save, &document, &settings);
+        let saved = deliver(Output::Save, &document, &settings, &NO_POLICY);
         let written = match &saved {
             Ok(Delivered::Saved(path)) => std::fs::read(path).ok(),
             _ => None,
@@ -328,7 +367,12 @@ mod tests {
     fn f21_each_save_failure_names_what_the_user_can_fix() {
         let document = redacted_document();
         assert_eq!(
-            deliver(Output::Save, &document, &settings_saving_to("Shots")),
+            deliver(
+                Output::Save,
+                &document,
+                &settings_saving_to("Shots"),
+                &NO_POLICY
+            ),
             Err(DeliveryError::SaveFolderNotFull {
                 configured: "Shots".to_owned()
             })
@@ -337,8 +381,59 @@ mod tests {
             std::env::temp_dir().join(format!("cleanshot-missing-{}", std::process::id()));
         let settings = settings_saving_to(missing.to_str().expect("a UTF-8 temp path"));
         assert_eq!(
-            deliver(Output::Save, &document, &settings),
+            deliver(Output::Save, &document, &settings, &NO_POLICY),
             Err(DeliveryError::NotWritten { folder: missing })
         );
+    }
+
+    #[test]
+    fn f57_policy_refuses_saves_when_saving_is_off_or_outside_its_folder_and_forces_png() {
+        let document = redacted_document();
+        let folder = std::env::temp_dir().join(format!("cleanshot-f57-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("the test folder is created");
+        let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
+        let off = Saving::Off(SavingOff::ClipboardOnly);
+        assert_eq!(
+            deliver(Output::Save, &document, &settings, &off),
+            Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly))
+        );
+        let inside = folder.join("inside.png");
+        assert_eq!(
+            save_to(&inside, &document, &settings, &off),
+            Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly))
+        );
+
+        let policy_folder = folder.join("Policy");
+        let locked = Saving::Allowed {
+            folder: Some(
+                policy_folder
+                    .to_str()
+                    .expect("a UTF-8 temp path")
+                    .to_owned(),
+            ),
+            png_only: true,
+        };
+        assert_eq!(
+            save_to(&inside, &document, &settings, &locked),
+            Err(DeliveryError::OutsidePolicyFolder {
+                folder: policy_folder
+                    .to_str()
+                    .expect("a UTF-8 temp path")
+                    .to_owned()
+            })
+        );
+        assert!(!inside.exists(), "a refused save writes nothing");
+        std::fs::create_dir_all(&policy_folder).expect("the policy folder is created");
+        let allowed = policy_folder.join("allowed.jpg");
+        assert_eq!(
+            save_to(&allowed, &document, &settings, &locked),
+            Ok(Delivered::Saved(allowed.clone()))
+        );
+        let written = std::fs::read(&allowed).expect("the saved file is readable");
+        assert!(
+            written.starts_with(b"\x89PNG"),
+            "ForcePng writes PNG whatever the name"
+        );
+        std::fs::remove_dir_all(&folder).expect("the test folder is removable");
     }
 }

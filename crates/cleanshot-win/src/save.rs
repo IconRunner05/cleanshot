@@ -137,6 +137,23 @@ pub fn offered_name(template: &str, stamp: Stamp, extension: &str) -> Result<Str
     Ok(format!("{}.{extension}", file_name(template, stamp, 1)?))
 }
 
+/// F-57 (D-86): whether `path` is in `folder` or a folder under it, comparing the full paths
+/// Windows makes of both (`GetFullPathNameW`) one component at a time, ignoring case. The
+/// check is on the path as written; a junction inside the folder is not followed. A path
+/// Windows cannot make full is not in the folder.
+#[must_use]
+pub fn is_inside(path: &Path, folder: &Path) -> bool {
+    let (Ok(path), Ok(folder)) = (std::path::absolute(path), std::path::absolute(folder)) else {
+        return false;
+    };
+    let lowered = |path: &Path| -> Vec<String> {
+        path.components()
+            .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let (path, folder) = (lowered(&path), lowered(&folder));
+    path.len() > folder.len() && path.starts_with(&folder)
+}
 /// F-22: writes `bytes` to `path`, replacing the file there, which the user has confirmed.
 /// The file appears whole or not at all: the bytes go to a partial file in the same folder,
 /// which `fs::rename` (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`) moves over `path`. No
@@ -281,6 +298,39 @@ mod tests {
         }
         fs::create_dir(&folder).expect("the test folder is created");
         folder
+    }
+
+    #[test]
+    fn f57_a_save_as_path_is_inside_the_policy_folder_only_under_it_whatever_its_case() {
+        let cases = [
+            (r"C:\Shots\a.png", r"C:\Shots", true),
+            (r"c:\shots\Team\a.png", r"C:\Shots", true),
+            (r"C:\Shots\..\a.png", r"C:\Shots", false),
+            (r"C:\Shots-other\a.png", r"C:\Shots", false),
+            (r"C:\Shots", r"C:\Shots", false),
+            (
+                r"\\fileserver\SCREENSHOTS\a.png",
+                r"\\fileserver\screenshots",
+                true,
+            ),
+            (
+                r"\\fileserver\screenshots\team\a.png",
+                r"\\fileserver\screenshots",
+                true,
+            ),
+            (
+                r"\\fileserver\screenshots-other\a.png",
+                r"\\fileserver\screenshots",
+                false,
+            ),
+        ];
+        for (path, folder, inside) in cases {
+            assert_eq!(
+                is_inside(Path::new(path), Path::new(folder)),
+                inside,
+                "{path} in {folder}"
+            );
+        }
     }
 
     #[test]

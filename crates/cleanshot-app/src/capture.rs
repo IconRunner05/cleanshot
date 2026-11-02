@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    AfterCapture, Delivered, Document, HotkeyAction, Output, RgbaImage, delivery_notice,
+    AfterCapture, Delivered, DeliveryError, Document, HotkeyAction, Output, RgbaImage, Saving,
+    delivery_notice,
 };
 use cleanshot_win::capture::{
     Desktop, MonitorImage, RECT, capture_desktop, monitor_under_cursor, region,
@@ -159,6 +160,11 @@ fn on_overlay_event(
         }
         OverlayEvent::SaveAs(selected) => {
             session.last_selection.set(Some(selected));
+            // F-57: no Save As dialog opens when the policy turns saving off.
+            if let Saving::Off(off) = session.policy.saving() {
+                session.warn(&delivery_notice(&Err(DeliveryError::SavingOff(*off))));
+                return None;
+            }
             match region(frozen, selected) {
                 Ok(image) => return Some(image),
                 Err(error) => session.warn(&format!("The capture did not finish: {error}.")),
@@ -187,6 +193,7 @@ fn finish(session: &Session, captures: &[MonitorImage], selected: RECT, output: 
         output,
         &Document::new(Arc::new(image)),
         &session.saving_settings(),
+        session.policy.saving(),
     ) {
         Ok(Delivered::Copied) => {
             session.perf(|_| format!("P-02 copied_ms={}", started.elapsed().as_millis()));

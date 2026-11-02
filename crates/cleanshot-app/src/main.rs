@@ -370,7 +370,14 @@ fn editor_deliver(
     session: &Rc<Session>,
 ) -> impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static {
     let session = Rc::clone(session);
-    move |output, document| deliver(output, document, &session.saving_settings())
+    move |output, document| {
+        deliver(
+            output,
+            document,
+            &session.saving_settings(),
+            session.policy.saving(),
+        )
+    }
 }
 
 fn editor_save_as_start(session: &Rc<Session>) -> impl Fn() -> (PathBuf, String) + 'static {
@@ -382,7 +389,14 @@ fn editor_save_to(
     session: &Rc<Session>,
 ) -> impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static {
     let session = Rc::clone(session);
-    move |path, document| save_to(path, document, &session.saving_settings())
+    move |path, document| {
+        save_to(
+            path,
+            document,
+            &session.saving_settings(),
+            session.policy.saving(),
+        )
+    }
 }
 
 /// P-07: logs the time from now, as the editor opens, to the frame after its first draw.
@@ -405,9 +419,14 @@ fn save_chosen(
         return;
     };
     let document = Document::new(Arc::new(image));
-    if let Err(error) =
-        chosen.and_then(|path| save_to(&path, &document, &session.saving_settings()))
-    {
+    if let Err(error) = chosen.and_then(|path| {
+        save_to(
+            &path,
+            &document,
+            &session.saving_settings(),
+            session.policy.saving(),
+        )
+    }) {
         session.warn(&delivery_notice(&Err(error)));
     }
 }
