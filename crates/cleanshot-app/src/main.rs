@@ -145,6 +145,12 @@ fn started(
     if session.policy.settings_hidden() {
         session.tray.borrow().hide_settings_item();
     }
+    for (request, hotkey, registered) in session.tray.borrow().hotkeys() {
+        session.log_line("hotkey", |_| match registered {
+            Ok(()) => format!("{request:?} {hotkey} registered"),
+            Err(error) => format!("{request:?} {hotkey} not_registered {error}"),
+        });
+    }
     let text = start_warnings(&session.tray.borrow(), earlier);
     if !text.is_empty() {
         session.warn(&text);
@@ -185,19 +191,17 @@ fn log_dropped(log: &RefCell<Option<Log>>, request: Request) {
 
 /// The hotkey each capture request registers at start, and the warning when Snipping Tool
 /// holds the region's (F-52).
-fn tray_hotkeys(settings: &Settings) -> ([(Request, Hotkey); 3], Option<String>) {
+fn tray_hotkeys(settings: &Settings) -> ([(Request, Hotkey); 4], Option<String>) {
     let (region, fallback) = region_hotkey(settings.hotkeys.region);
-    let hotkeys = [
-        (Request::Capture(HotkeyAction::Region), region),
-        (
-            Request::Capture(HotkeyAction::FullScreen),
-            settings.hotkeys.full_screen,
-        ),
-        (
-            Request::Capture(HotkeyAction::LastRegion),
-            settings.hotkeys.last_region,
-        ),
-    ];
+    let hotkeys = HotkeyAction::ALL.map(|action| {
+        let hotkey = match action {
+            HotkeyAction::Region => region,
+            HotkeyAction::FullScreen | HotkeyAction::LastRegion | HotkeyAction::Window => {
+                settings.hotkeys.get(action)
+            }
+        };
+        (Request::Capture(action), hotkey)
+    });
     (hotkeys, fallback)
 }
 
@@ -526,5 +530,21 @@ fn describe(problem: &SettingsProblem) -> String {
         SettingsProblem::InvalidValue { key } => {
             format!("{key} has a value Cleanshot cannot use, so its default applies")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f08_start_registers_the_window_hotkey_alt_prtsc_by_default() {
+        let (hotkeys, _) = tray_hotkeys(&Settings::default());
+        let window = Request::Capture(HotkeyAction::Window);
+        let registered = hotkeys.iter().find(|&&(request, _)| request == window);
+        assert_eq!(
+            registered.map(|&(_, hotkey)| hotkey.to_string()),
+            Some("Alt+PrtSc".to_owned())
+        );
     }
 }

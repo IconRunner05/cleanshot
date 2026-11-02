@@ -56,11 +56,17 @@ pub enum HotkeyAction {
     Region,
     FullScreen,
     LastRegion,
+    Window,
 }
 
 impl HotkeyAction {
     /// Every action, in the order the settings window lists them.
-    pub const ALL: [Self; 3] = [Self::Region, Self::FullScreen, Self::LastRegion];
+    pub const ALL: [Self; 4] = [
+        Self::Region,
+        Self::FullScreen,
+        Self::LastRegion,
+        Self::Window,
+    ];
 
     /// The action's name, as the settings window shows it and the tray menu, for the actions
     /// it lists (F-50, F-55).
@@ -70,6 +76,7 @@ impl HotkeyAction {
             Self::Region => "Capture region",
             Self::FullScreen => "Capture screen",
             Self::LastRegion => "Capture last region",
+            Self::Window => "Capture window",
         }
     }
 }
@@ -284,6 +291,7 @@ impl Hotkeys {
             HotkeyAction::Region => self.region,
             HotkeyAction::FullScreen => self.full_screen,
             HotkeyAction::LastRegion => self.last_region,
+            HotkeyAction::Window => self.window,
         }
     }
 
@@ -293,6 +301,7 @@ impl Hotkeys {
             HotkeyAction::Region => &mut self.region,
             HotkeyAction::FullScreen => &mut self.full_screen,
             HotkeyAction::LastRegion => &mut self.last_region,
+            HotkeyAction::Window => &mut self.window,
         };
         *slot = hotkey;
     }
@@ -505,6 +514,18 @@ mod tests {
 
     fn hotkey(text: &str) -> Hotkey {
         Hotkey::parse(text).unwrap()
+    }
+
+    #[test]
+    fn f08_the_window_action_is_the_window_hotkey_alt_prtsc_by_default_and_no_other_may_take_it() {
+        let mut hotkeys = Settings::default().hotkeys;
+        assert_eq!(hotkeys.get(HotkeyAction::Window), hotkey("Alt+PrtSc"));
+        hotkeys.set(HotkeyAction::Window, hotkey("Win+W"));
+        assert_eq!(hotkeys.window, hotkey("Win+W"));
+        assert_eq!(
+            hotkeys.used_by_another(HotkeyAction::Region, hotkey("Win+W")),
+            Some(HotkeyAction::Window)
+        );
     }
 
     #[test]

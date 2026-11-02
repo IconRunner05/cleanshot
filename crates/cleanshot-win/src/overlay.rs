@@ -309,6 +309,7 @@ fn next_window(count: usize, hovered: Option<Pick>, direction: TabDirection) -> 
 /// Dropping it closes every window and gives its keys back.
 pub struct Overlay {
     windows: Vec<HWND>,
+    shared: Rc<Shared>,
 }
 
 impl Overlay {
@@ -377,6 +378,7 @@ impl Overlay {
         shared.changed();
         let mut overlay = Self {
             windows: Vec::with_capacity(captures.len()),
+            shared: Rc::clone(&shared),
         };
         for capture in captures {
             let hosts_toolbar = host.is_some_and(|host| std::ptr::eq(host, capture));
@@ -406,6 +408,12 @@ impl Overlay {
                 .map_err(Error::Window)?;
         }
         Ok(overlay)
+    }
+
+    /// Starts picking a window, as W does (F-08): the window capture hotkey opens the overlay
+    /// this way.
+    pub fn pick_window(&self) {
+        self.shared.press(Key::SwitchMode);
     }
 
     /// Closes the overlay with F-13's 120 ms fade, or at once when Windows' Animation effects
@@ -868,6 +876,30 @@ mod tests {
         }
         drop(overlay);
         assert_eq!(*copied.borrow(), [frame, monitor().bounds]);
+    }
+
+    #[test]
+    fn f08_an_overlay_told_to_pick_a_window_picks_the_one_clicked_with_no_w() {
+        let _screen = screen();
+        let frame = RECT {
+            left: 10,
+            top: 8,
+            right: 40,
+            bottom: 30,
+        };
+        let (overlay, copied) = picking(vec![frame]);
+        overlay.pick_window();
+        let window = overlay.windows[0];
+        let at = Some(LPARAM(20 * 0x1_0000 + 20));
+        // SAFETY: each message is handled on this thread by a window created above, and none
+        // carries a pointer.
+        unsafe {
+            SendMessageW(window, WM_LBUTTONDOWN, None, at);
+            SendMessageW(window, WM_LBUTTONUP, None, at);
+        }
+        press(window, Key::Press);
+        drop(overlay);
+        assert_eq!(*copied.borrow(), [frame]);
     }
 
     #[test]

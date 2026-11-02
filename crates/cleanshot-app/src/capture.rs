@@ -42,6 +42,8 @@ enum Next {
 enum Plan {
     Copy(RECT),
     Overlay(Option<RECT>),
+    /// F-08: the overlay, picking a window.
+    PickWindow,
 }
 
 /// What a capture of `action` does once the screen is copied, or None when the pointer's
@@ -60,6 +62,7 @@ fn plan(
             Plan::Overlay(Some(pointer_monitor()?))
         }
         (HotkeyAction::LastRegion, _) => last_selection.map_or(Plan::Overlay(None), Plan::Copy),
+        (HotkeyAction::Window, _) => Plan::PickWindow,
     })
 }
 
@@ -100,7 +103,7 @@ pub(super) fn capture(
         }
     };
     let last = session.last_selection.get();
-    let selected = match plan(
+    let (selected, picking) = match plan(
         action,
         session.settings.borrow().after_capture,
         last,
@@ -110,7 +113,8 @@ pub(super) fn capture(
             session.log_capture(&copied, &outputs, &captures);
             return session.sample_after_use(&*defer);
         }
-        Some(Plan::Overlay(selected)) => selected,
+        Some(Plan::Overlay(selected)) => (selected, false),
+        Some(Plan::PickWindow) => (None, true),
         Some(Plan::Copy(selected)) => {
             if let Some(image) = finish(session, &captures, selected, Output::Copy) {
                 thumbnail::show(session, image, selected, &defer, &pass_on);
@@ -161,6 +165,9 @@ pub(super) fn capture(
     });
     match shown {
         Ok(shown) => {
+            if picking {
+                shown.pick_window();
+            }
             *session.overlay.borrow_mut() = Some(shown);
             session.perf(|_| format!("P-01 overlay_visible_ms={}", asked.elapsed().as_millis()));
         }
@@ -307,6 +314,16 @@ mod tests {
             plan(HotkeyAction::FullScreen, AfterCapture::Copy, None, || None),
             None
         );
+    }
+
+    #[test]
+    fn f08_the_window_hotkey_opens_the_overlay_picking_a_window_whatever_was_last() {
+        for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
+            assert_eq!(
+                plan(HotkeyAction::Window, after, Some(LAST), || Some(MONITOR)),
+                Some(Plan::PickWindow)
+            );
+        }
     }
 
     #[test]

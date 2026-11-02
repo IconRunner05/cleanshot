@@ -77,7 +77,9 @@ fn apply_settings(session: &Session, changed: Settings) -> Applied {
                     }
                     hotkey
                 }
-                HotkeyAction::FullScreen | HotkeyAction::LastRegion => hotkey,
+                HotkeyAction::FullScreen | HotkeyAction::LastRegion | HotkeyAction::Window => {
+                    hotkey
+                }
             };
             (Request::Capture(action), registered)
         })
