@@ -4,7 +4,7 @@ The hands-on check the owner runs on the reference PC with a release candidate b
 
 Start from a release candidate exe downloaded from its GitHub pre-release, with no `cleanshot.toml` next to it or in `%APPDATA%\Cleanshot` from an earlier run (C-05). Default hotkeys: PrtSc captures a region (Ctrl+Shift+4 if Windows' "Use the Print screen key to open screen capture" is on), Shift+PrtSc the last region, Ctrl+PrtSc the full screen.
 
-F-08, F-10, F-11 and F-12 get their steps when they are built.
+F-10, F-11 and F-12 get their steps when they are built.
 
 ## Start and tray
 
@@ -24,6 +24,7 @@ F-08, F-10, F-11 and F-12 get their steps when they are built.
 - [ ] F-22: Capture and press Ctrl+Shift+S. The Windows save dialog opens. Pick an existing file: it asks before replacing it.
 - [ ] F-06: Press Shift+PrtSc. The last copied or saved rectangle is copied at once, with no overlay.
 - [ ] F-07: Press Ctrl+PrtSc. The monitor under the pointer is captured.
+- [ ] F-08: Open a few windows, minimise one, put one on another virtual desktop, and show a click-through overlay (for example a game's FPS counter). Capture, wait for the thumbnail, then press PrtSc and W. Move the pointer: each window lights up by its frame, without its shadow. The minimised window, the one on the other desktop and Cleanshot's own thumbnail never light up, the click-through overlay is passed over for the window under it, and bare desktop, the wallpaper, lights up the whole monitor. Click a window: it becomes the selection. Press W, Tab a few times and Enter: the window lit up is selected.
 - [ ] F-09: Capture and press Enter. A thumbnail slides in at the bottom-right of that monitor, and the window you were in keeps the focus. Hover it: it stays, with Save and Dismiss along its bottom. Move away: it fades after about 5 s. Capture again and drag the thumbnail into Word or Explorer: the image or a PNG file lands there. Capture again and click it: the editor opens with the capture.
 - [ ] F-13: Turn off Settings > Accessibility > Visual effects > Animation effects. The overlay appears with no fade. Turn on a high-contrast theme: the overlay and toolbar use its colours.
 

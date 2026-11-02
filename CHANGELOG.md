@@ -11,6 +11,10 @@ section exists.
 
 ### Added
 
+- Window capture (F-08): while selecting a region, press W to pick a window instead. The
+  window under the pointer is highlighted by its visible frame, without its shadow, and a
+  click selects it; Tab and Enter pick one from the keyboard. A click on bare desktop selects
+  that monitor. Press W again to draw a region.
 - After you copy or save a capture from the toolbar, a thumbnail of it slides in at the
   bottom right for 5 seconds (F-09): click it to edit, drag it into any app, or use its Save
   and Dismiss. It never takes the keyboard focus; while it shows, the tray menu also has Edit

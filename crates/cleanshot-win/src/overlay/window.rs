@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, PCWSTR, w};
 
-use super::{DESKTOP_DPI, Gesture, KEYS, OverlayEvent, Shared, dpi_scale};
+use super::{DESKTOP_DPI, Gesture, KEYS, Mode, OverlayEvent, Shared, dpi_scale};
 use crate::Error;
 use crate::capture::MonitorImage;
 use crate::loupe;
@@ -72,7 +72,12 @@ impl Surface {
                 D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 None,
             );
-            let Some(selected) = self.shared.selected.get() else {
+            // F-08: a window being picked is drawn as a selection with no handles or size.
+            let (shown, editable) = match self.shared.mode.get() {
+                Mode::Region => (self.shared.selected.get(), true),
+                Mode::Window { hovered } => (hovered.map(|pick| self.shared.frame(pick)), false),
+            };
+            let Some(selected) = shown else {
                 self.target.FillRectangle(&raw const whole, &self.dim);
                 self.draw_loupe();
                 self.draw_toolbar()?;
@@ -109,6 +114,10 @@ impl Surface {
             };
             self.target
                 .DrawRectangle(&raw const border, &self.accent, BORDER_WIDTH, None);
+            if !editable {
+                self.draw_toolbar()?;
+                return self.target.EndDraw(None, None);
+            }
             for (_, at) in box_handles(as_box(selected)) {
                 let (x, y) = (at.x, at.y);
                 let square = D2D_RECT_F {
@@ -125,6 +134,53 @@ impl Surface {
             self.draw_loupe();
             self.draw_toolbar()?;
             self.target.EndDraw(None, None)
+        }
+    }
+
+    /// A press at `at` on `window`: a toolbar control, a window picked (F-08), or the start
+    /// of a drag.
+    fn pressed(&self, window: HWND, at: POINT) {
+        if let Some(control) = self
+            .shared
+            .toolbar()
+            .and_then(|placed| placed.control_at(at))
+        {
+            return self.shared.choose(control);
+        }
+        if let Mode::Window { .. } = self.shared.mode.get() {
+            return self.shared.pick(self.shared.picked_at(at));
+        }
+        // SAFETY: the window belongs to this thread; capture keeps the drag going past its edge.
+        unsafe { SetCapture(window) };
+        let original = self.shared.selected.get();
+        self.shared.gesture.set(Some(Gesture {
+            grip: grip_at(original, at),
+            original,
+            start: at,
+            pointer: at,
+        }));
+        self.shared.changed();
+    }
+
+    fn moved(&self, window: HWND, now: POINT) {
+        if let Mode::Window { .. } = self.shared.mode.get() {
+            return self.shared.hover(self.shared.picked_at(now));
+        }
+        // SAFETY: GetCapture only reads this thread's state.
+        let dragging = unsafe { GetCapture() } == window;
+        let (Some(gesture), true) = (self.shared.gesture.get(), dragging) else {
+            return;
+        };
+        self.shared.gesture.set(Some(Gesture {
+            pointer: now,
+            ..gesture
+        }));
+        let selected = dragged(gesture.grip, gesture.original, gesture.start, now);
+        // F-01: a draw with no area clears the selection; a resize keeps its last shape.
+        match (selected, gesture.grip) {
+            (Some(_), _) | (None, Grip::Draw) => self.shared.select(selected),
+            // F-04: the loupe follows the pointer even when the selection cannot.
+            (None, Grip::Move | Grip::Resize(_)) => self.shared.changed(),
         }
     }
 
@@ -434,47 +490,13 @@ unsafe extern "system" fn window_procedure(
         WM_LBUTTONDOWN => {
             // SAFETY: a non-null pointer is live until WM_NCDESTROY.
             let surface = unsafe { &*surface };
-            let at = desktop_point(lparam, surface.origin);
-            if let Some(control) = surface
-                .shared
-                .toolbar()
-                .and_then(|placed| placed.control_at(at))
-            {
-                surface.shared.choose(control);
-                return LRESULT(0);
-            }
-            // SAFETY: the window belongs to this thread; capture keeps the drag going past
-            // its edge.
-            unsafe { SetCapture(window) };
-            let original = surface.shared.selected.get();
-            surface.shared.gesture.set(Some(Gesture {
-                grip: grip_at(original, at),
-                original,
-                start: at,
-                pointer: at,
-            }));
-            surface.shared.changed();
+            surface.pressed(window, desktop_point(lparam, surface.origin));
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
             // SAFETY: a non-null pointer is live until WM_NCDESTROY.
             let surface = unsafe { &*surface };
-            // SAFETY: GetCapture only reads this thread's state.
-            let dragging = unsafe { GetCapture() } == window;
-            if let (Some(gesture), true) = (surface.shared.gesture.get(), dragging) {
-                let now = desktop_point(lparam, surface.origin);
-                surface.shared.gesture.set(Some(Gesture {
-                    pointer: now,
-                    ..gesture
-                }));
-                let selected = dragged(gesture.grip, gesture.original, gesture.start, now);
-                // F-01: a draw with no area clears the selection; a resize keeps its last shape.
-                match (selected, gesture.grip) {
-                    (Some(_), _) | (None, Grip::Draw) => surface.shared.select(selected),
-                    // F-04: the loupe follows the pointer even when the selection cannot.
-                    (None, Grip::Move | Grip::Resize(_)) => surface.shared.changed(),
-                }
-            }
+            surface.moved(window, desktop_point(lparam, surface.origin));
             LRESULT(0)
         }
         WM_LBUTTONUP => {

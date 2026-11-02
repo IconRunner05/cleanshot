@@ -7,7 +7,7 @@ use cleanshot_core::{
     delivery_notice,
 };
 use cleanshot_win::capture::{
-    Desktop, MonitorImage, RECT, capture_desktop, monitor_under_cursor, region,
+    Desktop, MonitorImage, RECT, capture_desktop, monitor_under_cursor, pickable_windows, region,
 };
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
@@ -118,6 +118,8 @@ pub(super) fn capture(
             return session.sample_after_use(&*defer);
         }
     };
+    // F-08: listed before the overlay opens, so the list never holds it.
+    let pickable = listed_windows(session, &captures);
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
     let finishing = Rc::clone(session);
@@ -125,7 +127,7 @@ pub(super) fn capture(
         Saving::Off(off) => Some(delivery_notice(&Err(DeliveryError::SavingOff(*off)))),
         Saving::Allowed { .. } => None,
     };
-    let shown = Overlay::show(&captures, selected, saving_off, move |event| {
+    let shown = Overlay::show(&captures, selected, pickable, saving_off, move |event| {
         // F-13 (D-68): the editor takes over from the overlay with no fade between them.
         let handoff = matches!(event, OverlayEvent::Edit(_));
         let next = on_overlay_event(&finishing, &frozen, event, &*pass_on);
@@ -165,6 +167,27 @@ pub(super) fn capture(
     }
     // P-01: the black-share pass runs after the overlay is visible.
     session.log_capture(&copied, &outputs, &captures);
+}
+
+/// The windows a window capture can pick from `captures`, with how many and how long the
+/// listing took logged; a failed listing leaves only the monitors to pick (D-100).
+fn listed_windows(session: &Session, captures: &[MonitorImage]) -> Vec<RECT> {
+    let listing = Instant::now();
+    let pickable = match pickable_windows(captures) {
+        Ok(pickable) => pickable,
+        Err(error) => {
+            session.log_line("capture", |_| format!("windows not_listed {error}"));
+            Vec::new()
+        }
+    };
+    session.log_line("capture", |_| {
+        format!(
+            "windows listed={} ms={}",
+            pickable.len(),
+            listing.elapsed().as_millis()
+        )
+    });
+    pickable
 }
 
 /// What the overlay's `event` does as it arrives: copy, save or edit the selection from

@@ -85,19 +85,25 @@ fn main() {
             },
             image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
         };
-        let shown = Overlay::show(&[monitor], Some(SELECTED), Some(reason), move |event| {
-            let name = match event {
-                OverlayEvent::Cancelled => "Cancelled",
-                OverlayEvent::Copy(_) => "Copy",
-                OverlayEvent::Save(_) => "Save",
-                OverlayEvent::Edit(_) => "Edit",
-                OverlayEvent::SaveAs(_) => "SaveAs",
-                OverlayEvent::DrawFailed(_) => "DrawFailed",
-            };
-            if chosen.send(name).is_err() {
-                println!("the walk ended before the overlay answered");
-            }
-        });
+        let shown = Overlay::show(
+            &[monitor],
+            Some(SELECTED),
+            Vec::new(),
+            Some(reason),
+            move |event| {
+                let name = match event {
+                    OverlayEvent::Cancelled => "Cancelled",
+                    OverlayEvent::Copy(_) => "Copy",
+                    OverlayEvent::Save(_) => "Save",
+                    OverlayEvent::Edit(_) => "Edit",
+                    OverlayEvent::SaveAs(_) => "SaveAs",
+                    OverlayEvent::DrawFailed(_) => "DrawFailed",
+                };
+                if chosen.send(name).is_err() {
+                    println!("the walk ended before the overlay answered");
+                }
+            },
+        );
         match shown {
             // The overlay stays up until the walk ends the process.
             Ok(overlay) => {

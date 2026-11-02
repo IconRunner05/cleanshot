@@ -11,14 +11,14 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, UnregisterHotKey,
     VIRTUAL_KEY, VK_DOWN, VK_E, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_S, VK_SPACE, VK_TAB,
-    VK_UP,
+    VK_UP, VK_W,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, GetCursorPos, SW_SHOWNOACTIVATE, ShowWindow,
 };
 
 use crate::Error;
-use crate::capture::MonitorImage;
+use crate::capture::{MonitorImage, Pick, picked};
 use crate::fade;
 use crate::palette::Palette;
 use crate::selection::{Grip, nudged};
@@ -63,9 +63,11 @@ enum Key {
     Focus(i32),
     Nudge(i32, i32),
     SaveAs,
+    /// Switches between drawing a region and picking a window (F-08, D-100).
+    SwitchMode,
 }
 
-const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 16] = [
+const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 17] = [
     (MOD_NOREPEAT, VK_ESCAPE, Key::Choose(Control::Cancel)),
     (MOD_NOREPEAT, VK_RETURN, Key::Press),
     (MOD_NOREPEAT, VK_SPACE, Key::Press),
@@ -80,6 +82,7 @@ const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 16] = [
         Key::SaveAs,
     ),
     (MOD_NOREPEAT, VK_E, Key::Choose(Control::Edit)),
+    (MOD_NOREPEAT, VK_W, Key::SwitchMode),
     (HOT_KEY_MODIFIERS(0), VK_TAB, Key::Focus(1)),
     (MOD_SHIFT, VK_TAB, Key::Focus(-1)),
     (HOT_KEY_MODIFIERS(0), VK_LEFT, Key::Nudge(-1, 0)),
@@ -100,11 +103,25 @@ struct Gesture {
     pointer: POINT,
 }
 
+/// Whether the pointer draws a region or picks a window (F-08).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Mode {
+    Region,
+    /// The frame the pointer or Tab is on, highlighted until a press picks it.
+    Window {
+        hovered: Option<Pick>,
+    },
+}
+
 /// What every monitor's window shares: one selection on the virtual desktop.
 struct Shared {
     listener: RefCell<Box<dyn FnMut(OverlayEvent)>>,
     selected: Cell<Option<RECT>>,
     gesture: Cell<Option<Gesture>>,
+    mode: Cell<Mode>,
+    /// The frames a window capture can pick, topmost first (D-100).
+    pickable: Vec<RECT>,
+    monitors: Vec<RECT>,
     windows: RefCell<Vec<HWND>>,
     /// The toolbar's monitor and its physical pixels per DIP (F-05).
     toolbar: Option<(RECT, f32)>,
@@ -142,7 +159,14 @@ impl Shared {
     }
 
     fn press(&self, key: Key) {
+        if let Mode::Window { hovered } = self.mode.get() {
+            return self.press_picking(key, hovered);
+        }
         match (key, self.selected.get()) {
+            (Key::SwitchMode, _) => {
+                self.mode.set(Mode::Window { hovered: None });
+                self.select(None);
+            }
             (Key::Choose(control), _) => self.choose(control),
             (Key::Press, _) => self.choose(self.focus.get()),
             (Key::Focus(step), _) => {
@@ -152,6 +176,52 @@ impl Shared {
             (Key::Nudge(dx, dy), Some(selected)) => self.select(Some(nudged(selected, dx, dy))),
             (Key::Nudge(..) | Key::SaveAs, None) => {}
             (Key::SaveAs, Some(selected)) => self.send(OverlayEvent::SaveAs(selected)),
+        }
+    }
+
+    /// F-08: in window mode Tab moves the highlight through the windows and Enter picks it.
+    fn press_picking(&self, key: Key, hovered: Option<Pick>) {
+        match key {
+            Key::SwitchMode => {
+                self.mode.set(Mode::Region);
+                self.changed();
+            }
+            Key::Focus(step) => self.hover(next_window(self.pickable.len(), hovered, step)),
+            Key::Press => self.pick(hovered),
+            Key::Choose(Control::Cancel) => self.send(OverlayEvent::Cancelled),
+            Key::Choose(Control::Copy | Control::Save | Control::Edit)
+            | Key::Nudge(..)
+            | Key::SaveAs => {}
+        }
+    }
+
+    /// What a press at `at` picks in window mode: its window, or else its monitor (D-100).
+    fn picked_at(&self, at: POINT) -> Option<Pick> {
+        picked(&self.pickable, &self.monitors, at)
+    }
+
+    fn hover(&self, hovered: Option<Pick>) {
+        let now = Mode::Window { hovered };
+        if self.mode.replace(now) != now {
+            self.changed();
+        }
+    }
+
+    /// Selects what `pick` names as a region, which the toolbar then acts on as any selection.
+    fn pick(&self, pick: Option<Pick>) {
+        if let Some(pick) = pick {
+            self.mode.set(Mode::Region);
+            self.select(Some(self.frame(pick)));
+        }
+    }
+
+    fn frame(&self, pick: Pick) -> RECT {
+        match pick {
+            Pick::Window(at) => *self
+                .pickable
+                .get(at)
+                .expect("a pick names a window in the overlay's list"),
+            Pick::Monitor(bounds) => bounds,
         }
     }
 
@@ -170,6 +240,19 @@ impl Shared {
             (Control::Copy | Control::Save | Control::Edit, None) => {}
         }
     }
+}
+
+/// The window `step` places along from `hovered` in a list of `count`, wrapping at either
+/// end; from a monitor or none, the first forwards and the last backwards.
+fn next_window(count: usize, hovered: Option<Pick>, step: i32) -> Option<Pick> {
+    let next = match hovered {
+        Some(Pick::Window(at)) => {
+            (at + count).checked_add_signed(isize::try_from(step).ok()?)? % count.max(1)
+        }
+        Some(Pick::Monitor(_)) | None if step < 0 => count.checked_sub(1)?,
+        Some(Pick::Monitor(_)) | None => 0,
+    };
+    (next < count).then_some(Pick::Window(next))
 }
 
 /// One topmost, never-activated window per monitor, each showing that monitor's frozen
@@ -200,9 +283,11 @@ impl Overlay {
         window::prewarm(&factory, &palette).map_err(Error::Window)
     }
 
-    /// Shows `captures`, one window per monitor at that monitor's physical bounds. With
-    /// `saving_off`, the toolbar shows Save greyed, out of Tab order, with that sentence as its
-    /// accessible help text (F-57); choosing it still sends [`OverlayEvent::Save`].
+    /// Shows `captures`, one window per monitor at that monitor's physical bounds, with W
+    /// switching to picking one of `pickable`, the frames [`crate::capture::pickable_windows`]
+    /// listed at the freeze (F-08). With `saving_off`, the toolbar shows Save greyed, out of Tab
+    /// order, with that sentence as its accessible help text (F-57); choosing it still sends
+    /// [`OverlayEvent::Save`].
     ///
     /// # Errors
     ///
@@ -212,6 +297,7 @@ impl Overlay {
     pub fn show(
         captures: &[MonitorImage],
         selected: Option<RECT>,
+        pickable: Vec<RECT>,
         saving_off: Option<String>,
         on_event: impl FnMut(OverlayEvent) + 'static,
     ) -> Result<Self, Error> {
@@ -232,6 +318,9 @@ impl Overlay {
             listener: RefCell::new(Box::new(on_event)),
             selected: Cell::new(selected),
             gesture: Cell::new(None),
+            mode: Cell::new(Mode::Region),
+            pickable,
+            monitors: captures.iter().map(|capture| capture.bounds).collect(),
             windows: RefCell::new(Vec::with_capacity(captures.len())),
             toolbar,
             focus: Cell::new(Control::Copy),
@@ -412,7 +501,7 @@ mod tests {
         let _screen = screen();
         let events = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&events);
-        let overlay = Overlay::show(&[monitor()], None, None, move |event| {
+        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, move |event| {
             sink.borrow_mut().push(format!("{event:?}"));
         })
         .expect("the overlay opens");
@@ -461,7 +550,8 @@ mod tests {
     fn f13_closing_fades_the_overlay_only_with_animation_effects_on() {
         let _screen = screen();
         let animations = fade::animations_on().expect("the setting is readable");
-        let overlay = Overlay::show(&[monitor()], None, None, |_| {}).expect("the overlay opens");
+        let overlay =
+            Overlay::show(&[monitor()], None, Vec::new(), None, |_| {}).expect("the overlay opens");
         let closing = Instant::now();
         overlay.close().expect("the overlay fades");
         let closed = closing.elapsed();
@@ -476,7 +566,8 @@ mod tests {
     #[test]
     fn p01_show_returns_with_every_window_painted() {
         let _screen = screen();
-        let overlay = Overlay::show(&[monitor()], None, None, |_| {}).expect("the overlay opens");
+        let overlay =
+            Overlay::show(&[monitor()], None, Vec::new(), None, |_| {}).expect("the overlay opens");
         let pending: Vec<bool> = overlay
             .windows
             .iter()
@@ -496,7 +587,7 @@ mod tests {
         let screen = monitor().bounds;
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
-        let overlay = Overlay::show(&[monitor()], Some(screen), None, move |event| {
+        let overlay = Overlay::show(&[monitor()], Some(screen), Vec::new(), None, move |event| {
             if let OverlayEvent::Copy(selected) = event {
                 sink.set(Some(selected));
             }
@@ -565,11 +656,17 @@ mod tests {
         };
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
-        let overlay = Overlay::show(&[monitor(), above_left], None, None, move |event| {
-            if let OverlayEvent::Copy(selected) = event {
-                sink.set(Some(selected));
-            }
-        })
+        let overlay = Overlay::show(
+            &[monitor(), above_left],
+            None,
+            Vec::new(),
+            None,
+            move |event| {
+                if let OverlayEvent::Copy(selected) = event {
+                    sink.set(Some(selected));
+                }
+            },
+        )
         .expect("the overlay opens");
         let window = overlay.windows[1];
         let client = |x: isize, y: isize| Some(LPARAM(y * 0x1_0000 + x));
@@ -604,7 +701,7 @@ mod tests {
         let screen = monitor().bounds;
         let asked = Rc::new(Cell::new(None));
         let sink = Rc::clone(&asked);
-        let overlay = Overlay::show(&[monitor()], Some(screen), None, move |event| {
+        let overlay = Overlay::show(&[monitor()], Some(screen), Vec::new(), None, move |event| {
             if let OverlayEvent::SaveAs(selected) = event {
                 sink.set(Some(selected));
             }
@@ -629,6 +726,86 @@ mod tests {
         assert_eq!(asked.get(), Some(screen));
     }
 
+    /// Posts the hotkey message for `key`, as Windows would on its press.
+    fn press(window: HWND, key: Key) {
+        let index = KEYS
+            .iter()
+            .position(|&(_, _, held)| held == key)
+            .expect("the key is one of the overlay's");
+        // SAFETY: posting copies no memory, and the window belongs to this thread.
+        unsafe { PostMessageW(Some(window), WM_HOTKEY, WPARAM(index), LPARAM(0)) }
+            .expect("the overlay window takes the message");
+        pump(Duration::from_millis(50));
+    }
+
+    /// An overlay on `monitor()` picking from `pickable`, and the selections it copies.
+    fn picking(pickable: Vec<RECT>) -> (Overlay, Rc<RefCell<Vec<RECT>>>) {
+        let copied = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&copied);
+        let overlay = Overlay::show(&[monitor()], None, pickable, None, move |event| {
+            if let OverlayEvent::Copy(selected) = event {
+                sink.borrow_mut().push(selected);
+            }
+        })
+        .expect("the overlay opens");
+        (overlay, copied)
+    }
+
+    #[test]
+    fn f08_after_w_a_click_picks_the_window_under_the_pointer_or_else_its_monitor() {
+        let _screen = screen();
+        let frame = RECT {
+            left: 10,
+            top: 8,
+            right: 40,
+            bottom: 30,
+        };
+        let (overlay, copied) = picking(vec![frame]);
+        let window = overlay.windows[0];
+        for (x, y) in [(20_isize, 20_isize), (50, 40)] {
+            press(window, Key::SwitchMode);
+            let at = Some(LPARAM(y * 0x1_0000 + x));
+            // SAFETY: each message is handled on this thread by a window created above, and
+            // none carries a pointer.
+            unsafe {
+                SendMessageW(window, WM_MOUSEMOVE, None, at);
+                SendMessageW(window, WM_LBUTTONDOWN, None, at);
+                SendMessageW(window, WM_LBUTTONUP, None, at);
+            }
+            press(window, Key::Press);
+        }
+        drop(overlay);
+        assert_eq!(*copied.borrow(), [frame, monitor().bounds]);
+    }
+
+    #[test]
+    fn f08_after_w_tab_and_shift_tab_move_through_every_window_even_two_with_one_frame() {
+        let _screen = screen();
+        let frame = |left| RECT {
+            left,
+            top: 0,
+            right: left + 10,
+            bottom: 10,
+        };
+        // Two maximised windows share one frame, and Tab still moves past the first.
+        let (shared, other) = (frame(0), frame(20));
+        let (overlay, copied) = picking(vec![shared, shared, other]);
+        let window = overlay.windows[0];
+        for keys in [
+            &[Key::Focus(1), Key::Focus(1), Key::Focus(1)][..],
+            &[Key::Focus(-1), Key::Focus(-1)],
+        ] {
+            press(window, Key::SwitchMode);
+            for &key in keys {
+                press(window, key);
+            }
+            press(window, Key::Press);
+            press(window, Key::Press);
+        }
+        drop(overlay);
+        assert_eq!(*copied.borrow(), [other, shared]);
+    }
+
     /// Whether another registration holds `key`: a thread hotkey for it is refused.
     fn held(modifiers: HOT_KEY_MODIFIERS, key: VIRTUAL_KEY) -> bool {
         const PROBE: i32 = 0xBFFF;
@@ -647,7 +824,7 @@ mod tests {
         let _screen = screen();
         let cancelled = Rc::new(Cell::new(false));
         let sink = Rc::clone(&cancelled);
-        let overlay = Overlay::show(&[monitor()], None, None, move |event| {
+        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, move |event| {
             sink.set(matches!(event, OverlayEvent::Cancelled));
         })
         .expect("the overlay opens");
@@ -685,7 +862,7 @@ mod tests {
         // SAFETY: a thread hotkey needs no window; it is released below.
         unsafe { RegisterHotKey(None, TAKEN, modifiers, u32::from(last.0)) }
             .expect("no other program holds the overlay's last key");
-        let shown = Overlay::show(&[monitor()], None, None, |_| {});
+        let shown = Overlay::show(&[monitor()], None, Vec::new(), None, |_| {});
         // SAFETY: TAKEN was registered above on this thread.
         unsafe { UnregisterHotKey(None, TAKEN) }.expect("the taken key was registered");
         assert!(

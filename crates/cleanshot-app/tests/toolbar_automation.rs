@@ -74,7 +74,7 @@ fn main() {
             },
             image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
         };
-        let shown = Overlay::show(&[monitor], Some(SELECTED), None, move |event| {
+        let shown = Overlay::show(&[monitor], Some(SELECTED), Vec::new(), None, move |event| {
             let copied = match event {
                 OverlayEvent::Copy(selected) => Some(selected),
                 OverlayEvent::Cancelled
