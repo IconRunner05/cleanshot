@@ -1,11 +1,9 @@
 use std::cell::{Cell, RefCell};
 
 use cleanshot_core::{Hotkey, HotkeyAction, Key, Modifiers};
-use windows::Win32::Foundation::{
-    ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, WPARAM,
-};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
     UnregisterHotKey, VK_F1, VK_SNAPSHOT,
@@ -322,24 +320,14 @@ fn virtual_key(hotkey: Hotkey) -> (HOT_KEY_MODIFIERS, u32) {
 ///
 /// [`Error::PrintScreenSetting`] if the value exists but cannot be read.
 pub fn snipping_tool_holds_print_screen() -> Result<bool, Error> {
-    let mut enabled = 0u32;
-    let mut bytes = struct_size::<u32>();
-    // SAFETY: `enabled` is writable for `bytes` bytes and RRF_RT_REG_DWORD writes exactly 4.
-    let read = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!("Control Panel\\Keyboard"),
-            w!("PrintScreenKeyForSnippingEnabled"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut enabled).cast()),
-            Some(&raw mut bytes),
-        )
-    };
+    let read = crate::registry::read_number(
+        HKEY_CURRENT_USER,
+        w!("Control Panel\\Keyboard"),
+        w!("PrintScreenKeyForSnippingEnabled"),
+    );
     match read {
-        ERROR_SUCCESS => Ok(enabled != 0),
-        ERROR_FILE_NOT_FOUND => Ok(true),
-        refused => Err(Error::PrintScreenSetting(refused.to_hresult().into())),
+        Ok(enabled) => Ok(enabled.is_none_or(|enabled| enabled != 0)),
+        Err(refused) => Err(Error::PrintScreenSetting(refused.to_hresult().into())),
     }
 }
 

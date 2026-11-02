@@ -1,6 +1,6 @@
-use windows::Win32::Foundation::{ERROR_SUCCESS, HWND};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, GetSysColor};
-use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -142,22 +142,13 @@ fn high_contrast_window() -> Option<u32> {
 
 /// Windows' `SystemUsesLightTheme` value, which colours the taskbar; None when it is not set.
 fn system_uses_light_theme() -> Option<u32> {
-    let mut light = 0u32;
-    let mut bytes = crate::tray::struct_size::<u32>();
-    // SAFETY: `light` is writable for `bytes` bytes and RRF_RT_REG_DWORD writes exactly 4.
-    let read = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-            w!("SystemUsesLightTheme"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut light).cast()),
-            Some(&raw mut bytes),
-        )
-    };
+    let read = crate::registry::read_number(
+        HKEY_CURRENT_USER,
+        w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+        w!("SystemUsesLightTheme"),
+    );
     // A value missing or unreadable reads as Windows 11's default, the dark taskbar.
-    (read == ERROR_SUCCESS).then_some(light)
+    read.ok().flatten()
 }
 
 #[cfg(test)]

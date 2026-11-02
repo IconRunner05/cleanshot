@@ -10,6 +10,7 @@ pub mod log;
 mod loupe;
 pub mod overlay;
 mod palette;
+mod registry;
 pub mod save;
 mod selection;
 pub mod settings_file;
