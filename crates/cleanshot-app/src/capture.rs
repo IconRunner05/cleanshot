@@ -7,7 +7,8 @@ use cleanshot_core::{
     delivery_notice,
 };
 use cleanshot_win::capture::{
-    Desktop, MonitorImage, RECT, capture_desktop, monitor_under_cursor, pickable_windows, region,
+    Desktop, MonitorImage, Pickable, RECT, capture_desktop, monitor_under_cursor, pickable_windows,
+    region,
 };
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
@@ -171,7 +172,7 @@ pub(super) fn capture(
 
 /// The windows a window capture can pick from `captures`, with how many and how long the
 /// listing took logged; a failed listing leaves only the monitors to pick (D-100).
-fn listed_windows(session: &Session, captures: &[MonitorImage]) -> Vec<RECT> {
+fn listed_windows(session: &Session, captures: &[MonitorImage]) -> Vec<Pickable> {
     let listing = Instant::now();
     let pickable = match pickable_windows(captures) {
         Ok(pickable) => pickable,

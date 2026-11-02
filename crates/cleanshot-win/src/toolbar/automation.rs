@@ -2,7 +2,7 @@ use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use windows::Win32::Foundation::{
-    HWND, LPARAM, LRESULT, POINT, VARIANT_FALSE, VARIANT_TRUE, WPARAM,
+    HWND, LPARAM, LRESULT, POINT, RECT, VARIANT_FALSE, VARIANT_TRUE, WPARAM,
 };
 use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayPutElement};
@@ -15,12 +15,13 @@ use windows::Win32::UI::Accessibility::{
     IRawElementProviderFragmentRoot_Impl, IRawElementProviderSimple,
     IRawElementProviderSimple_Impl, NavigateDirection, NavigateDirection_FirstChild,
     NavigateDirection_LastChild, NavigateDirection_NextSibling, NavigateDirection_Parent,
-    NavigateDirection_PreviousSibling, ProviderOptions, ProviderOptions_ServerSideProvider,
-    UIA_ButtonControlTypeId, UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE,
-    UIA_E_ELEMENTNOTENABLED, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
-    UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
-    UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_ToolBarControlTypeId,
-    UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, UiaReturnRawElementProvider,
+    NavigateDirection_PreviousSibling, NotificationKind_Other, NotificationProcessing_MostRecent,
+    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ButtonControlTypeId,
+    UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED,
+    UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId, UIA_InvokePatternId,
+    UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID,
+    UIA_PROPERTY_ID, UIA_TextControlTypeId, UIA_ToolBarControlTypeId, UiaAppendRuntimeId,
+    UiaHostProviderFromHwnd, UiaRaiseNotificationEvent, UiaRect, UiaReturnRawElementProvider,
     UiaRootObjectId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
@@ -42,6 +43,8 @@ pub(crate) enum Request {
 #[derive(Default)]
 struct State {
     shown: Option<(Layout, Control)>,
+    /// F-08: what a window capture would pick, as a screen reader says it, and its frame.
+    pick: Option<(String, RECT)>,
     requests: Vec<Request>,
 }
 
@@ -74,6 +77,19 @@ impl Mirror {
     /// Records where the toolbar is and which control has the focus, or that none shows.
     pub(crate) fn show(&self, shown: Option<(Layout, Control)>) {
         self.lock().shown = shown;
+    }
+
+    /// Records what a window capture would pick, or that none is being picked (F-08).
+    pub(crate) fn show_pick(&self, pick: Option<(String, RECT)>) {
+        self.lock().pick = pick;
+    }
+
+    fn pick(&self) -> Result<(String, RECT)> {
+        self.lock().pick.clone().ok_or_else(gone)
+    }
+
+    fn picking(&self) -> bool {
+        self.lock().pick.is_some()
     }
 
     /// The requests made since the last call, oldest first.
@@ -118,6 +134,26 @@ pub(crate) fn answer(
     .into();
     // SAFETY: the parameters are WM_GETOBJECT's own, passed on unfiltered as the API asks.
     Some(unsafe { UiaReturnRawElementProvider(window, wparam, lparam, &root) })
+}
+
+/// F-58: has a screen reader say `spoken` now, from the toolbar on `window`, without the focus
+/// moving; a newer announcement replaces one not yet said.
+pub(crate) fn announce(window: HWND, mirror: &Mirror, spoken: &str) -> Result<()> {
+    let root: IRawElementProviderSimple = Toolbar {
+        window,
+        mirror: mirror.clone(),
+    }
+    .into();
+    // SAFETY: `root` is a live provider for this window, and the strings outlive the call.
+    unsafe {
+        UiaRaiseNotificationEvent(
+            &root,
+            NotificationKind_Other,
+            NotificationProcessing_MostRecent,
+            &BSTR::from(spoken),
+            &BSTR::from("Cleanshot.WindowToCapture"),
+        )
+    }
 }
 
 /// Tells UI Automation the toolbar's window is going, so it lets go of its providers.
@@ -210,9 +246,9 @@ mod providers {
         SafeArrayCreateVector, SafeArrayPutElement, TOOLBAR_NAME, UIA_ButtonControlTypeId,
         UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
         UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
-        UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_ToolBarControlTypeId,
-        UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, VARIANT, VT_I4, implement, none,
-        not_enabled, number, on_screen, position, text, truth,
+        UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_TextControlTypeId,
+        UIA_ToolBarControlTypeId, UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, VARIANT,
+        VT_I4, implement, none, not_enabled, number, on_screen, position, text, truth,
     };
 
     /// The toolbar, the root of the tree its window hands UI Automation.
@@ -236,6 +272,29 @@ mod providers {
         window: HWND,
         mirror: Mirror,
         control: Control,
+    }
+
+    /// F-08: what a window capture would pick, after the buttons while it is being picked.
+    #[implement(IRawElementProviderSimple, IRawElementProviderFragment)]
+    struct Picking {
+        window: HWND,
+        mirror: Mirror,
+    }
+
+    fn picking(window: HWND, mirror: &Mirror) -> IRawElementProviderFragment {
+        Picking {
+            window,
+            mirror: mirror.clone(),
+        }
+        .into()
+    }
+
+    /// The toolbar's last child: the pick while there is one, else the last button.
+    fn last_child(window: HWND, mirror: &Mirror) -> IRawElementProviderFragment {
+        if mirror.picking() {
+            return picking(window, mirror);
+        }
+        button(window, mirror, CONTROLS[CONTROLS.len() - 1])
     }
 
     fn button(window: HWND, mirror: &Mirror, control: Control) -> IRawElementProviderFragment {
@@ -281,11 +340,7 @@ mod providers {
         fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
             match direction {
                 NavigateDirection_FirstChild => Ok(button(self.window, &self.mirror, CONTROLS[0])),
-                NavigateDirection_LastChild => Ok(button(
-                    self.window,
-                    &self.mirror,
-                    CONTROLS[CONTROLS.len() - 1],
-                )),
+                NavigateDirection_LastChild => Ok(last_child(self.window, &self.mirror)),
                 _ => none(),
             }
         }
@@ -375,6 +430,9 @@ mod providers {
             let at = position(self.control);
             let sibling = |index: Option<usize>| match index.and_then(|index| CONTROLS.get(index)) {
                 Some(&control) => Ok(button(self.window, &self.mirror, control)),
+                None if index == Some(CONTROLS.len()) && self.mirror.picking() => {
+                    Ok(picking(self.window, &self.mirror))
+                }
                 None => none(),
             };
             match direction {
@@ -416,6 +474,74 @@ mod providers {
                 return Err(not_enabled());
             }
             self.mirror.ask(self.window, Request::Focus(self.control))
+        }
+
+        fn FragmentRoot(&self) -> Result<IRawElementProviderFragmentRoot> {
+            Ok(toolbar(self.window, &self.mirror).into())
+        }
+    }
+
+    impl IRawElementProviderSimple_Impl for Picking_Impl {
+        fn ProviderOptions(&self) -> Result<ProviderOptions> {
+            Ok(ProviderOptions_ServerSideProvider)
+        }
+
+        fn GetPatternProvider(&self, _pattern: UIA_PATTERN_ID) -> Result<IUnknown> {
+            none()
+        }
+
+        fn GetPropertyValue(&self, property: UIA_PROPERTY_ID) -> Result<VARIANT> {
+            Ok(match property {
+                UIA_ControlTypePropertyId => number(UIA_TextControlTypeId.0),
+                UIA_NamePropertyId => text(&self.mirror.pick()?.0),
+                _ => VARIANT::default(),
+            })
+        }
+
+        fn HostRawElementProvider(&self) -> Result<IRawElementProviderSimple> {
+            none()
+        }
+    }
+
+    impl IRawElementProviderFragment_Impl for Picking_Impl {
+        fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
+            match direction {
+                NavigateDirection_Parent => Ok(toolbar(self.window, &self.mirror).into()),
+                NavigateDirection_PreviousSibling => Ok(button(
+                    self.window,
+                    &self.mirror,
+                    CONTROLS[CONTROLS.len() - 1],
+                )),
+                _ => none(),
+            }
+        }
+
+        fn GetRuntimeId(&self) -> Result<*mut SAFEARRAY> {
+            let id = [
+                i32::try_from(UiaAppendRuntimeId).expect("UiaAppendRuntimeId is 3"),
+                i32::try_from(CONTROLS.len()).expect("four controls"),
+            ];
+            // SAFETY: a two-element vector of VT_I4, each element written in range; the
+            // caller frees the array.
+            unsafe {
+                let array = SafeArrayCreateVector(VT_I4, 0, 2);
+                for (index, value) in (0..).zip(&id) {
+                    SafeArrayPutElement(array, &raw const index, std::ptr::from_ref(value).cast())?;
+                }
+                Ok(array)
+            }
+        }
+
+        fn BoundingRectangle(&self) -> Result<UiaRect> {
+            Ok(on_screen(self.mirror.pick()?.1))
+        }
+
+        fn GetEmbeddedFragmentRoots(&self) -> Result<*mut SAFEARRAY> {
+            Ok(std::ptr::null_mut())
+        }
+
+        fn SetFocus(&self) -> Result<()> {
+            Ok(())
         }
 
         fn FragmentRoot(&self) -> Result<IRawElementProviderFragmentRoot> {

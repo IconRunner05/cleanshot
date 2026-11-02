@@ -31,7 +31,7 @@ use crate::struct_size;
 
 mod window;
 
-pub use window::{Pick, pickable_windows, picked};
+pub use window::{Pick, Pickable, pickable_windows, picked};
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
 

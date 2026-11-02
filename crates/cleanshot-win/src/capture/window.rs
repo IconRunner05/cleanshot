@@ -4,7 +4,7 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetShellWindow, GetWindowLongW,
+    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetShellWindow, GetWindowLongW, GetWindowTextW,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 use windows::core::BOOL;
@@ -12,14 +12,22 @@ use windows::core::BOOL;
 use super::{MonitorImage, first_holding, holds};
 use crate::Error;
 
-/// F-08 (D-100): the frames of the windows a window capture can pick, topmost first, as they
-/// are now: visible, uncloaked, unminimised top-level windows of other processes, cut to the
-/// captured monitors. The frame is DWM's extended frame bounds, without the shadow.
+/// A window a window capture can pick: its frame, DWM's extended frame bounds without the
+/// shadow, and its title for a screen reader to say (F-08, F-58).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pickable {
+    pub frame: RECT,
+    pub title: String,
+}
+
+/// F-08 (D-100): the windows a window capture can pick, topmost first, as they are now:
+/// visible, uncloaked, unminimised top-level windows of other processes, cut to the captured
+/// monitors.
 ///
 /// # Errors
 ///
 /// [`Error::Capture`] if Windows cannot list its windows.
-pub fn pickable_windows(captures: &[MonitorImage]) -> Result<Vec<RECT>, Error> {
+pub fn pickable_windows(captures: &[MonitorImage]) -> Result<Vec<Pickable>, Error> {
     let mut listed: Vec<HWND> = Vec::new();
     let target = LPARAM(std::ptr::from_mut(&mut listed) as isize);
     // SAFETY: the callback runs only during EnumWindows, while `listed` is borrowed here.
@@ -28,7 +36,13 @@ pub fn pickable_windows(captures: &[MonitorImage]) -> Result<Vec<RECT>, Error> {
     Ok(listed
         .into_iter()
         .filter(|&window| pickable(window))
-        .filter_map(|window| frame(window).and_then(|frame| cut_to(frame, desktop)))
+        .filter_map(|window| {
+            let frame = frame(window).and_then(|frame| cut_to(frame, desktop))?;
+            Some(Pickable {
+                frame,
+                title: title(window),
+            })
+        })
         .collect())
 }
 
@@ -41,13 +55,13 @@ pub enum Pick {
     Monitor(RECT),
 }
 
-/// F-08 (D-100): what a window capture picks at `point`: the topmost of `windows`, the frames
-/// [`pickable_windows`] gave, holding it, or else the monitor holding it.
+/// F-08 (D-100): what a window capture picks at `point`: the topmost of `windows`, from
+/// [`pickable_windows`], holding it, or else the monitor holding it.
 #[must_use]
-pub fn picked(windows: &[RECT], monitors: &[RECT], point: POINT) -> Option<Pick> {
+pub fn picked(windows: &[Pickable], monitors: &[RECT], point: POINT) -> Option<Pick> {
     windows
         .iter()
-        .position(|&frame| holds(frame, point))
+        .position(|window| holds(window.frame, point))
         .map(Pick::Window)
         .or_else(|| first_holding(monitors.iter().copied(), point).map(Pick::Monitor))
 }
@@ -98,6 +112,13 @@ fn wallpaper(window: HWND) -> bool {
     let length = unsafe { GetClassNameW(window, &mut class) };
     let wallpaper: Vec<u16> = "WorkerW".encode_utf16().collect();
     usize::try_from(length).is_ok_and(|length| class[..length] == *wallpaper)
+}
+
+fn title(window: HWND) -> String {
+    let mut title = [0_u16; 256];
+    // SAFETY: `title` is writable for its whole length; a window with no title reads as empty.
+    let length = unsafe { GetWindowTextW(window, &mut title) };
+    String::from_utf16_lossy(&title[..usize::try_from(length).unwrap_or(0)])
 }
 
 fn frame(window: HWND) -> Option<RECT> {
@@ -164,7 +185,11 @@ mod tests {
             rect(10, 10, 50, 50),
             rect(0, 0, 100, 100),
             rect(200, 0, 300, 50),
-        ];
+        ]
+        .map(|frame| Pickable {
+            frame,
+            title: String::new(),
+        });
         let monitors = [rect(-400, 0, 0, 300), rect(0, 0, 400, 300)];
         let at = |x, y| picked(&windows, &monitors, POINT { x, y });
         assert_eq!(at(20, 20), Some(Pick::Window(0)));

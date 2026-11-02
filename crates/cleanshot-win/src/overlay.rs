@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use cleanshot_core::HotkeyAction;
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory,
@@ -18,11 +19,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::Error;
-use crate::capture::{MonitorImage, Pick, picked};
+use crate::capture::{MonitorImage, Pick, Pickable, picked};
 use crate::fade;
 use crate::palette::Palette;
 use crate::selection::{Grip, nudged};
-use crate::toolbar::automation::Mirror;
+use crate::toolbar::automation::{self, Mirror};
 use crate::toolbar::{self, Control, Layout};
 
 mod window;
@@ -33,6 +34,7 @@ pub(crate) use window::{bgra, client_point, target_and_bitmap};
 use window::{open_window, register_class};
 
 const DESKTOP_DPI: f32 = 96.0;
+const WINDOW_TO_CAPTURE: &str = "Window to capture";
 const SHIFT_NUDGE: i32 = 10;
 
 /// What happened on the overlay, delivered on its thread's message loop.
@@ -119,10 +121,12 @@ struct Shared {
     selected: Cell<Option<RECT>>,
     gesture: Cell<Option<Gesture>>,
     mode: Cell<Mode>,
-    /// The frames a window capture can pick, topmost first (D-100).
-    pickable: Vec<RECT>,
+    /// The windows a window capture can pick, topmost first (D-100).
+    pickable: Vec<Pickable>,
     monitors: Vec<RECT>,
     windows: RefCell<Vec<HWND>>,
+    /// The window that shows the toolbar and answers UI Automation for it.
+    toolbar_window: Cell<Option<HWND>>,
     /// The toolbar's monitor and its physical pixels per DIP (F-05).
     toolbar: Option<(RECT, f32)>,
     focus: Cell<Control>,
@@ -146,6 +150,12 @@ impl Shared {
     fn changed(&self) {
         self.mirror
             .show(self.toolbar().map(|placed| (placed, self.focus.get())));
+        self.mirror.show_pick(match self.mode.get() {
+            Mode::Window {
+                hovered: Some(pick),
+            } => Some((self.spoken(pick), self.frame(pick))),
+            Mode::Window { hovered: None } | Mode::Region => None,
+        });
         for &window in self.windows.borrow().iter() {
             // SAFETY: invalidating this thread's own window; a failure only skips one repaint.
             let _ = unsafe { InvalidateRect(Some(window), None, false) };
@@ -200,11 +210,36 @@ impl Shared {
         picked(&self.pickable, &self.monitors, at)
     }
 
+    /// F-58: a move of the highlight is said aloud, since the overlay never takes the focus.
     fn hover(&self, hovered: Option<Pick>) {
         let now = Mode::Window { hovered };
-        if self.mode.replace(now) != now {
-            self.changed();
+        if self.mode.replace(now) == now {
+            return;
         }
+        self.changed();
+        if let (Some(pick), Some(window)) = (hovered, self.toolbar_window.get()) {
+            // A failed announcement is safe to drop: the highlight has moved, and the toolbar's
+            // Text element names the pick for a screen reader that looks.
+            let _unannounced = automation::announce(window, &self.mirror, &self.spoken(pick));
+        }
+    }
+
+    /// What a screen reader says for `pick`: the window's title, or the tray's name for a
+    /// capture of the whole screen.
+    fn spoken(&self, pick: Pick) -> String {
+        match pick {
+            Pick::Window(at) => match self.window(at).title.as_str() {
+                "" => WINDOW_TO_CAPTURE.to_owned(),
+                title => format!("{WINDOW_TO_CAPTURE}: {title}"),
+            },
+            Pick::Monitor(_) => HotkeyAction::FullScreen.name().to_owned(),
+        }
+    }
+
+    fn window(&self, at: usize) -> &Pickable {
+        self.pickable
+            .get(at)
+            .expect("a pick names a window in the overlay's list")
     }
 
     /// Selects what `pick` names as a region, which the toolbar then acts on as any selection.
@@ -217,10 +252,7 @@ impl Shared {
 
     fn frame(&self, pick: Pick) -> RECT {
         match pick {
-            Pick::Window(at) => *self
-                .pickable
-                .get(at)
-                .expect("a pick names a window in the overlay's list"),
+            Pick::Window(at) => self.window(at).frame,
             Pick::Monitor(bounds) => bounds,
         }
     }
@@ -297,7 +329,7 @@ impl Overlay {
     pub fn show(
         captures: &[MonitorImage],
         selected: Option<RECT>,
-        pickable: Vec<RECT>,
+        pickable: Vec<Pickable>,
         saving_off: Option<String>,
         on_event: impl FnMut(OverlayEvent) + 'static,
     ) -> Result<Self, Error> {
@@ -322,6 +354,7 @@ impl Overlay {
             pickable,
             monitors: captures.iter().map(|capture| capture.bounds).collect(),
             windows: RefCell::new(Vec::with_capacity(captures.len())),
+            toolbar_window: Cell::new(None),
             toolbar,
             focus: Cell::new(Control::Copy),
             mirror: Mirror::new(saving_off),
@@ -334,6 +367,9 @@ impl Overlay {
         for capture in captures {
             let hosts_toolbar = host.is_some_and(|host| std::ptr::eq(host, capture));
             let window = open_window(&factory, capture, &shared, hosts_toolbar)?;
+            if hosts_toolbar {
+                shared.toolbar_window.set(Some(window));
+            }
             overlay.windows.push(window);
             shared.windows.borrow_mut().push(window);
         }
@@ -739,7 +775,14 @@ mod tests {
     }
 
     /// An overlay on `monitor()` picking from `pickable`, and the selections it copies.
-    fn picking(pickable: Vec<RECT>) -> (Overlay, Rc<RefCell<Vec<RECT>>>) {
+    fn picking(frames: Vec<RECT>) -> (Overlay, Rc<RefCell<Vec<RECT>>>) {
+        let pickable = frames
+            .into_iter()
+            .map(|frame| Pickable {
+                frame,
+                title: String::new(),
+            })
+            .collect();
         let copied = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&copied);
         let overlay = Overlay::show(&[monitor()], None, pickable, None, move |event| {
@@ -804,6 +847,49 @@ mod tests {
         }
         drop(overlay);
         assert_eq!(*copied.borrow(), [other, shared]);
+    }
+
+    #[test]
+    #[cfg(feature = "ui-automation-test")]
+    fn f58_ui_automation_names_the_window_tab_puts_the_highlight_on() {
+        let _screen = screen();
+        let (width, height) = (800, 600);
+        let desktop = MonitorImage {
+            bounds: RECT {
+                left: 0,
+                top: 0,
+                right: 800,
+                bottom: 600,
+            },
+            image: RgbaImage::new(width, height, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
+        };
+        // One window over the whole desktop, so the pointer and Tab can only highlight it.
+        let pickable = vec![Pickable {
+            frame: desktop.bounds,
+            title: "Notes".to_owned(),
+        }];
+        let overlay =
+            Overlay::show(&[desktop], None, pickable, None, |_| {}).expect("the overlay opens");
+        let window = overlay.windows[0];
+        for key in [Key::SwitchMode, Key::Focus(1)] {
+            press(window, key);
+        }
+        let walk = std::thread::spawn(crate::accessibility::controls_in_own_windows);
+        while !walk.is_finished() {
+            pump(Duration::from_millis(20));
+        }
+        let names: Vec<String> = walk
+            .join()
+            .expect("the walk thread ends")
+            .expect("UI Automation walks the overlay")
+            .into_iter()
+            .map(|control| control.name)
+            .collect();
+        drop(overlay);
+        assert!(
+            names.iter().any(|name| name == "Window to capture: Notes"),
+            "{names:?}"
+        );
     }
 
     /// Whether another registration holds `key`: a thread hotkey for it is refused.
