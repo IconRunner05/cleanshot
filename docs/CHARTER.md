@@ -233,6 +233,7 @@ cleanshot/
 ├─ assets/                    # icons, embedded with include_bytes!
 ├─ tests/golden/              # reference PNGs for render + DPI tests
 ├─ docs/CHARTER.md            # this file
+├─ docs/acceptance.md         # the owner's hands-on pass before v1.0.0 (D-102)
 └─ docs/decisions/            # one file per decision (ADR-lite)
 ```
 
@@ -378,11 +379,13 @@ The manifest is the three files in `winget/`, in winget-pkgs' multi-file layout 
 
 1. The M3 gate has passed (D-77): every Must budget met on the reference machine, and the release workflow signs the exe (D-74).
 2. Every M4 row is ticked.
-3. `Cargo.toml` is version 1.0.0 and `CHANGELOG.md` has its `[1.0.0]` section.
-4. Tag `v1.0.0`; the release workflow publishes a signed release that is not a pre-release.
-5. On the owner's Windows PC: `winget validate` on the filled manifest, then in Windows Sandbox a clean `winget install --manifest`, the `cleanshot` command, and an uninstall.
-6. The owner opens the microsoft/winget-pkgs pull request by hand. Agents never push to or open pull requests on another repository.
-7. After it merges, a releaser action for later versions is its own decision.
+3. A release candidate: `Cargo.toml` at `1.0.0-rc.N` with its `CHANGELOG.md` section, tagged `v1.0.0-rc.N` and published as a pre-release.
+4. The owner's acceptance pass (D-102): on the reference PC, the owner works through `docs/acceptance.md` with that candidate, one hands-on step per M1 to M4 feature. Only the owner can do it, and a failed step means a fix and a new candidate.
+5. `Cargo.toml` is version 1.0.0 and `CHANGELOG.md` has its `[1.0.0]` section.
+6. Tag `v1.0.0`; the release workflow publishes a signed release that is not a pre-release.
+7. On the owner's Windows PC: `winget validate` on the filled manifest, then in Windows Sandbox a clean `winget install --manifest`, the `cleanshot` command, and an uninstall.
+8. The owner opens the microsoft/winget-pkgs pull request by hand. Agents never push to or open pull requests on another repository.
+9. After it merges, a releaser action for later versions is its own decision.
 
 Notes for agents:
 
@@ -453,6 +456,7 @@ Agents append rows with Status `assumed`; a human changes it to `decided` or rev
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
+| D-102 | 2026-11-02 | v1.0.0 is not tagged until the owner has confirmed Cleanshot on the reference PC: a release candidate is tagged `v1.0.0-rc.N` and published as a pre-release, and the owner works through `docs/acceptance.md`, one hands-on step per M1 to M4 feature saying what to do and what to see. A failed step means a fix and a new candidate | decided (owner, 2026-11-02) | The owner's call. CI proves each rule on a hosted runner with WARP, not on a desk with real monitors, apps and input; this pass is the one check only a person can make |
 | D-101 | 2026-11-02 | v1.0 ships an x64 exe only; an ARM64 release comes after v1.0. The ARM64 build stays in CI (C-06) so it keeps compiling | decided (owner, 2026-11-02) | The owner's call, closing the CHARTER 11 open question; M4 already lists the ARM64 release after v1.0 |
 | D-99 | 2026-11-02 | The F-10 timer is set on the F-11 capture panel only: its Timer control steps Off, 3, 5, 10 s and back to Off with each press, and Capture waits that long before the grab, counting down in whole seconds. The overlay toolbar after a freeze shows the capture mode and Options but no timer. The panel's mode and timer are held in memory for the session, starting at Region and Off, and never written | decided (orchestrator, 2026-11-02) | A timer is for setting up the screen before the freeze, so it has no use once the screen is frozen; a timer in the overlay would need it to close, count and freeze again. D-30 names no settings key for either, and both are a choice for the capture at hand. Agreed with capture |
 | D-98 | 2026-11-02 | The winget package is `Cleanshot.Cleanshot`, publisher `Cleanshot`, with its homepage, support and release notes on the GitHub repository (`IconRunner05/cleanshot`). Its manifest is kept in `winget/` as the three files winget-pkgs takes, with only the version and the exe's SHA-256 left for a release to fill | decided (owner, 2026-11-02) | The owner's call on the identifier and publisher; homepage and release notes on the repository, and the generated manifest, are the design the orchestrator approved. A manifest filled from the release's own checksum cannot point at another exe |
