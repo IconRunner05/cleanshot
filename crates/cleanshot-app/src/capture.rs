@@ -102,7 +102,11 @@ pub(super) fn capture(
     let frozen = Rc::clone(&captures);
     let finishing = Rc::clone(session);
     let pass_on = Rc::new(pass_on);
-    let shown = Overlay::show(&captures, selected, move |event| {
+    let saving_off = match session.policy.saving() {
+        Saving::Off(off) => Some(delivery_notice(&Err(DeliveryError::SavingOff(*off)))),
+        Saving::Allowed { .. } => None,
+    };
+    let shown = Overlay::show(&captures, selected, saving_off, move |event| {
         // F-13 (D-68): the editor takes over from the overlay with no fade between them.
         let handoff = matches!(event, OverlayEvent::Edit(_));
         let saving_as = on_overlay_event(&finishing, &frozen, event, &*pass_on);

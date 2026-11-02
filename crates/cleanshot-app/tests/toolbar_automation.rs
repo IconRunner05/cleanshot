@@ -31,6 +31,7 @@ fn main() {
         let verdict = wait_for_toolbar("Capture", ControlKind::Button, start, &shown, PATIENCE)
             .map_err(|missing| format!("{missing:?}"))
             .and_then(|buttons| {
+                let buttons: Vec<String> = buttons.into_iter().map(|button| button.name).collect();
                 if buttons != BUTTONS {
                     return Err(format!("buttons {buttons:?}, expected {BUTTONS:?}"));
                 }
@@ -67,7 +68,7 @@ fn main() {
             },
             image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
         };
-        let shown = Overlay::show(&[monitor], Some(SELECTED), move |event| {
+        let shown = Overlay::show(&[monitor], Some(SELECTED), None, move |event| {
             let copied = match event {
                 OverlayEvent::Copy(selected) => Some(selected),
                 OverlayEvent::Cancelled

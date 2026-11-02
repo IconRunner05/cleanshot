@@ -22,6 +22,9 @@ use crate::Error;
 pub struct Control {
     pub kind: ControlKind,
     pub name: String,
+    pub enabled: bool,
+    /// What a screen reader adds after the name, such as why the control is off.
+    pub help_text: String,
     /// Who answers UI Automation for it, as `ProviderDescription` names them.
     pub provider: String,
 }
@@ -52,7 +55,7 @@ pub enum ToolbarMissing {
     },
 }
 
-/// The names, in order, of the `kind` controls UI Automation reports once a toolbar named
+/// The `kind` controls, in order, that UI Automation reports once a toolbar named
 /// `toolbar` appears under this process's windows (F-05, F-58). The walk starts when `shown`
 /// says the window was shown, as no user reaches a toolbar before that, and goes on every
 /// 250 ms for `patience`; `start` dates the times in the error. Call it from a thread that
@@ -68,7 +71,7 @@ pub fn wait_for_toolbar(
     start: Instant,
     shown: &Receiver<Instant>,
     patience: Duration,
-) -> Result<Vec<String>, ToolbarMissing> {
+) -> Result<Vec<Control>, ToolbarMissing> {
     let shown = shown
         .recv_timeout(patience)
         .map_err(ToolbarMissing::NotShown)?;
@@ -86,7 +89,7 @@ pub fn wait_for_toolbar(
                 return Ok(controls
                     .iter()
                     .filter(|control| control.kind == kind)
-                    .map(|control| control.name.clone())
+                    .cloned()
                     .collect());
             }
             if !controls.is_empty() {
@@ -180,11 +183,13 @@ fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
         for index in 0..unsafe { found.Length() }? {
             // SAFETY: `index` is below the array's length, and the reads are plain properties
             // of a live element.
-            let (kind, name, provider) = unsafe {
+            let (kind, name, enabled, help_text, provider) = unsafe {
                 let element = found.GetElement(index)?;
                 (
                     element.CurrentControlType()?,
                     element.CurrentName()?,
+                    element.CurrentIsEnabled()?.as_bool(),
+                    element.CurrentHelpText()?,
                     element.CurrentProviderDescription()?,
                 )
             };
@@ -201,6 +206,8 @@ fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
             controls.push(Control {
                 kind,
                 name: name.to_string(),
+                enabled,
+                help_text: help_text.to_string(),
                 provider: provider.to_string(),
             });
         }

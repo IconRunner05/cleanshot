@@ -144,7 +144,10 @@ impl Shared {
         match (key, self.selected.get()) {
             (Key::Choose(control), _) => self.choose(control),
             (Key::Press, _) => self.choose(self.focus.get()),
-            (Key::Focus(step), _) => self.focus(self.focus.get().step(step)),
+            (Key::Focus(step), _) => {
+                let off = |control| self.mirror.off(control).is_some();
+                self.focus(self.focus.get().step(step, off));
+            }
             (Key::Nudge(dx, dy), Some(selected)) => self.select(Some(nudged(selected, dx, dy))),
             (Key::Nudge(..) | Key::SaveAs, None) => {}
             (Key::SaveAs, Some(selected)) => self.send(OverlayEvent::SaveAs(selected)),
@@ -196,7 +199,9 @@ impl Overlay {
         window::prewarm(&factory, &palette).map_err(Error::Window)
     }
 
-    /// Shows `captures`, one window per monitor at that monitor's physical bounds.
+    /// Shows `captures`, one window per monitor at that monitor's physical bounds. With
+    /// `saving_off`, the toolbar shows Save greyed, out of Tab order, with that sentence as its
+    /// accessible help text (F-57); choosing it still sends [`OverlayEvent::Save`].
     ///
     /// # Errors
     ///
@@ -206,6 +211,7 @@ impl Overlay {
     pub fn show(
         captures: &[MonitorImage],
         selected: Option<RECT>,
+        saving_off: Option<String>,
         on_event: impl FnMut(OverlayEvent) + 'static,
     ) -> Result<Self, Error> {
         register_class()?;
@@ -228,7 +234,7 @@ impl Overlay {
             windows: RefCell::new(Vec::with_capacity(captures.len())),
             toolbar,
             focus: Cell::new(Control::Copy),
-            mirror: Mirror::default(),
+            mirror: Mirror::new(saving_off),
             palette: Palette::current().map_err(Error::Window)?,
         });
         shared.changed();
@@ -405,7 +411,7 @@ mod tests {
         let _screen = screen();
         let events = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&events);
-        let overlay = Overlay::show(&[monitor()], None, move |event| {
+        let overlay = Overlay::show(&[monitor()], None, None, move |event| {
             sink.borrow_mut().push(format!("{event:?}"));
         })
         .expect("the overlay opens");
@@ -454,7 +460,7 @@ mod tests {
     fn f13_closing_fades_the_overlay_only_with_animation_effects_on() {
         let _screen = screen();
         let animations = fade::animations_on().expect("the setting is readable");
-        let overlay = Overlay::show(&[monitor()], None, |_| {}).expect("the overlay opens");
+        let overlay = Overlay::show(&[monitor()], None, None, |_| {}).expect("the overlay opens");
         let closing = Instant::now();
         overlay.close().expect("the overlay fades");
         let closed = closing.elapsed();
@@ -469,7 +475,7 @@ mod tests {
     #[test]
     fn p01_show_returns_with_every_window_painted() {
         let _screen = screen();
-        let overlay = Overlay::show(&[monitor()], None, |_| {}).expect("the overlay opens");
+        let overlay = Overlay::show(&[monitor()], None, None, |_| {}).expect("the overlay opens");
         let pending: Vec<bool> = overlay
             .windows
             .iter()
@@ -489,7 +495,7 @@ mod tests {
         let screen = monitor().bounds;
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
-        let overlay = Overlay::show(&[monitor()], Some(screen), move |event| {
+        let overlay = Overlay::show(&[monitor()], Some(screen), None, move |event| {
             if let OverlayEvent::Copy(selected) = event {
                 sink.set(Some(selected));
             }
@@ -558,7 +564,7 @@ mod tests {
         };
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
-        let overlay = Overlay::show(&[monitor(), above_left], None, move |event| {
+        let overlay = Overlay::show(&[monitor(), above_left], None, None, move |event| {
             if let OverlayEvent::Copy(selected) = event {
                 sink.set(Some(selected));
             }
@@ -597,7 +603,7 @@ mod tests {
         let screen = monitor().bounds;
         let asked = Rc::new(Cell::new(None));
         let sink = Rc::clone(&asked);
-        let overlay = Overlay::show(&[monitor()], Some(screen), move |event| {
+        let overlay = Overlay::show(&[monitor()], Some(screen), None, move |event| {
             if let OverlayEvent::SaveAs(selected) = event {
                 sink.set(Some(selected));
             }
@@ -640,7 +646,7 @@ mod tests {
         let _screen = screen();
         let cancelled = Rc::new(Cell::new(false));
         let sink = Rc::clone(&cancelled);
-        let overlay = Overlay::show(&[monitor()], None, move |event| {
+        let overlay = Overlay::show(&[monitor()], None, None, move |event| {
             sink.set(matches!(event, OverlayEvent::Cancelled));
         })
         .expect("the overlay opens");
@@ -678,7 +684,7 @@ mod tests {
         // SAFETY: a thread hotkey needs no window; it is released below.
         unsafe { RegisterHotKey(None, TAKEN, modifiers, u32::from(last.0)) }
             .expect("no other program holds the overlay's last key");
-        let shown = Overlay::show(&[monitor()], None, |_| {});
+        let shown = Overlay::show(&[monitor()], None, None, |_| {});
         // SAFETY: TAKEN was registered above on this thread.
         unsafe { UnregisterHotKey(None, TAKEN) }.expect("the taken key was registered");
         assert!(

@@ -17,7 +17,8 @@ use windows::Win32::UI::Accessibility::{
     NavigateDirection_LastChild, NavigateDirection_NextSibling, NavigateDirection_Parent,
     NavigateDirection_PreviousSibling, ProviderOptions, ProviderOptions_ServerSideProvider,
     UIA_ButtonControlTypeId, UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE,
-    UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId, UIA_IsKeyboardFocusablePropertyId,
+    UIA_E_ELEMENTNOTENABLED, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
+    UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
     UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_ToolBarControlTypeId,
     UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, UiaReturnRawElementProvider,
     UiaRootObjectId,
@@ -47,10 +48,29 @@ struct State {
 /// The toolbar as its window last drew it, with the focused control, and what UI Automation
 /// asked of it since. The window's thread writes what it shows and drains the requests; the
 /// providers read and ask from whatever thread UI Automation calls them on.
-#[derive(Clone, Default)]
-pub(crate) struct Mirror(Arc<Mutex<State>>);
+#[derive(Clone)]
+pub(crate) struct Mirror {
+    state: Arc<Mutex<State>>,
+    saving_off: Option<Arc<str>>,
+}
 
 impl Mirror {
+    /// A toolbar whose Save is off for the reason `saving_off` says (F-57), or on when `None`.
+    pub(crate) fn new(saving_off: Option<String>) -> Self {
+        Self {
+            state: Arc::default(),
+            saving_off: saving_off.map(Arc::from),
+        }
+    }
+
+    /// Why `control` is off, or `None` when it can be chosen (F-57).
+    pub(crate) fn off(&self, control: Control) -> Option<&str> {
+        match control {
+            Control::Save => self.saving_off.as_deref(),
+            Control::Copy | Control::Edit | Control::Cancel => None,
+        }
+    }
+
     /// Records where the toolbar is and which control has the focus, or that none shows.
     pub(crate) fn show(&self, shown: Option<(Layout, Control)>) {
         self.lock().shown = shown;
@@ -74,7 +94,7 @@ impl Mirror {
     // A panic while the lock is held aborts the release build, so a poisoned lock only
     // happens in a test that is already failing; its state is still whole.
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -109,6 +129,11 @@ pub(crate) fn forget(window: HWND) {
 fn gone() -> Error {
     #[expect(clippy::cast_possible_wrap, reason = "an HRESULT is the u32's bits")]
     Error::from_hresult(HRESULT(UIA_E_ELEMENTNOTAVAILABLE as i32))
+}
+
+fn not_enabled() -> Error {
+    #[expect(clippy::cast_possible_wrap, reason = "an HRESULT is the u32's bits")]
+    Error::from_hresult(HRESULT(UIA_E_ELEMENTNOTENABLED as i32))
 }
 
 /// No element, no pattern or no array: an `S_OK` with a null out-parameter.
@@ -183,10 +208,11 @@ mod providers {
         NavigateDirection_NextSibling, NavigateDirection_Parent, NavigateDirection_PreviousSibling,
         POINT, ProviderOptions, ProviderOptions_ServerSideProvider, Request, Result, SAFEARRAY,
         SafeArrayCreateVector, SafeArrayPutElement, TOOLBAR_NAME, UIA_ButtonControlTypeId,
-        UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
-        UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
-        UIA_ToolBarControlTypeId, UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, VARIANT,
-        VT_I4, implement, none, number, on_screen, position, text, truth,
+        UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
+        UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
+        UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_ToolBarControlTypeId,
+        UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, VARIANT, VT_I4, implement, none,
+        not_enabled, number, on_screen, position, text, truth,
     };
 
     /// The toolbar, the root of the tree its window hands UI Automation.
@@ -327,7 +353,13 @@ mod providers {
             Ok(match property {
                 UIA_ControlTypePropertyId => number(UIA_ButtonControlTypeId.0),
                 UIA_NamePropertyId => text(self.control.name()),
-                UIA_IsKeyboardFocusablePropertyId => truth(true),
+                UIA_IsEnabledPropertyId | UIA_IsKeyboardFocusablePropertyId => {
+                    truth(self.mirror.off(self.control).is_none())
+                }
+                UIA_HelpTextPropertyId => match self.mirror.off(self.control) {
+                    Some(reason) => text(reason),
+                    None => VARIANT::default(),
+                },
                 UIA_HasKeyboardFocusPropertyId => truth(self.mirror.shown()?.1 == self.control),
                 _ => VARIANT::default(),
             })
@@ -380,6 +412,9 @@ mod providers {
         }
 
         fn SetFocus(&self) -> Result<()> {
+            if self.mirror.off(self.control).is_some() {
+                return Err(not_enabled());
+            }
             self.mirror.ask(self.window, Request::Focus(self.control))
         }
 
@@ -390,6 +425,9 @@ mod providers {
 
     impl IInvokeProvider_Impl for Button_Impl {
         fn Invoke(&self) -> Result<()> {
+            if self.mirror.off(self.control).is_some() {
+                return Err(not_enabled());
+            }
             self.mirror.ask(self.window, Request::Choose(self.control))
         }
     }

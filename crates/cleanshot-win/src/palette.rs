@@ -1,7 +1,8 @@
 use windows::Win32::Foundation::COLORREF;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
-    COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT, GetSysColor,
+    COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
+    GetSysColor,
 };
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -18,15 +19,19 @@ pub(crate) struct Palette {
     pub(crate) material: D2D1_COLOR_F,
     pub(crate) hairline: D2D1_COLOR_F,
     pub(crate) label: D2D1_COLOR_F,
+    /// A control's label while the control is off (F-57).
+    pub(crate) label_off: D2D1_COLOR_F,
 }
 
-/// The four system colours a high-contrast theme sets, as `GetSysColor` gives them.
+/// The system colours a high-contrast theme sets that the overlay uses, as `GetSysColor`
+/// gives them.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SystemColours {
     pub(crate) window: COLORREF,
     pub(crate) window_text: COLORREF,
     pub(crate) highlight: COLORREF,
     pub(crate) highlight_text: COLORREF,
+    pub(crate) gray_text: COLORREF,
 }
 
 const DIM: D2D1_COLOR_F = colour(0, 0, 0, 0.4);
@@ -57,6 +62,7 @@ impl Palette {
                 window_text: COLORREF(GetSysColor(COLOR_WINDOWTEXT)),
                 highlight: COLORREF(GetSysColor(COLOR_HIGHLIGHT)),
                 highlight_text: COLORREF(GetSysColor(COLOR_HIGHLIGHTTEXT)),
+                gray_text: COLORREF(GetSysColor(COLOR_GRAYTEXT)),
             }
         };
         Ok(Self::of(Some(system)))
@@ -74,6 +80,7 @@ impl Palette {
                 material: colour(28, 28, 30, 0.72),
                 hairline: colour(255, 255, 255, 0.12),
                 label: colour(245, 245, 247, 1.0),
+                label_off: colour(245, 245, 247, 0.35),
             },
             Some(system) => Self {
                 dim: DIM,
@@ -83,6 +90,7 @@ impl Palette {
                 material: opaque(system.window),
                 hairline: opaque(system.window_text),
                 label: opaque(system.window_text),
+                label_off: opaque(system.gray_text),
             },
         }
     }
@@ -121,6 +129,7 @@ mod tests {
             window_text: COLORREF(0x00FF_FFFF),
             highlight: COLORREF(0x0000_FFFF),
             highlight_text: COLORREF(0x0000_0000),
+            gray_text: COLORREF(0x0000_FF00),
         }));
         let yellow = colour(255, 255, 0, 1.0);
         let black = colour(0, 0, 0, 1.0);
@@ -131,5 +140,6 @@ mod tests {
         assert_eq!(palette.accent, yellow);
         assert_eq!(palette.on_accent, black);
         assert_eq!(palette.handle, black);
+        assert_eq!(palette.label_off, colour(0, 255, 0, 1.0));
     }
 }

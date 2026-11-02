@@ -18,6 +18,10 @@ name = "toolbar_automation"
 harness = false
 
 [[test]]
+name = "toolbar_saving_off"
+harness = false
+
+[[test]]
 name = "text_drift"
 harness = false
 

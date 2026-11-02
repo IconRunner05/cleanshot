@@ -50,7 +50,13 @@ fn main() {
     thread::spawn(move || {
         let mut failed = false;
         for (test, toolbar, kind, expected) in WALKS {
-            match wait_for_toolbar(toolbar, kind, start, &drawn, PATIENCE) {
+            let walked = wait_for_toolbar(toolbar, kind, start, &drawn, PATIENCE).map(|controls| {
+                controls
+                    .into_iter()
+                    .map(|control| control.name)
+                    .collect::<Vec<_>>()
+            });
+            match walked {
                 Ok(names) if names == expected => println!("{test} ... ok"),
                 Ok(names) => {
                     println!("{test} ... FAILED");

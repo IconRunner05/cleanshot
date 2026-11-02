@@ -9,6 +9,13 @@ section exists.
 
 ## [Unreleased]
 
+### Added
+
+- An organisation can set Cleanshot's policy under `HKLM\SOFTWARE\Policies\Cleanshot` (F-57):
+  a fixed save folder, which may be a network share and which Save As cannot leave; copying
+  only, which greys out Save and says why; PNG only; and no Settings item in the tray menu.
+  A value set wrongly makes Cleanshot stricter, never looser.
+
 ## [0.1.2] - 2026-11-02
 
 A settings window, the spotlight and border tools, fixes for black or garbled captures on

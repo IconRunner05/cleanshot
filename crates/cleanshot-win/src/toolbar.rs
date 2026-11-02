@@ -1,4 +1,4 @@
-use windows::Win32::Foundation::{POINT, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1Crop, CLSID_D2D1GaussianBlur, D2D1_CROP_PROP_RECT, D2D1_EXTEND_MODE_CLAMP,
@@ -7,10 +7,18 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_ROUNDED_RECT, ID2D1Bitmap, ID2D1DeviceContext, ID2D1Effect, ID2D1Image, ID2D1ImageBrush,
     ID2D1SolidColorBrush,
 };
-use windows::core::Interface;
+use windows::Win32::UI::Controls::{
+    ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, TOOLTIPS_CLASSW, TTF_SUBCLASS,
+    TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CW_USEDEFAULT, CreateWindowExW, SendMessageW, WINDOW_STYLE, WS_EX_TOPMOST, WS_POPUP,
+};
+use windows::core::{HSTRING, Interface, PCWSTR, PWSTR};
 
 use crate::palette::Palette;
 use crate::text::{Fonts, TextStyle};
+use crate::tray::struct_size;
 
 pub(crate) mod automation;
 
@@ -53,8 +61,17 @@ impl Control {
         }
     }
 
-    /// The control `step` places after this one in Tab order, wrapping at either end.
-    pub(crate) fn step(self, step: i32) -> Self {
+    /// The control `step` places after this one in Tab order, wrapping at either end and
+    /// passing over a control that is `off` (F-57). Cancel is never off.
+    pub(crate) fn step(self, step: i32, off: impl Fn(Control) -> bool) -> Self {
+        let mut next = self.moved(step);
+        while off(next) {
+            next = next.moved(step.signum());
+        }
+        next
+    }
+
+    fn moved(self, step: i32) -> Self {
         let at = CONTROLS
             .iter()
             .position(|&control| control == self)
@@ -151,6 +168,104 @@ impl Layout {
     }
 }
 
+/// The tooltip over a control that is off, saying why (F-57). It belongs to the toolbar's
+/// window, which destroys it with itself.
+pub(crate) struct OffTip {
+    window: HWND,
+    owner: HWND,
+    control: Control,
+}
+
+const TIP_ID: usize = 1;
+
+impl OffTip {
+    /// A tooltip on `owner`, the window that shows the toolbar, for `control`, saying `reason`.
+    pub(crate) fn new(owner: HWND, control: Control, reason: &str) -> windows::core::Result<Self> {
+        let classes = INITCOMMONCONTROLSEX {
+            dwSize: struct_size::<INITCOMMONCONTROLSEX>(),
+            dwICC: ICC_TAB_CLASSES,
+        };
+        // SAFETY: `classes` is initialised and outlives the call.
+        unsafe { InitCommonControlsEx(&raw const classes) }.ok()?;
+        // SAFETY: the tooltip class is the system's; `owner` is a live window of this thread.
+        // TTS_ALWAYSTIP shows it over the overlay, which never activates.
+        let window = unsafe {
+            CreateWindowExW(
+                WS_EX_TOPMOST,
+                TOOLTIPS_CLASSW,
+                PCWSTR::null(),
+                WS_POPUP | WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                Some(owner),
+                None,
+                None,
+                None,
+            )
+        }?;
+        let text = HSTRING::from(reason);
+        let tool = TTTOOLINFOW {
+            cbSize: struct_size::<TTTOOLINFOW>(),
+            uFlags: TTF_SUBCLASS,
+            hwnd: owner,
+            uId: TIP_ID,
+            lpszText: PWSTR(text.as_ptr().cast_mut()),
+            ..Default::default()
+        };
+        // SAFETY: the tooltip copies `tool` and its text during the call.
+        let added = unsafe {
+            SendMessageW(
+                window,
+                TTM_ADDTOOLW,
+                None,
+                Some(LPARAM(std::ptr::from_ref(&tool) as isize)),
+            )
+        };
+        if added.0 == 0 {
+            return Err(windows::core::Error::from_thread());
+        }
+        Ok(Self {
+            window,
+            owner,
+            control,
+        })
+    }
+
+    /// Moves the tooltip's hover area onto its control in `layout`, shifted by `origin` into
+    /// the owner's pixels.
+    pub(crate) fn place(&self, layout: &Layout, origin: POINT) {
+        let Some(&(_, at)) = layout
+            .controls
+            .iter()
+            .find(|(control, _)| *control == self.control)
+        else {
+            return;
+        };
+        let tool = TTTOOLINFOW {
+            cbSize: struct_size::<TTTOOLINFOW>(),
+            hwnd: self.owner,
+            uId: TIP_ID,
+            rect: RECT {
+                left: at.left - origin.x,
+                top: at.top - origin.y,
+                right: at.right - origin.x,
+                bottom: at.bottom - origin.y,
+            },
+            ..Default::default()
+        };
+        // SAFETY: the tooltip reads `tool` during the call.
+        unsafe {
+            SendMessageW(
+                self.window,
+                TTM_NEWTOOLRECTW,
+                None,
+                Some(LPARAM(std::ptr::from_ref(&tool) as isize)),
+            )
+        };
+    }
+}
 /// What one monitor's surface keeps to paint the toolbar: the frozen capture blurred through
 /// a crop to the pill, so each paint blurs only what the pill shows (CHARTER 4, "Live blur").
 pub(crate) struct Paint {
@@ -160,6 +275,7 @@ pub(crate) struct Paint {
     material: ID2D1SolidColorBrush,
     hairline: ID2D1SolidColorBrush,
     label: ID2D1SolidColorBrush,
+    label_off: ID2D1SolidColorBrush,
     accent: ID2D1SolidColorBrush,
     on_accent: ID2D1SolidColorBrush,
     text: TextStyle,
@@ -208,6 +324,7 @@ impl Paint {
                 material: brush(palette.material)?,
                 hairline: brush(palette.hairline)?,
                 label: brush(palette.label)?,
+                label_off: brush(palette.label_off)?,
                 accent: brush(palette.accent)?,
                 on_accent: brush(palette.on_accent)?,
                 context: context.clone(),
@@ -219,13 +336,15 @@ impl Paint {
     }
 
     /// Draws the toolbar at `layout`, shifted by `origin` into this surface's pixels, with a
-    /// ring round `focus` (CHARTER 4: visible keyboard focus).
+    /// ring round `focus` (CHARTER 4: visible keyboard focus) and the label of a control that
+    /// is `off` greyed (F-57).
     #[expect(clippy::cast_precision_loss, reason = "screen coordinates fit in f32")]
     pub(crate) fn draw(
         &self,
         layout: &Layout,
         origin: POINT,
         focus: Control,
+        off: impl Fn(Control) -> bool,
     ) -> windows::core::Result<()> {
         let local = |at: RECT| D2D_RECT_F {
             left: (at.left - origin.x) as f32,
@@ -289,6 +408,8 @@ impl Paint {
                 }
                 let brush = if control == Control::Copy {
                     &self.on_accent
+                } else if off(control) {
+                    &self.label_off
                 } else {
                     &self.label
                 };
@@ -374,8 +495,17 @@ mod tests {
             y: placed.pill.top,
         };
         assert_eq!(placed.control_at(outside), None);
-        assert_eq!(Control::Cancel.step(1), Control::Copy);
-        assert_eq!(Control::Copy.step(-1), Control::Cancel);
+        let on = |_| false;
+        assert_eq!(Control::Cancel.step(1, on), Control::Copy);
+        assert_eq!(Control::Copy.step(-1, on), Control::Cancel);
+    }
+
+    #[test]
+    fn f57_tab_passes_over_save_while_saving_is_off() {
+        let off = |control| control == Control::Save;
+        assert_eq!(Control::Copy.step(1, off), Control::Edit);
+        assert_eq!(Control::Edit.step(-1, off), Control::Copy);
+        assert_eq!(Control::Cancel.step(2, off), Control::Edit);
     }
 
     #[test]

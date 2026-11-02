@@ -29,8 +29,8 @@ use crate::loupe;
 use crate::palette::Palette;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
-use crate::toolbar::Paint;
 use crate::toolbar::automation::{self, Request};
+use crate::toolbar::{Control, OffTip, Paint};
 
 pub(crate) const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
 const BORDER_WIDTH: f32 = 1.5;
@@ -44,6 +44,8 @@ struct Surface {
     handle: ID2D1SolidColorBrush,
     /// Only the toolbar's monitor paints it.
     toolbar: Option<Paint>,
+    /// Why Save is off, on the toolbar's monitor while it is (F-57).
+    off_tip: Option<OffTip>,
     pill: size_pill::Paint,
     loupe: loupe::Paint,
     origin: POINT,
@@ -135,7 +137,12 @@ impl Surface {
     fn draw_toolbar(&self) -> windows::core::Result<()> {
         match (&self.toolbar, self.shared.toolbar()) {
             (Some(paint), Some(placed)) => {
-                paint.draw(&placed, self.origin, self.shared.focus.get())
+                if let Some(tip) = &self.off_tip {
+                    tip.place(&placed, self.origin);
+                }
+                paint.draw(&placed, self.origin, self.shared.focus.get(), |control| {
+                    self.shared.mirror.off(control).is_some()
+                })
             }
             (Some(_) | None, _) => Ok(()),
         }
@@ -317,8 +324,13 @@ fn surface(
             }
             (true | false, _) => None,
         };
+        let off_tip = match (&toolbar, shared.mirror.off(Control::Save)) {
+            (Some(_), Some(reason)) => Some(OffTip::new(window, Control::Save, reason)?),
+            (Some(_) | None, _) => None,
+        };
         let scale = dpi_scale(capture.bounds)?;
         Ok(Surface {
+            off_tip,
             pill: size_pill::Paint::new(&target, capture.bounds, scale, &palette)?,
             loupe: loupe::Paint::new(&target, bgra, capture.bounds, scale, &palette)?,
             toolbar,
