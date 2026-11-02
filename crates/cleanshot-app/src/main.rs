@@ -13,7 +13,7 @@ use cleanshot_core::{
     Delivered, DeliveryError, Document, Hotkey, HotkeyAction, MAX_SETTINGS_BYTES, Output, Policy,
     PolicyProblem, RgbaImage, Settings, SettingsProblem, delivery_notice,
 };
-use cleanshot_editor::ask_save_path;
+use cleanshot_editor::{AsyncApp, ask_save_path};
 use cleanshot_win::capture::{Copied, MonitorImage, OutputReport, RECT, black_share};
 use cleanshot_win::instance::Launch;
 use cleanshot_win::log::{Log, Usage, since_start, usage};
@@ -72,59 +72,7 @@ fn main() {
                 let Some(session) = session.upgrade() else {
                     return log_dropped(&closing_log, request);
                 };
-                // P-01 counts from here, inside the tray's handling of the hotkey message.
-                let asked = Instant::now();
-                let closer = app.clone();
-                let defer = move |after: Duration, job: Box<dyn FnOnce()>| {
-                    let waited = closer.background_executor().timer(after);
-                    closer
-                        .spawn(async move |_| {
-                            waited.await;
-                            job();
-                        })
-                        .detach();
-                };
-                let opener = app.clone();
-                let editing = Rc::clone(&session);
-                let pass_on = move |image: RgbaImage, to: Handoff| {
-                    let session = Rc::clone(&editing);
-                    opener
-                        .spawn(async move |cx| match to {
-                            Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
-                            Handoff::SaveAs => {
-                                let start = save_as_start(
-                                    &session.saving_settings(),
-                                    session.policy.saving(),
-                                );
-                                let (folder, name) = match start {
-                                    Ok(start) => start,
-                                    Err(error) => {
-                                        return session.warn(&delivery_notice(&Err(error)));
-                                    }
-                                };
-                                let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
-                                save_chosen(&session, image, chosen.await);
-                            }
-                        })
-                        .detach();
-                };
-                // The tray's window procedure can run while GPUI holds the app, so the request
-                // waits for GPUI's executor instead of borrowing the app here.
-                app.spawn(async move |cx| {
-                    cx.update(|cx| {
-                        let action = match request {
-                            Request::Capture(action) => action,
-                            Request::EditLastCapture => {
-                                return thumbnail::edit_last(&session, &pass_on);
-                            }
-                            Request::SaveLastCapture => return thumbnail::save_last(&session),
-                            Request::OpenSettings => return open_settings(cx, &session),
-                            Request::Exit => return cx.quit(),
-                        };
-                        capture(&session, action, asked, defer, pass_on);
-                    });
-                })
-                .detach();
+                on_tray_request(&app, session, request);
             })
             .expect("the tray window and icon are created");
             Session::new(settings, policy, tray, log)
@@ -138,6 +86,47 @@ fn main() {
     })
     .expect("the Windows platform starts");
     drop(instance);
+}
+
+fn on_tray_request(app: &AsyncApp, session: Rc<Session>, request: Request) {
+    // P-01 counts from here, inside the tray's handling of the hotkey message.
+    let asked = Instant::now();
+    let closer = app.clone();
+    let defer = move |after: Duration, job: Box<dyn FnOnce()>| {
+        let waited = closer.background_executor().timer(after);
+        closer
+            .spawn(async move |_| {
+                waited.await;
+                job();
+            })
+            .detach();
+    };
+    let opener = app.clone();
+    let editing = Rc::clone(&session);
+    let pass_on = move |image: RgbaImage, to: Handoff| {
+        let session = Rc::clone(&editing);
+        opener
+            .spawn(async move |cx| match to {
+                Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
+                Handoff::SaveAs => save_as(&session, image, cx).await,
+            })
+            .detach();
+    };
+    // The tray's window procedure can run while GPUI holds the app, so the request waits for
+    // GPUI's executor instead of borrowing the app here.
+    app.spawn(async move |cx| {
+        cx.update(|cx| {
+            let action = match request {
+                Request::Capture(action) => action,
+                Request::EditLastCapture => return thumbnail::edit_last(&session, &pass_on),
+                Request::SaveLastCapture => return thumbnail::save_last(&session),
+                Request::OpenSettings => return open_settings(cx, &session),
+                Request::Exit => return cx.quit(),
+            };
+            capture(&session, action, asked, defer, pass_on);
+        });
+    })
+    .detach();
 }
 
 /// What start-up does once the tray is up: logs the policy's problems, hides Settings under
@@ -464,6 +453,16 @@ fn editor_first_frame(session: &Rc<Session>) -> impl FnOnce(Instant) + 'static {
 
 /// F-22: saves the overlay's `image` to the path chosen in Save As. A cancel and a save show
 /// nothing, as the overlay's Save does; a failure is shown from the tray.
+async fn save_as(session: &Session, image: RgbaImage, cx: &mut AsyncApp) {
+    let start = save_as_start(&session.saving_settings(), session.policy.saving());
+    let (folder, name) = match start {
+        Ok(start) => start,
+        Err(error) => return session.warn(&delivery_notice(&Err(error))),
+    };
+    let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
+    save_chosen(session, image, chosen.await);
+}
+
 fn save_chosen(
     session: &Session,
     image: RgbaImage,
