@@ -5,13 +5,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
     Delivered, DeliveryError, Document, Hotkey, HotkeyAction, MAX_SETTINGS_BYTES, Output, Policy,
-    RgbaImage, Settings, SettingsProblem, delivery_notice,
+    PolicyProblem, RgbaImage, Settings, SettingsProblem, delivery_notice,
 };
 use cleanshot_editor::ask_save_path;
 use cleanshot_win::capture::{Copied, MonitorImage, OutputReport, RECT, black_share};
@@ -58,86 +58,126 @@ fn main() {
     let (settings, warning) = load_settings();
     let (policy, policy_problems) = read_policy();
     let (hotkeys, fallback) = tray_hotkeys(&settings);
-    let tray = Rc::new(RefCell::new(None));
-    let launched_tray = Rc::clone(&tray);
-    let session = Rc::new(Session::new(settings, policy, Rc::clone(&tray), log));
-    for problem in policy_problems {
-        session.log_line("policy", |_| format!("problem {problem}"));
-    }
-    let launched = Rc::clone(&session);
+    let log = Rc::new(RefCell::new(log));
     cleanshot_editor::run(move |cx| {
         // D-76: prewarm on the overlay thread before the tray is ready.
         let unwarmed = Overlay::prewarm()
             .err()
             .map(|error| format!("The capture overlay could not be prepared: {error}."));
         let app = cx.to_async();
-        let created = Tray::create(&hotkeys, move |request| {
-            // P-01 counts from here, inside the tray's handling of the hotkey message.
-            let asked = Instant::now();
-            let session = Rc::clone(&session);
-            let closer = app.clone();
-            let defer = move |after: Duration, job: Box<dyn FnOnce()>| {
-                let waited = closer.background_executor().timer(after);
-                closer
-                    .spawn(async move |_| {
-                        waited.await;
-                        job();
-                    })
-                    .detach();
-            };
-            let opener = app.clone();
-            let editing = Rc::clone(&session);
-            let pass_on = move |image: RgbaImage, to: Handoff| {
-                let session = Rc::clone(&editing);
-                opener
-                    .spawn(async move |cx| match to {
-                        Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
-                        Handoff::SaveAs => {
-                            let (folder, name) = save_as_start(&session.saving_settings());
-                            let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
-                            save_chosen(&session, image, chosen.await);
-                        }
-                    })
-                    .detach();
-            };
-            // The tray's window procedure can run while GPUI holds the app, so the request
-            // waits for GPUI's executor instead of borrowing the app here.
-            app.spawn(async move |cx| {
-                cx.update(|cx| {
-                    let action = match request {
-                        Request::Capture(action) => action,
-                        Request::OpenSettings => return open_settings(cx, &session),
-                        Request::Exit => return cx.quit(),
-                    };
-                    capture(&session, action, asked, defer, pass_on);
-                });
+        let session = Rc::new_cyclic(|session: &Weak<Session>| {
+            let (session, closing_log) = (session.clone(), Rc::clone(&log));
+            let tray = Tray::create(&hotkeys, move |request| {
+                let Some(session) = session.upgrade() else {
+                    return log_dropped(&closing_log, request);
+                };
+                // P-01 counts from here, inside the tray's handling of the hotkey message.
+                let asked = Instant::now();
+                let closer = app.clone();
+                let defer = move |after: Duration, job: Box<dyn FnOnce()>| {
+                    let waited = closer.background_executor().timer(after);
+                    closer
+                        .spawn(async move |_| {
+                            waited.await;
+                            job();
+                        })
+                        .detach();
+                };
+                let opener = app.clone();
+                let editing = Rc::clone(&session);
+                let pass_on = move |image: RgbaImage, to: Handoff| {
+                    let session = Rc::clone(&editing);
+                    opener
+                        .spawn(async move |cx| match to {
+                            Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
+                            Handoff::SaveAs => {
+                                let (folder, name) = save_as_start(&session.saving_settings());
+                                let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
+                                save_chosen(&session, image, chosen.await);
+                            }
+                        })
+                        .detach();
+                };
+                // The tray's window procedure can run while GPUI holds the app, so the request
+                // waits for GPUI's executor instead of borrowing the app here.
+                app.spawn(async move |cx| {
+                    cx.update(|cx| {
+                        let action = match request {
+                            Request::Capture(action) => action,
+                            Request::OpenSettings => return open_settings(cx, &session),
+                            Request::Exit => return cx.quit(),
+                        };
+                        capture(&session, action, asked, defer, pass_on);
+                    });
+                })
+                .detach();
             })
-            .detach();
-        })
-        .expect("the tray window and icon are created");
-        if launched.policy.settings_hidden() {
-            created.hide_settings_item();
-        }
-        let text = start_warnings(&created, [warning, log_warning, fallback, unwarmed]);
-        launched_tray.replace(Some(created));
-        if !text.is_empty() {
-            launched.warn(&text);
-        }
-        launched.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
-        // P-04, P-05: the working set, and the CPU time spent with the tray idle, logged once.
-        if let Some(start) = launched.idle_start() {
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(IDLE_SAMPLE).await;
-                launched.idle_use(start);
-            })
-            .detach();
-        }
+            .expect("the tray window and icon are created");
+            Session::new(settings, policy, tray, log)
+        });
+        started(
+            cx,
+            session,
+            policy_problems,
+            [warning, log_warning, fallback, unwarmed],
+        );
     })
     .expect("the Windows platform starts");
-    // The tray's callback holds the session, which holds the tray, so the tray is taken
-    // out to remove its icon.
-    drop(tray.take());
     drop(instance);
+}
+
+/// What start-up does once the tray is up: logs the policy's problems, hides Settings under
+/// `HideSettings` (F-57), tells the user what went wrong, starts the P-04 and P-05 sample, and
+/// hands the session to the app, which holds it until it quits and then removes the icon
+/// (F-50).
+fn started(
+    cx: &mut cleanshot_editor::App,
+    session: Rc<Session>,
+    policy_problems: Vec<PolicyProblem>,
+    earlier: [Option<String>; 4],
+) {
+    for problem in policy_problems {
+        session.log_line("policy", |_| format!("problem {problem}"));
+    }
+    if session.policy.settings_hidden() {
+        session.tray.borrow().hide_settings_item();
+    }
+    let text = start_warnings(&session.tray.borrow(), earlier);
+    if !text.is_empty() {
+        session.warn(&text);
+    }
+    session.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
+    // P-04, P-05: the working set, and the CPU time spent with the tray idle, logged once.
+    if let Some(start) = session.idle_start() {
+        let idle = Rc::clone(&session);
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(IDLE_SAMPLE).await;
+            idle.idle_use(start);
+        })
+        .detach();
+    }
+    cx.on_app_quit(move |_| {
+        match session.tray.borrow().remove_icon() {
+            Ok(()) => session.log_line("tray", |_| "icon_removed".to_owned()),
+            Err(error) => {
+                session.log_line("tray", |_| format!("icon not removed at quit: {error}"));
+            }
+        }
+        async {}
+    })
+    .detach();
+}
+
+/// Logs a request the tray passed on while the session was being dropped, as Cleanshot quits,
+/// so it is never lost unseen. With no log open there is no one to tell.
+fn log_dropped(log: &RefCell<Option<Log>>, request: Request) {
+    let Some(log) = &*log.borrow() else { return };
+    let written = log.write(&format!(
+        "tray request {request:?} dropped: Cleanshot is quitting"
+    ));
+    if let Err(error) = written {
+        eprintln!("tray request {request:?} dropped as Cleanshot quits, and not logged: {error}");
+    }
 }
 
 /// The hotkey each capture request registers at start, and the warning when Snipping Tool
@@ -181,31 +221,27 @@ struct Session {
     settings: RefCell<Settings>,
     /// F-57: read once at start.
     policy: Policy,
-    tray: Rc<RefCell<Option<Tray>>>,
+    tray: RefCell<Tray>,
     overlay: RefCell<Option<Overlay>>,
     /// F-06: the last selection copied or saved, kept in memory only (C-20).
     last_selection: Cell<Option<RECT>>,
     /// So a P-04 after-use sample knows whether a capture started after it was set.
     captures_started: Cell<u64>,
-    /// C-23: open only under `--log`.
-    log: RefCell<Option<Log>>,
+    /// C-23: open only under `--log`. Shared with the tray's callback, which can outlive the
+    /// session by a request as Cleanshot quits.
+    log: Rc<RefCell<Option<Log>>>,
 }
 
 impl Session {
-    fn new(
-        settings: Settings,
-        policy: Policy,
-        tray: Rc<RefCell<Option<Tray>>>,
-        log: Option<Log>,
-    ) -> Self {
+    fn new(settings: Settings, policy: Policy, tray: Tray, log: Rc<RefCell<Option<Log>>>) -> Self {
         Self {
             settings: RefCell::new(settings),
             policy,
-            tray,
+            tray: RefCell::new(tray),
             overlay: RefCell::new(None),
             last_selection: Cell::new(None),
             captures_started: Cell::new(0),
-            log: RefCell::new(log),
+            log,
         }
     }
 
@@ -320,11 +356,7 @@ impl Session {
     /// Shows `text` from the tray icon. The release exe has no console, so stderr is only
     /// the last resort, for when the tray cannot show it.
     fn warn(&self, text: &str) {
-        let shown = match &*self.tray.borrow() {
-            Some(tray) => tray.warn("Cleanshot", text),
-            None => return eprintln!("{text} (the tray icon is not created yet)"),
-        };
-        if let Err(error) = shown {
+        if let Err(error) = self.tray.borrow().warn("Cleanshot", text) {
             eprintln!("{text} ({error})");
         }
     }

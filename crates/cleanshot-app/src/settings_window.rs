@@ -85,8 +85,6 @@ fn apply_settings(session: &Session, changed: Settings) -> Applied {
     let taken: Vec<_> = session
         .tray
         .borrow_mut()
-        .as_mut()
-        .expect("the settings window opens from the tray, so the tray exists")
         .set_hotkeys(&wanted)
         .into_iter()
         .filter_map(|request| match request {

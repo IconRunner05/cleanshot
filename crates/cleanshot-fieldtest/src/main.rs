@@ -14,8 +14,8 @@ use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::dpi::{copy_at_scale, set_scale};
 use cleanshot_win::field_test::{
     Driver, adapters, animations_on, clipboard_round_trip, copies_while_watched,
-    d3d11_feature_level, drive_tray, monitors, open_and_cancel_overlays, rendering_params,
-    windows_version,
+    d3d11_feature_level, drive_tray, exit_running_tray, monitors, open_and_cancel_overlays,
+    rendering_params, windows_version,
 };
 
 use budgets::Machine;
@@ -24,6 +24,8 @@ const HOTKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIPBOARD_MARKER: &str = "cleanshot field test";
 const CAPTURE_ATTEMPTS: u32 = 3;
 const BENCH_REDRAWS: NonZeroU32 = NonZeroU32::new(600).expect("600 is not zero");
+/// How long Cleanshot may take to close its tray window after Exit.
+const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long one overlay may take to show or to close before the run fails (D-62).
 const OVERLAY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The pause after an overlay closes before the next press, as between a user's captures.
@@ -42,6 +44,18 @@ fn main() {
     let report_path = match std::env::args().collect::<Vec<_>>().as_slice() {
         [_, flag, path] if flag == "--report" => path.clone(),
         [_, flag, inputs @ ..] if flag == "--budgets" => std::process::exit(judge(inputs)),
+        [_, flag, log] if flag == "--exit" => {
+            if let Err(error) =
+                exit_running_tray(EXIT_TIMEOUT, || icon_removal_logged(Path::new(log)))
+            {
+                eprintln!("FAIL F-50: {error}");
+                std::process::exit(1);
+            }
+            println!(
+                "F-50: Cleanshot exited from its tray and logged that the shell removed its icon"
+            );
+            return;
+        }
         [_, flag, log] if flag == "--overlays" => {
             if let Err(error) = open_overlays_after_start(Path::new(log)) {
                 eprintln!("{error}");
@@ -95,7 +109,7 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: cleanshot-fieldtest --report PATH | --overlays LOG \
+                "usage: cleanshot-fieldtest --report PATH | --overlays LOG | --exit LOG \
                  | --budgets [--runner] [--exe EXE] [--idle LOG] [--overlays LOG] \
                  [--copy P02_OUTPUT] [--bench REPORT] \
                  | --set-scale WIDTH HEIGHT STEP DPI | --copy-at-scale WIDTH HEIGHT DPI LOG \
@@ -214,6 +228,14 @@ fn open_overlays_after_start(log: &Path) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(250));
     }
     Ok(())
+}
+
+/// F-50: whether the exe logged that the shell accepted its tray icon's removal.
+fn icon_removal_logged(log: &Path) -> bool {
+    std::fs::read_to_string(log)
+        .expect("cleanshot.exe was started with --log here")
+        .lines()
+        .any(|line| line.ends_with(" tray icon_removed"))
 }
 
 /// How many `budget` perf lines (P-01 for an overlay shown, P-02 for a copy) cleanshot.exe

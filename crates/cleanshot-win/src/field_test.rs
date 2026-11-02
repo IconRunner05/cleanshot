@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HMODULE, RECT};
+use windows::Win32::Foundation::{HMODULE, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
 };
@@ -33,8 +33,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, FindWindowW, GetForegroundWindow, MSG, MsgWaitForMultipleObjects, PM_REMOVE,
-    PeekMessageW, QS_ALLINPUT, TranslateMessage,
+    DispatchMessageW, FindWindowW, GetForegroundWindow, IsWindow, MSG, MsgWaitForMultipleObjects,
+    PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, TranslateMessage, WM_CLOSE,
 };
 use windows::core::{Interface, PCWSTR, w};
 
@@ -45,7 +45,7 @@ use crate::Error;
 use crate::capture::monitor_handles;
 use cleanshot_core::{Hotkey, HotkeyAction};
 
-use crate::tray::{Request, Tray};
+use crate::tray::{Request, Tray, running_tray_window};
 
 pub mod dpi;
 
@@ -351,6 +351,45 @@ pub fn drive_tray(timeout: Duration) -> Result<TrayRun, Error> {
         inputs_sent,
         hotkey_delivered_after: delivered.get().then(|| start.elapsed()),
     })
+}
+
+/// Why [`exit_running_tray`] failed.
+#[derive(Debug, thiserror::Error)]
+pub enum ExitRunError {
+    #[error("no Cleanshot tray window is open")]
+    NoTray(#[source] windows::core::Error),
+    #[error("Windows refused the message asking Cleanshot to exit")]
+    NotAsked(#[source] windows::core::Error),
+    #[error("the tray window was still open {0:?} after Cleanshot was asked to exit")]
+    StillOpen(Duration),
+    #[error("Cleanshot exited without logging that the shell removed its tray icon")]
+    IconRemovalNotLogged,
+}
+
+/// Asks the Cleanshot running in this session to exit, as its menu's Exit does, waits up to
+/// `timeout` for its tray window to close, and then asks `removed` whether Cleanshot logged that
+/// the shell accepted the removal of its tray icon (F-50). Another process cannot tell whether
+/// the shell still draws an icon whose window is gone, so the log is the proof.
+///
+/// # Errors
+///
+/// [`ExitRunError`] for the first step that did not happen.
+pub fn exit_running_tray(
+    timeout: Duration,
+    removed: impl FnOnce() -> bool,
+) -> Result<(), ExitRunError> {
+    let window = running_tray_window().map_err(ExitRunError::NoTray)?;
+    // SAFETY: posting copies no memory; a window that closes first fails the post.
+    unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+        .map_err(ExitRunError::NotAsked)?;
+    // SAFETY: IsWindow only reads whether the handle still names a window.
+    if !within(timeout, || !unsafe { IsWindow(Some(window)) }.as_bool()) {
+        return Err(ExitRunError::StillOpen(timeout));
+    }
+    if !removed() {
+        return Err(ExitRunError::IconRemovalNotLogged);
+    }
+    Ok(())
 }
 
 /// Why [`open_and_cancel_overlays`] stopped, naming the press it stopped on, from 1.

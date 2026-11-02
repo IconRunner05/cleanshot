@@ -245,9 +245,14 @@ jobs:
           # Each press waits for the last overlay's P-01 line and for it to close, so a slow
           # overlay is measured, not raced; one that never shows or closes fails the run.
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --overlays "$run/cleanshot.log" || failed=$?
-          taskkill //F //IM cleanshot.exe
+          # F-50: Exit from the tray closes Cleanshot, which logs that the shell removed its icon.
+          # A run that did not exit is ended so the job does not hang; otherwise taskkill has
+          # nothing to end.
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --exit "$run/cleanshot.log" || exited=$?
+          taskkill //F //IM cleanshot.exe 2>/dev/null || true
           cat "$run/cleanshot.log"
           (( ${failed:-0} == 0 )) || { echo "FAIL D-62: the overlay run stopped (exit ${failed})"; exit 1; }
+          (( ${exited:-0} == 0 )) || { echo "FAIL F-50: Cleanshot did not exit cleanly from its tray"; exit 1; }
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner --overlays "$run/cleanshot.log"
 
       - name: Upload the probe report

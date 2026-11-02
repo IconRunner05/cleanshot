@@ -212,6 +212,22 @@ impl Tray {
         }
     }
 
+    /// Removes the tray icon as Cleanshot quits (F-50). The window stays until the tray is
+    /// dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::IconNotRemoved`] when the shell had no icon to remove.
+    pub fn remove_icon(&self) -> Result<(), Error> {
+        let icon = icon_data(self.window);
+        // SAFETY: `icon` names this window's icon and outlives the call.
+        if !unsafe { Shell_NotifyIconW(NIM_DELETE, &raw const icon) }.as_bool() {
+            return Err(Error::IconNotRemoved);
+        }
+        self.state().icon_shown.set(false);
+        Ok(())
+    }
+
     /// Unregisters the hotkey at `index` if Windows registered it.
     fn release(&self, index: usize) {
         if self.hotkeys[index].2.is_ok() {
@@ -272,10 +288,13 @@ pub fn message_box(title: &str, text: &str) -> windows::core::Result<()> {
 /// [`Error::NoRunningTray`] if no tray window exists in this session, for example while the
 /// other instance is still starting.
 pub fn ask_running_instance_to_capture() -> Result<(), Error> {
+    signal_capture(running_tray_window().map_err(Error::NoRunningTray)?)
+}
+
+/// The tray window of the Cleanshot running in this session.
+pub(crate) fn running_tray_window() -> windows::core::Result<HWND> {
     // SAFETY: the class name is a 'static, NUL-terminated string.
-    let window =
-        unsafe { FindWindowW(WINDOW_CLASS, PCWSTR::null()) }.map_err(Error::NoRunningTray)?;
-    signal_capture(window)
+    unsafe { FindWindowW(WINDOW_CLASS, PCWSTR::null()) }
 }
 
 fn signal_capture(window: HWND) -> Result<(), Error> {
