@@ -1,37 +1,30 @@
-use cleanshot_core::{Policy, PolicyProblem, PolicySetting, PolicyValue};
+use cleanshot_core::{POLICY_KEY, Policy, PolicyProblem, PolicySetting, PolicyValue};
 use windows::Win32::Foundation::ERROR_UNSUPPORTED_TYPE;
 use windows::Win32::System::Registry::{HKEY, HKEY_LOCAL_MACHINE};
-use windows::core::{PCWSTR, w};
+use windows::core::{HSTRING, PCWSTR};
 
 use crate::registry::{read_number, read_text};
-
-// D-86: HKLM only, which only an administrator can write; never HKCU.
-const POLICY_KEY: PCWSTR = w!("SOFTWARE\\Policies\\Cleanshot");
 
 /// The organisation's policy under `HKLM\SOFTWARE\Policies\Cleanshot`, and each value that was
 /// present but not valid, so its strictest setting applies (F-57, D-86).
 #[must_use]
 pub fn read_policy() -> (Policy, Vec<PolicyProblem>) {
-    read_from(HKEY_LOCAL_MACHINE, POLICY_KEY)
+    // D-86: HKLM only, which only an administrator can write; never HKCU.
+    let key = HSTRING::from(POLICY_KEY);
+    read_from(HKEY_LOCAL_MACHINE, PCWSTR(key.as_ptr()))
 }
 
 fn read_from(root: HKEY, key: PCWSTR) -> (Policy, Vec<PolicyProblem>) {
-    let value = |setting| read_value(root, key, value_name(setting));
+    let value = |setting: PolicySetting| {
+        let name = HSTRING::from(setting.value_name());
+        read_value(root, key, PCWSTR(name.as_ptr()))
+    };
     Policy::from_values(
         value(PolicySetting::SaveFolder),
         value(PolicySetting::ClipboardOnly),
         value(PolicySetting::ForcePng),
         value(PolicySetting::HideSettings),
     )
-}
-
-fn value_name(setting: PolicySetting) -> PCWSTR {
-    match setting {
-        PolicySetting::SaveFolder => w!("SaveFolder"),
-        PolicySetting::ClipboardOnly => w!("ClipboardOnly"),
-        PolicySetting::ForcePng => w!("ForcePng"),
-        PolicySetting::HideSettings => w!("HideSettings"),
-    }
 }
 
 // A value Windows cannot read is Unreadable, which takes its strictest setting and is
@@ -51,24 +44,23 @@ fn read_value(root: HKEY, key: PCWSTR, name: PCWSTR) -> PolicyValue {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use cleanshot_core::Saving;
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::{
         HKEY_CURRENT_USER, REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_VALUE_TYPE, RegDeleteTreeW,
         RegSetKeyValueW,
     };
-    use windows::core::HSTRING;
-
-    use super::*;
 
     fn set(key: PCWSTR, setting: PolicySetting, kind: REG_VALUE_TYPE, bytes: &[u8]) {
         let size = u32::try_from(bytes.len()).expect("a test value is small");
+        let name = HSTRING::from(setting.value_name());
         // SAFETY: `bytes` lives past the call, which reads `size` bytes of it.
         let set = unsafe {
             RegSetKeyValueW(
                 HKEY_CURRENT_USER,
                 key,
-                value_name(setting),
+                &name,
                 kind.0,
                 Some(bytes.as_ptr().cast()),
                 size,
