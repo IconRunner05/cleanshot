@@ -9,25 +9,20 @@ section exists.
 
 ## [Unreleased]
 
-### Added
+## [0.1.2] - 2026-11-02
 
-- A security overview for IT reviewers, [`docs/security.md`](docs/security.md): what
-  Cleanshot does and never does, and which CI gate, test or review holds each claim.
-- Settings window (F-55): what happens after a capture, the save folder, the save format
-  and the three capture hotkeys, each change saved at once. A hotkey another program holds
-  is named, and the old one stays.
-- Start with Windows (F-56): a switch in the settings window. Cleanshot adds or removes its
-  entry in Windows' startup list only when you flip it; the entry is the only record of the
-  choice, and the start_with_windows key in cleanshot.toml is no longer used.
-- Border and shadow (F-44): the Border and Shadow toggles on the property strip put a thin
-  border and a soft drop shadow around the whole image, on the canvas and in what is copied
-  or saved. The image grows to hold them; PNG keeps the shadow's edge transparent, and
-  JPG, BMP and the copied bitmap put it over white.
+A settings window, the spotlight and border tools, fixes for black or garbled captures on
+some PCs, and security hardening. Still an unsigned pre-release.
 
-## [0.1.2] - 2026-11-01
+### Security
 
-Fixes for black or garbled captures on some PCs, and the spotlight tool. Still an unsigned
-pre-release.
+- A DLL placed beside `cleanshot.exe` is never loaded in place of the Windows one (C-12).
+  Before, Windows could load such a copy as Cleanshot started, so running the exe from a
+  folder like Downloads could run someone else's code.
+- The save folder must be a folder on a drive (D-83). A `save_folder` in `cleanshot.toml`
+  that names a network share or a device path is refused, falls back to Pictures\Screenshots
+  and is reported, so a settings file placed beside the exe cannot send your screenshots to
+  another machine. To save to a share, use Save As.
 
 ### Fixed
 
@@ -42,10 +37,26 @@ pre-release.
 
 ### Added
 
+- Settings window (F-55), from the tray's Settings item: what happens after a capture, the
+  save folder, the save format and the three capture hotkeys, each change saved at once. A
+  hotkey another program holds is named, and the old one stays.
+- Start with Windows (F-56): a switch in the settings window. Cleanshot adds or removes its
+  entry in Windows' startup list only when you flip it; the entry is the only record of the
+  choice, and the `start_with_windows` key in `cleanshot.toml` is no longer used.
 - Spotlight (F-43): S, or the Spotlight button, draws a box that keeps its area bright and
   dims the rest of the capture. Several spotlights share one bright area, and arrows, text
   and other shapes are never dimmed.
-- `cleanshot.exe --log` also records how each screen was captured (D-79).
+- Border and shadow (F-44): the Border and Shadow toggles on the property strip put a thin
+  border and a soft drop shadow around the whole image, on the canvas and in what is copied
+  or saved. The image grows to hold them; PNG keeps the shadow's edge transparent, and
+  JPG, BMP and the copied bitmap put it over white.
+- Cleanshot's own icon on the exe, its windows and the taskbar (D-91), and a one-colour
+  tray icon that is dark on a light taskbar and white on a dark one (D-92).
+- A security overview for IT reviewers, [`docs/security.md`](docs/security.md): what
+  Cleanshot does and never does, and which CI gate, test or review holds each claim.
+- `cleanshot.exe --log` also records how each screen was captured (D-79), and the memory
+  Cleanshot holds of its own 10 seconds after the last capture, which is meant to stay
+  under 10 MB (P-04, D-82).
 
 ## [0.1.1] - 2026-11-01
 
