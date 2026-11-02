@@ -1,10 +1,18 @@
 use std::path::PathBuf;
 
+const RT_ICON: u16 = 3;
+const RT_GROUP_ICON: u16 = 14;
 const RT_VERSION: u16 = 16;
 const RT_MANIFEST: u16 = 24;
 const PROCESS_MANIFEST_ID: u16 = 1;
 const VERSION_ID: u16 = 1;
 const LANGUAGE_EN_US: u16 = 0x0409;
+const LANGUAGE_NEUTRAL: u16 = 0;
+const ICON_FILE_HEADER_SIZE: usize = 6;
+const ICON_FILE_ENTRY_SIZE: usize = 16;
+/// D-91: Explorer, the taskbar and GPUI's windows show icon group 1.
+const APP_ICON_GROUP: u16 = 1;
+const APP_ICON: &[u8] = include_bytes!("../../assets/cleanshot.ico");
 const UNICODE_CODE_PAGE: u16 = 1200;
 const MOVEABLE_PURE_DISCARDABLE: u16 = 0x1030;
 const ENTRY_HEADER_SIZE: u32 = 32;
@@ -49,6 +57,43 @@ fn resource_entry(resource_type: u16, name: u16, language: u16, data: &[u8]) -> 
     entry.extend_from_slice(data);
     entry.resize(entry.len().next_multiple_of(4), 0);
     entry
+}
+
+/// Each image of [`APP_ICON`] as an `RT_ICON` numbered from 1, and its directory as the
+/// `RT_GROUP_ICON` naming them by those numbers.
+fn icon_resources() -> Vec<u8> {
+    let count = usize::from(u16::from_le_bytes([APP_ICON[4], APP_ICON[5]]));
+    let (entries, _) = APP_ICON[ICON_FILE_HEADER_SIZE..].as_chunks::<ICON_FILE_ENTRY_SIZE>();
+    let mut resources = Vec::new();
+    let mut directory = APP_ICON[..ICON_FILE_HEADER_SIZE].to_vec();
+    for (image_id, entry) in (1u16..).zip(&entries[..count]) {
+        let read_u32 = |at: usize| {
+            let bytes = entry[at..at + 4]
+                .try_into()
+                .expect("an .ico entry is 16 bytes");
+            usize::try_from(u32::from_le_bytes(bytes)).expect("an .ico fits in memory")
+        };
+        let (length, offset) = (read_u32(8), read_u32(12));
+        resources.extend(resource_entry(
+            RT_ICON,
+            image_id,
+            LANGUAGE_NEUTRAL,
+            &APP_ICON[offset..offset + length],
+        ));
+        // The group entry is the file entry with one plane and the image's id in place of its
+        // offset; the file says zero planes.
+        directory.extend_from_slice(&entry[..4]);
+        directory.extend_from_slice(&1u16.to_le_bytes());
+        directory.extend_from_slice(&entry[6..12]);
+        directory.extend_from_slice(&image_id.to_le_bytes());
+    }
+    resources.extend(resource_entry(
+        RT_GROUP_ICON,
+        APP_ICON_GROUP,
+        LANGUAGE_NEUTRAL,
+        &directory,
+    ));
+    resources
 }
 
 fn utf16_with_nul(text: &str) -> Vec<u8> {
@@ -174,6 +219,7 @@ fn main() {
         LANGUAGE_EN_US,
         &version_info(),
     ));
+    resources.extend(icon_resources());
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     let resource_file = out_dir.join("cleanshot.res");

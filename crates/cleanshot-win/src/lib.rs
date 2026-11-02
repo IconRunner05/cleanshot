@@ -18,6 +18,7 @@ pub mod startup;
 pub mod text;
 mod toolbar;
 pub mod tray;
+mod tray_icon;
 
 use windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS;
 use windows::Win32::System::LibraryLoader::{

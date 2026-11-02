@@ -149,6 +149,24 @@ manifest=$("$llvm_bin/llvm-readobj" --coff-resources "$exe" |
 [[ $manifest == *">PerMonitorV2</dpiAwareness>"* ]] ||
     fail "D-71: the $kind's embedded manifest does not declare PerMonitorV2 DPI awareness."
 
+# D-91: each icon group as "id: widths", read from its RT_GROUP_ICON directory (a width byte
+# of 0 means 256).
+icon_groups=$("$llvm_bin/llvm-readobj" --coff-resources "$exe" | awk '
+    function byte(at) { return (index("0123456789ABCDEF", substr(hex[group], at, 1)) - 1) * 16 + index("0123456789ABCDEF", substr(hex[group], at + 1, 1)) - 1 }
+    /^  Type: / { in_groups = /\(ID 14\)/ }
+    in_groups && /^    Name: \(ID / { group = $3; sub(/\)/, "", group); hex[group] = "" }
+    in_groups && /^            [0-9A-F]+: / { for (i = 2; i <= 5 && $i !~ /^\|/; i++) hex[group] = hex[group] $i }
+    END {
+        for (group in hex) {
+            line = group ":"
+            for (i = 0; i < byte(9); i++) { width = byte(13 + 28 * i); line = line " " (width == 0 ? 256 : width) }
+            print line
+        }
+    }' | sort)
+[[ $icon_groups == '1: 16 20 24 32 40 48 64 96 256' ]] ||
+    fail "D-91: the $kind's icon groups are \"${icon_groups//$'\n'/; }\", not the app icon alone as group 1 at 16 to 256 px."
+echo "Icon groups (id: sizes in px): ${icon_groups//$'\n'/; }."
+
 if [[ $kind == "release exe" ]]; then
     # Windows keeps many strings as UTF-16, which llvm-strings does not read, so the exe is
     # also decoded as UTF-16LE at both byte alignments.

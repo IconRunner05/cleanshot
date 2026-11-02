@@ -16,15 +16,16 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    FindWindowW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, IDI_APPLICATION, LoadIconW,
-    MB_ICONWARNING, MB_OK, MF_STRING, MessageBoxW, PostMessageW, RegisterWindowMessageW,
-    SetForegroundWindow, SetWindowLongPtrW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
-    WM_CLOSE, WM_CONTEXTMENU, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    FindWindowW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, MB_ICONWARNING, MB_OK, MF_STRING,
+    MessageBoxW, PostMessageW, RegisterWindowMessageW, SetForegroundWindow, SetWindowLongPtrW,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_CONTEXTMENU,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_NULL,
+    WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::Error;
+use crate::tray_icon::{TaskbarShade, TrayIcon};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotTray");
 // C-14: the only message a second launch sends. Its parameters are always zero and never read.
@@ -49,6 +50,8 @@ struct State {
     taskbar_created: u32,
     capture_signal: u32,
     icon_shown: Cell<bool>,
+    /// The icon the shell shows, kept until the shell has the next one (D-92).
+    icon: RefCell<Option<TrayIcon>>,
     /// The request each registered hotkey sends; hotkey id `n` is entry `n - 1`.
     hotkey_requests: Vec<Request>,
 }
@@ -122,6 +125,7 @@ impl Tray {
             capture_signal: capture_signal(),
             hotkey_requests: hotkeys.iter().map(|(request, _)| *request).collect(),
             icon_shown: Cell::new(false),
+            icon: RefCell::new(None),
         });
         // SAFETY: `window` exists, so it will get WM_NCDESTROY, where the window procedure
         // frees this Box once.
@@ -133,7 +137,7 @@ impl Tray {
             .map(|(index, &(request, hotkey))| (request, hotkey, register(window, index, hotkey)))
             .collect();
         let tray = Self { window, hotkeys };
-        tray.state().icon_shown.set(add_icon(window));
+        tray.state().icon_shown.set(add_icon(window, tray.state()));
         Ok(tray)
     }
 
@@ -361,7 +365,7 @@ fn capture_signal() -> u32 {
     unsafe { RegisterWindowMessageW(CAPTURE_SIGNAL) }
 }
 
-fn struct_size<T>() -> u32 {
+pub(crate) fn struct_size<T>() -> u32 {
     u32::try_from(size_of::<T>()).expect("a Win32 struct is smaller than 4 GiB")
 }
 
@@ -387,14 +391,14 @@ fn fill(slots: &mut [u16], text: &str) {
     }
 }
 
-// F-50: refused while the taskbar is down or the system icon fails to load; TaskbarCreated retries.
-fn add_icon(window: HWND) -> bool {
+// F-50: refused while the taskbar is down or the glyph fails to load; TaskbarCreated retries.
+fn add_icon(window: HWND, state: &State) -> bool {
     let mut icon = icon_data(window);
-    // SAFETY: IDI_APPLICATION is a system icon, so no module handle is needed.
-    let Ok(system_icon) = (unsafe { LoadIconW(None, IDI_APPLICATION) }) else {
+    let Ok(glyph) = TrayIcon::new(window, TaskbarShade::now()) else {
         return false;
     };
-    icon.hIcon = system_icon;
+    icon.hIcon = glyph.handle();
+    state.icon.replace(Some(glyph));
     // SAFETY: `icon` is fully initialised and outlives both calls.
     unsafe {
         let added = Shell_NotifyIconW(NIM_ADD, &raw const icon).as_bool();
@@ -406,6 +410,24 @@ fn add_icon(window: HWND) -> bool {
             );
         }
         added
+    }
+}
+
+/// Gives the shell the glyph for the taskbar as it is now. An icon the shell does not have
+/// is left to `TaskbarCreated`.
+fn redraw_icon(window: HWND, state: &State) {
+    if !state.icon_shown.get() {
+        return;
+    }
+    let Ok(glyph) = TrayIcon::new(window, TaskbarShade::now()) else {
+        return;
+    };
+    let mut icon = icon_data(window);
+    icon.uFlags = NIF_ICON;
+    icon.hIcon = glyph.handle();
+    // SAFETY: `icon` names this window's icon and outlives the call.
+    if unsafe { Shell_NotifyIconW(NIM_MODIFY, &raw const icon) }.as_bool() {
+        state.icon.replace(Some(glyph));
     }
 }
 
@@ -492,8 +514,14 @@ unsafe extern "system" fn window_procedure(
         },
         message if message == state.capture_signal => Some(Request::Capture(HotkeyAction::Region)),
         message if message == state.taskbar_created => {
-            state.icon_shown.set(add_icon(window));
+            state.icon_shown.set(add_icon(window, state));
             None
+        }
+        // D-92: the taskbar's theme, high contrast, its colours or the DPI may have changed.
+        WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_DPICHANGED | WM_DISPLAYCHANGE => {
+            redraw_icon(window, state);
+            // SAFETY: forwarding the notification to the default procedure as well.
+            return unsafe { DefWindowProcW(window, message, wparam, lparam) };
         }
         _ => {
             // SAFETY: forwarding an unhandled message to the default procedure.
