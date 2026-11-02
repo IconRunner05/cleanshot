@@ -29,6 +29,10 @@ use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use crate::Error;
 use crate::struct_size;
 
+mod window;
+
+pub use window::{Pick, pickable_windows, picked};
+
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// How the desktop is copied (CHARTER 5 runtime model: the M0 spike picks one).
@@ -73,13 +77,15 @@ pub fn monitor_under_cursor(captures: &[MonitorImage]) -> Result<RECT, Error> {
 }
 
 fn monitor_containing(captures: &[MonitorImage], point: POINT) -> Option<RECT> {
-    captures
-        .iter()
-        .map(|capture| capture.bounds)
-        .find(|bounds| {
-            (bounds.left..bounds.right).contains(&point.x)
-                && (bounds.top..bounds.bottom).contains(&point.y)
-        })
+    first_holding(captures.iter().map(|capture| capture.bounds), point)
+}
+
+fn first_holding(rectangles: impl IntoIterator<Item = RECT>, point: POINT) -> Option<RECT> {
+    rectangles.into_iter().find(|&bounds| holds(bounds, point))
+}
+
+fn holds(bounds: RECT, point: POINT) -> bool {
+    (bounds.left..bounds.right).contains(&point.x) && (bounds.top..bounds.bottom).contains(&point.y)
 }
 
 /// What the hotkey path copied (D-28), and what each output's duplication did, for `--log`.
