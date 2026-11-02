@@ -93,12 +93,12 @@ impl Drop for InterLoader {
 /// A text style the overlay draws with, sealed with the Fonts it reads Inter through, so no
 /// DirectWrite object leaves it: the Fonts' Drop unregisters Inter's loader, after which a
 /// format drawing Inter reads freed memory (F-05).
-pub(crate) struct Label {
+pub(crate) struct TextStyle {
     format: IDWriteTextFormat,
     fonts: Fonts,
 }
 
-impl Label {
+impl TextStyle {
     /// The same style with its text centred both ways in the box it is drawn into.
     pub(crate) fn centred(self) -> windows::core::Result<Self> {
         // SAFETY: the format is owned by `self`.
@@ -197,8 +197,8 @@ impl Fonts {
     }
 
     /// The family in its semibold weight at `size` pixels, sealed with these fonts.
-    pub(crate) fn label(self, size: f32) -> windows::core::Result<Label> {
-        Ok(Label {
+    pub(crate) fn text_style(self, size: f32) -> windows::core::Result<TextStyle> {
+        Ok(TextStyle {
             format: self.format(size)?,
             fonts: self,
         })

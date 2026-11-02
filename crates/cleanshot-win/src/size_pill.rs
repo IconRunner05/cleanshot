@@ -5,7 +5,7 @@ use windows::Win32::Graphics::Direct2D::{
 };
 
 use crate::palette::Palette;
-use crate::text::{Fonts, Label};
+use crate::text::{Fonts, TextStyle};
 
 // CHARTER 4 tokens, in device-independent pixels.
 const TEXT_SIZE: f32 = 12.0;
@@ -55,7 +55,7 @@ pub(crate) fn belongs_to(selected: RECT, monitor: RECT) -> bool {
 
 /// What one monitor's surface keeps to draw the pill.
 pub(crate) struct Paint {
-    text: Label,
+    text: TextStyle,
     material: ID2D1SolidColorBrush,
     label: ID2D1SolidColorBrush,
     monitor: RECT,
@@ -79,7 +79,7 @@ impl Paint {
             )
         };
         Ok(Self {
-            text: Fonts::inter()?.label(TEXT_SIZE * scale)?,
+            text: Fonts::inter()?.text_style(TEXT_SIZE * scale)?,
             material,
             label,
             monitor,

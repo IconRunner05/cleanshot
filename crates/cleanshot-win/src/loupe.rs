@@ -6,7 +6,7 @@ use windows::Win32::Graphics::Direct2D::{
 };
 
 use crate::palette::Palette;
-use crate::text::{Fonts, Label};
+use crate::text::{Fonts, TextStyle};
 
 /// Physical pixels each captured pixel becomes (F-04's 8x).
 const ZOOM: i32 = 8;
@@ -73,7 +73,7 @@ pub(crate) struct Paint {
     bgra: Vec<u8>,
     monitor: RECT,
     scale: f32,
-    text: Label,
+    text: TextStyle,
     material: ID2D1SolidColorBrush,
     grid: ID2D1SolidColorBrush,
     label: ID2D1SolidColorBrush,
@@ -96,7 +96,7 @@ impl Paint {
             bgra,
             monitor,
             scale,
-            text: Fonts::inter()?.label(CAPTION_TEXT * scale)?,
+            text: Fonts::inter()?.text_style(CAPTION_TEXT * scale)?,
             material: brush(&raw const palette.material)?,
             grid: brush(&raw const palette.hairline)?,
             label: brush(&raw const palette.label)?,

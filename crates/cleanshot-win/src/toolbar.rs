@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::core::Interface;
 
 use crate::palette::Palette;
-use crate::text::{Fonts, Label};
+use crate::text::{Fonts, TextStyle};
 
 pub(crate) mod automation;
 
@@ -162,7 +162,7 @@ pub(crate) struct Paint {
     label: ID2D1SolidColorBrush,
     accent: ID2D1SolidColorBrush,
     on_accent: ID2D1SolidColorBrush,
-    text: Label,
+    text: TextStyle,
     scale: f32,
 }
 
@@ -177,7 +177,7 @@ impl Paint {
     ) -> windows::core::Result<Self> {
         // SAFETY: reading a bitmap's size touches no memory of ours.
         let size = unsafe { frozen.GetSize() };
-        let text = Fonts::inter()?.label(LABEL_SIZE * scale)?.centred()?;
+        let text = Fonts::inter()?.text_style(LABEL_SIZE * scale)?.centred()?;
         // SAFETY: every call takes owned or borrowed COM objects that outlive it.
         unsafe {
             let crop = context.CreateEffect(&CLSID_D2D1Crop)?;
