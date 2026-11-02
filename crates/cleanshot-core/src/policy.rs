@@ -1,4 +1,4 @@
-use crate::settings::{SaveFormat, Settings};
+use crate::settings::{FolderKind, SaveFormat, Settings, folder_kind};
 
 /// One policy value as Windows read it, before it is checked (F-57).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,7 +91,11 @@ impl Policy {
         let settings_hidden = switch(PolicySetting::HideSettings, hide_settings);
         let folder = match save_folder {
             PolicyValue::Missing => Ok(None),
-            PolicyValue::Text(folder) if is_full_folder(&folder) => Ok(Some(folder)),
+            PolicyValue::Text(folder)
+                if matches!(folder_kind(&folder), FolderKind::Drive | FolderKind::Share) =>
+            {
+                Ok(Some(folder))
+            }
             PolicyValue::Text(_) | PolicyValue::Number(_) | PolicyValue::Unreadable => {
                 problems.push(PolicyProblem(PolicySetting::SaveFolder));
                 Err(SavingOff::FolderNotValid)
@@ -136,23 +140,6 @@ impl Policy {
             },
             Saving::Off(_) => settings,
         }
-    }
-}
-
-/// D-86: a drive path (`C:\...`) or a share (`\\server\share...`). Unlike `save_folder` in the
-/// settings file (D-83), a share is allowed: only an administrator can write this key. Device
-/// and long-path forms (`\\.\`, `\\?\`) are not.
-fn is_full_folder(folder: &str) -> bool {
-    let separator = |byte: u8| byte == b'\\' || byte == b'/';
-    match folder.as_bytes() {
-        [drive, b':', slash, ..] => drive.is_ascii_alphabetic() && separator(*slash),
-        [first, second, server, ..] => {
-            separator(*first)
-                && separator(*second)
-                && !separator(*server)
-                && !b"?.".contains(server)
-        }
-        _ => false,
     }
 }
 
@@ -222,6 +209,8 @@ mod tests {
             text(r"\Shots"),
             text(r"\\?\C:\Shots"),
             text(r"\\.\pipe\shots"),
+            text(r"\\fileserver"),
+            text(r"\\fileserver\"),
             Number(1),
             Unreadable,
         ] {

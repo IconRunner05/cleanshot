@@ -212,7 +212,8 @@ impl Settings {
                 .filter(|folder| {
                     !folder.is_empty()
                         && folder.len() <= MAX_SAVE_FOLDER_BYTES
-                        && !names_a_share_or_device(folder)
+                        // C-10 D-83: saving to a share or a device would reach the network or a driver.
+                        && matches!(folder_kind(folder), FolderKind::Drive | FolderKind::Other)
                 })
                 .map(|folder| Some(folder.to_owned()))
         });
@@ -403,11 +404,39 @@ impl std::fmt::Display for Hotkey {
     }
 }
 
-// C-10 D-83: two leading slashes, or Windows' NT prefix, name a share or a device.
-fn names_a_share_or_device(folder: &str) -> bool {
-    let separator = ['\\', '/'];
-    folder.starts_with(separator) && folder[1..].starts_with(separator)
-        || folder.starts_with("\\??\\")
+/// What a folder path names, read as Windows reads it, either slash being a separator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FolderKind {
+    /// `C:\...`
+    Drive,
+    /// `\\server\share...`
+    Share,
+    /// Any other path with two leading separators, such as `\\server` with no share name.
+    Server,
+    /// `\\?\...`, `\\.\...` or `\??\...`
+    Device,
+    /// A relative path, or one from the current drive's root (`\Shots`, `C:Shots`).
+    Other,
+}
+
+pub(crate) fn folder_kind(folder: &str) -> FolderKind {
+    let separator = |byte: &u8| *byte == b'\\' || *byte == b'/';
+    match folder.as_bytes() {
+        [drive, b':', slash, ..] if drive.is_ascii_alphabetic() && separator(slash) => {
+            FolderKind::Drive
+        }
+        [b'\\', b'?', b'?', b'\\', ..] => FolderKind::Device,
+        [first, second, rest @ ..] if separator(first) && separator(second) => match rest {
+            [b'?' | b'.', ..] => FolderKind::Device,
+            _ => match rest.iter().position(separator) {
+                Some(end) if end > 0 && rest.get(end + 1).is_some_and(|b| !separator(b)) => {
+                    FolderKind::Share
+                }
+                Some(_) | None => FolderKind::Server,
+            },
+        },
+        _ => FolderKind::Other,
+    }
 }
 
 fn key(name: &str) -> Option<Key> {
@@ -626,6 +655,8 @@ mod tests {
             "\\/server/share",
             "/\\server\\share",
             "\\??\\UNC\\server\\share",
+            "\\\\fileserver",
+            "//fileserver/",
         ] {
             assert_eq!(
                 read(folder),
