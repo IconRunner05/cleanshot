@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 use cleanshot_core::RgbaImage;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ROUNDED_RECT,
@@ -27,7 +27,7 @@ use super::{
     Button, INSET, RADIUS, STAY, ThumbnailEvent, button_at, buttons, left_after, place, slid,
 };
 use crate::Error;
-use crate::overlay::{bgra, target_and_bitmap};
+use crate::overlay::{bgra, client_point, target_and_bitmap};
 use crate::palette::Palette;
 use crate::text::{Fonts, TextStyle};
 
@@ -299,15 +299,6 @@ fn round_corners(window: HWND, width: i32, height: i32, radius: i32) -> windows:
         }
     }
     Ok(())
-}
-
-/// The client point of a mouse message's `lparam`.
-fn client_point(lparam: LPARAM) -> POINT {
-    let bytes = lparam.0.to_le_bytes();
-    POINT {
-        x: i32::from(i16::from_le_bytes([bytes[0], bytes[1]])),
-        y: i32::from(i16::from_le_bytes([bytes[2], bytes[3]])),
-    }
 }
 
 unsafe extern "system" fn window_procedure(

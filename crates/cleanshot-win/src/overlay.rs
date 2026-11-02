@@ -29,7 +29,7 @@ mod window;
 
 #[cfg(feature = "field-test")]
 pub(crate) use window::WINDOW_CLASS;
-pub(crate) use window::{bgra, target_and_bitmap};
+pub(crate) use window::{bgra, client_point, target_and_bitmap};
 use window::{open_window, register_class};
 
 const DESKTOP_DPI: f32 = 96.0;

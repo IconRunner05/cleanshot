@@ -353,17 +353,22 @@ pub(crate) fn bgra(image: &RgbaImage) -> Vec<u8> {
     bgra
 }
 
-/// The desktop point of a mouse message's `lparam` on a window whose top-left is `origin`.
-fn desktop_point(lparam: LPARAM, origin: POINT) -> POINT {
+/// The client point of a mouse message's `lparam`.
+pub(crate) fn client_point(lparam: LPARAM) -> POINT {
     // Client coordinates are signed 16-bit halves of lparam; captured drags go negative.
     let bytes = lparam.0.to_le_bytes();
-    let (x, y) = (
-        i16::from_le_bytes([bytes[0], bytes[1]]),
-        i16::from_le_bytes([bytes[2], bytes[3]]),
-    );
     POINT {
-        x: i32::from(x) + origin.x,
-        y: i32::from(y) + origin.y,
+        x: i32::from(i16::from_le_bytes([bytes[0], bytes[1]])),
+        y: i32::from(i16::from_le_bytes([bytes[2], bytes[3]])),
+    }
+}
+
+/// The desktop point of a mouse message's `lparam` on a window whose top-left is `origin`.
+fn desktop_point(lparam: LPARAM, origin: POINT) -> POINT {
+    let client = client_point(lparam);
+    POINT {
+        x: client.x + origin.x,
+        y: client.y + origin.y,
     }
 }
 
