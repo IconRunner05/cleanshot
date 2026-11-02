@@ -30,8 +30,9 @@ const PATTERN_CLASS: PCWSTR = w!("CleanshotFieldTestPattern");
 const PATTERN_LEFT: i32 = 200;
 const PATTERN_TOP: i32 = 200;
 const PATTERN_SIDE: i32 = 256;
-/// How long the display may take to reach a scale, and cleanshot.exe to copy the screen.
-const TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the display may take to reach a scale, and cleanshot.exe to copy the screen. P-02 is
+/// judged from the logged copy time, never from this wait.
+const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Why the screen copy at one scale did not hold the pattern pixel for pixel.
 #[derive(Debug, thiserror::Error)]

@@ -55,27 +55,30 @@ pub enum ToolbarMissing {
     },
 }
 
+// A debug build on a cold CI runner can take over 10 s to its first frame. No budget is judged
+// here, so the wait only bounds a hang.
+const PATIENCE: Duration = Duration::from_secs(60);
+
 /// The `kind` controls, in order, that UI Automation reports once a toolbar named
 /// `toolbar` appears under this process's windows (F-05, F-58). The walk starts when `shown`
 /// says the window was shown, as no user reaches a toolbar before that, and goes on every
-/// 250 ms for `patience`; `start` dates the times in the error. Call it from a thread that
+/// 250 ms for up to a minute; `start` dates the times in the error. Call it from a thread that
 /// owns no window: a window answers UI Automation on its own thread, so a walk from that
 /// thread waits on itself.
 ///
 /// # Errors
 ///
-/// [`ToolbarMissing`] if the window was not shown, or the toolbar not found, within `patience`.
+/// [`ToolbarMissing`] if the window was not shown, or the toolbar not found, within a minute.
 pub fn wait_for_toolbar(
     toolbar: &str,
     kind: ControlKind,
     start: Instant,
     shown: &Receiver<Instant>,
-    patience: Duration,
 ) -> Result<Vec<Control>, ToolbarMissing> {
     let shown = shown
-        .recv_timeout(patience)
+        .recv_timeout(PATIENCE)
         .map_err(ToolbarMissing::NotShown)?;
-    let deadline = Instant::now() + patience;
+    let deadline = Instant::now() + PATIENCE;
     let mut walks = 0;
     let mut window_seen = None;
     loop {

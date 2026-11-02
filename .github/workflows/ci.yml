@@ -288,9 +288,17 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
           # Portable mode (C-05). Ctrl+Shift+7 is the key the field test presses.
           printf 'after_capture = "copy"\nshow_thumbnail = false\n[hotkeys]\nfull_screen = "Ctrl+Shift+7"\n' > "$run/cleanshot.toml"
+          # The hotkey works once the tray is ready, which the exe logs as P-03. A press before
+          # that is lost, so wait for the line, not a fixed time; the log starts empty (C-23).
           start() {
+            rm -f "$run/cleanshot.log"
             "$run/cleanshot.exe" --log &
-            sleep 3
+            for _ in $(seq 120); do
+              grep -q " perf P-03 " "$run/cleanshot.log" 2>/dev/null && return
+              sleep 0.5
+            done
+            echo "FAIL: cleanshot.exe logged no P-03 line within 60 s"
+            status=1
           }
           # C-14: a launch while the last exe lives would only signal it and exit.
           stop() {

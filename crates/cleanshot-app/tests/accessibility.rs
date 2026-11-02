@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::exit;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use cleanshot_core::{DeliveryError, RgbaImage};
 use cleanshot_win::accessibility::{ControlKind, wait_for_toolbar};
@@ -44,15 +44,13 @@ const WALKS: [(&str, &str, ControlKind, &[&str]); 2] = [
     ),
 ];
 
-const PATIENCE: Duration = Duration::from_secs(10);
-
 fn main() {
     let start = Instant::now();
     let (first_frame, drawn) = mpsc::channel();
     thread::spawn(move || {
         let mut failed = false;
         for (test, toolbar, kind, expected) in WALKS {
-            let walked = wait_for_toolbar(toolbar, kind, start, &drawn, PATIENCE).map(|controls| {
+            let walked = wait_for_toolbar(toolbar, kind, start, &drawn).map(|controls| {
                 controls
                     .into_iter()
                     .map(|control| control.name)

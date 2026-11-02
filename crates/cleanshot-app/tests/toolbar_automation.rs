@@ -28,7 +28,7 @@ fn main() {
     let (chosen, choice) = mpsc::channel();
     let (painted, shown) = mpsc::channel();
     thread::spawn(move || {
-        let verdict = wait_for_toolbar("Capture", ControlKind::Button, start, &shown, PATIENCE)
+        let verdict = wait_for_toolbar("Capture", ControlKind::Button, start, &shown)
             .map_err(|missing| format!("{missing:?}"))
             .and_then(|buttons| {
                 let buttons: Vec<String> = buttons.into_iter().map(|button| button.name).collect();

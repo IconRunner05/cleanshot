@@ -19,8 +19,6 @@ const SELECTED: RECT = RECT {
     right: 300,
     bottom: 200,
 };
-const PATIENCE: Duration = Duration::from_secs(10);
-
 fn main() {
     let start = Instant::now();
     let reason = delivery_notice(&Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly)));
@@ -28,7 +26,7 @@ fn main() {
     let (chosen, choice) = mpsc::channel();
     let (painted, shown) = mpsc::channel();
     thread::spawn(move || {
-        let verdict = wait_for_toolbar("Capture", ControlKind::Button, start, &shown, PATIENCE)
+        let verdict = wait_for_toolbar("Capture", ControlKind::Button, start, &shown)
             .map_err(|missing| format!("{missing:?}"))
             .and_then(|buttons| {
                 let off: Vec<_> = buttons
