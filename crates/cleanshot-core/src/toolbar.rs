@@ -18,11 +18,12 @@ pub const TOOLBAR_CONTROLS: [ToolbarControl; 4] = [
 
 impl ToolbarControl {
     /// The control `step` places after this one in Tab order, wrapping at either end and
-    /// passing over a control that is `off` (F-57). Cancel is never off.
+    /// passing over a control that is `off` (F-57). `off` is never asked about Cancel, so a
+    /// step always ends, on Cancel at the latest.
     #[must_use]
     pub fn step(self, step: i32, off: impl Fn(Self) -> bool) -> Self {
         let mut next = self.moved(step);
-        while off(next) {
+        while next != Self::Cancel && off(next) {
             next = next.moved(step.signum());
         }
         next
@@ -54,6 +55,18 @@ mod tests {
         let on = |_| false;
         assert_eq!(ToolbarControl::Cancel.step(1, on), ToolbarControl::Copy);
         assert_eq!(ToolbarControl::Copy.step(-1, on), ToolbarControl::Cancel);
+    }
+
+    #[test]
+    fn f57_with_every_other_control_off_tab_lands_on_cancel() {
+        let off = |control| {
+            assert_ne!(control, ToolbarControl::Cancel, "Cancel is never off");
+            true
+        };
+        for control in TOOLBAR_CONTROLS {
+            assert_eq!(control.step(1, off), ToolbarControl::Cancel);
+            assert_eq!(control.step(-1, off), ToolbarControl::Cancel);
+        }
     }
 
     #[test]
