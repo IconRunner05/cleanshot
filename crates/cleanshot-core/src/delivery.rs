@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use crate::policy::SavingOff;
+
 /// Where a finished screenshot goes, from the overlay or the editor (F-20, F-21, F-40).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Output {
@@ -33,6 +35,10 @@ pub enum DeliveryError {
     TextNotDrawn,
     #[error("the Save As dialog did not open")]
     NoSaveDialog,
+    #[error("the organisation's policy turns saving off: {0:?}")]
+    SavingOff(SavingOff),
+    #[error("the organisation's policy saves only in {folder:?}")]
+    OutsidePolicyFolder { folder: String },
 }
 
 /// The sentence the user sees after a Copy, Save or Save As, from the overlay or the editor (D-48): what
@@ -64,6 +70,15 @@ pub fn delivery_notice(outcome: &Result<Delivered, DeliveryError>) -> String {
             "The text could not be drawn, so nothing was copied or saved".to_owned()
         }
         Err(DeliveryError::NoSaveDialog) => "The Save As dialog did not open".to_owned(),
+        Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly)) => {
+            "Your organisation allows copying only. Use Copy.".to_owned()
+        }
+        Err(DeliveryError::SavingOff(SavingOff::FolderNotValid)) => {
+            "Your organisation's save folder is not valid, so saving is off. Use Copy.".to_owned()
+        }
+        Err(DeliveryError::OutsidePolicyFolder { folder }) => {
+            format!("Your organisation saves screenshots only in {folder}. Choose a file there.")
+        }
     }
 }
 
@@ -111,6 +126,25 @@ mod tests {
             height: 9,
         };
         assert!(notice(Err(large)).contains("70000x9"));
+    }
+
+    #[test]
+    fn f57_a_policy_refusal_says_why_and_what_to_do() {
+        let notice = |error| delivery_notice(&Err(error));
+        assert_eq!(
+            notice(DeliveryError::SavingOff(SavingOff::ClipboardOnly)),
+            "Your organisation allows copying only. Use Copy."
+        );
+        assert_eq!(
+            notice(DeliveryError::SavingOff(SavingOff::FolderNotValid)),
+            "Your organisation's save folder is not valid, so saving is off. Use Copy."
+        );
+        assert_eq!(
+            notice(DeliveryError::OutsidePolicyFolder {
+                folder: r"\\fileserver\screenshots".to_owned()
+            }),
+            r"Your organisation saves screenshots only in \\fileserver\screenshots. Choose a file there."
+        );
     }
 
     #[test]
