@@ -63,10 +63,10 @@ const PATIENCE: Duration = Duration::from_secs(60);
 
 /// The `kind` controls, in order, that UI Automation reports once a `container` control named
 /// `name` (such as the toolbar named Capture) appears under this process's windows (F-05,
-/// F-58). The walk starts when `shown` says the window was shown, as no user reaches it before that, and goes on every
-/// 250 ms for up to a minute; `start` dates the times in the error. Call it from a thread that
-/// owns no window: a window answers UI Automation on its own thread, so a walk from that
-/// thread waits on itself.
+/// F-58). The walk starts when `shown` says the window was shown, as no user reaches it before
+/// that, and goes on every 250 ms for up to a minute; `start` dates the times in the error.
+/// Call it from a thread that owns no window: a window answers UI Automation on its own
+/// thread, so a walk from that thread waits on itself.
 ///
 /// # Errors
 ///
