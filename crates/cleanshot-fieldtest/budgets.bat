@@ -22,10 +22,19 @@ echo Smart App Control state: > sac.txt
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState >> sac.txt 2>&1
 
 rem The waits are pings: timeout refuses the redirected input of release.yml's trial run.
-echo [1/4] Idle start: P-03, P-04, P-05
+echo [0/4] Warm-up start, not measured
+rem D-97: the first start of a new exe waits for antivirus to scan it; P-03 is Cleanshot's own start.
 type nul > cleanshot.toml
 start "" cleanshot.exe --log
-ping -n 16 127.0.0.1 >nul
+call :wait_for "perf P-03 " 120
+taskkill /IM cleanshot.exe /F >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+del /q cleanshot.log 2>nul
+
+echo [1/4] Idle start: P-03, P-04, P-05
+start "" cleanshot.exe --log
+rem P-04 and P-05 are logged 10 s after the tray is ready, however long the start took.
+call :wait_for "perf P-05 " 120
 taskkill /IM cleanshot.exe /F >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 move /y cleanshot.log idle.log >nul 2>&1
@@ -58,3 +67,13 @@ echo.
 echo Done. Attach this file to a GitHub issue:
 echo %~dp0results.txt
 pause
+exit /b 0
+
+:wait_for
+set waited=0
+:wait_for_next
+findstr /c:%1 cleanshot.log >nul 2>&1 && exit /b 0
+if %waited% geq %2 exit /b 1
+set /a waited+=1
+ping -n 2 127.0.0.1 >nul
+goto wait_for_next
