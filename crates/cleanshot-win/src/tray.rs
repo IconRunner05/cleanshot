@@ -127,13 +127,8 @@ impl Tray {
 
         let hotkeys = hotkeys
             .iter()
-            .zip(1..)
-            .map(|(&(request, hotkey), id)| {
-                let (modifiers, key) = virtual_key(hotkey);
-                // SAFETY: `window` was created above on this thread.
-                let registered = unsafe { RegisterHotKey(Some(window), id, modifiers, key) };
-                (request, hotkey, registered.map_err(Error::HotkeyTaken))
-            })
+            .enumerate()
+            .map(|(index, &(request, hotkey))| (request, hotkey, register(window, index, hotkey)))
             .collect();
         let tray = Self { window, hotkeys };
         tray.state().icon_shown.set(add_icon(window));
@@ -145,6 +140,36 @@ impl Tray {
         self.hotkeys
             .iter()
             .map(|(request, hotkey, registered)| (*request, *hotkey, registered.as_ref().copied()))
+    }
+
+    /// Moves each request in `wanted` to its new hotkey (F-55). Every changed hotkey is
+    /// released before any is registered, so two requests can swap keys. A request whose new
+    /// hotkey another program holds goes back to its old one, and is returned.
+    pub fn set_hotkeys(&mut self, wanted: &[(Request, Hotkey)]) -> Vec<Request> {
+        let moves: Vec<(usize, Hotkey)> = self
+            .hotkeys
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (request, old, _))| {
+                let &(_, new) = wanted.iter().find(|(asked, _)| asked == request)?;
+                (new != *old).then_some((index, new))
+            })
+            .collect();
+        for &(index, _) in &moves {
+            self.release(index);
+        }
+        let mut taken = Vec::new();
+        for (index, new) in moves {
+            let (request, old, _) = self.hotkeys[index];
+            self.hotkeys[index] = if register(self.window, index, new).is_ok() {
+                (request, new, Ok(()))
+            } else {
+                // Only a held key fails RegisterHotKey here, and `taken` reports it.
+                taken.push(request);
+                (request, old, register(self.window, index, old))
+            };
+        }
+        taken
     }
 
     /// Whether the shell took the icon at the last try: at creation or when the taskbar last
@@ -175,6 +200,15 @@ impl Tray {
         }
     }
 
+    /// Unregisters the hotkey at `index` if Windows registered it.
+    fn release(&self, index: usize) {
+        if self.hotkeys[index].2.is_ok() {
+            // SAFETY: the hotkey was registered on this window, which is still alive.
+            let unregistered = unsafe { UnregisterHotKey(Some(self.window), hotkey_id(index)) };
+            debug_assert!(unregistered.is_ok(), "a registered hotkey unregisters");
+        }
+    }
+
     fn state(&self) -> &State {
         // SAFETY: Tray::create stored the State before returning, and WM_NCDESTROY frees it
         // only when Drop destroys the window, so it lives as long as `self`.
@@ -184,12 +218,8 @@ impl Tray {
 
 impl Drop for Tray {
     fn drop(&mut self) {
-        for ((_, _, registered), id) in self.hotkeys.iter().zip(1..) {
-            if registered.is_ok() {
-                // SAFETY: the hotkey was registered on this window, which is still alive.
-                let unregistered = unsafe { UnregisterHotKey(Some(self.window), id) };
-                debug_assert!(unregistered.is_ok(), "a registered hotkey unregisters");
-            }
+        for index in 0..self.hotkeys.len() {
+            self.release(index);
         }
         let icon = icon_data(self.window);
         // SAFETY: `icon` names this window's icon. Deleting an icon the shell lost is harmless,
@@ -240,6 +270,18 @@ fn signal_capture(window: HWND) -> Result<(), Error> {
     // SAFETY: posting copies no memory; the window may close first, which fails the post.
     unsafe { PostMessageW(Some(window), capture_signal(), WPARAM(0), LPARAM(0)) }
         .map_err(Error::NoRunningTray)
+}
+
+/// Registers `hotkey` on `window` as the hotkey at `index`, whose `WM_HOTKEY` id is one more.
+fn register(window: HWND, index: usize, hotkey: Hotkey) -> Result<(), Error> {
+    let (modifiers, key) = virtual_key(hotkey);
+    // SAFETY: `window` is the tray's live window, on this thread.
+    unsafe { RegisterHotKey(Some(window), hotkey_id(index), modifiers, key) }
+        .map_err(Error::HotkeyTaken)
+}
+
+fn hotkey_id(index: usize) -> i32 {
+    i32::try_from(index + 1).expect("a tray has a handful of hotkeys")
 }
 
 /// The `RegisterHotKey` modifiers and virtual key for `hotkey`. Auto-repeat never fires it
@@ -574,6 +616,38 @@ mod tests {
             outcomes[1],
             (Request::Capture(HotkeyAction::FullScreen), _, Ok(()))
         ));
+    }
+
+    #[test]
+    fn f55_changed_hotkeys_can_swap_and_one_another_program_holds_keeps_its_old_key() {
+        let (first, second, held) = (
+            hotkey("Ctrl+Alt+F19"),
+            hotkey("Ctrl+Alt+F20"),
+            hotkey("Ctrl+Alt+F21"),
+        );
+        let (region, screen) = (
+            Request::Capture(HotkeyAction::Region),
+            Request::Capture(HotkeyAction::FullScreen),
+        );
+        let in_use = |key| {
+            let probe = Tray::create(&[(region, key)], |_| {}).expect("the probe tray");
+            probe
+                .hotkeys()
+                .all(|(_, _, registered)| registered.is_err())
+        };
+        let mut tray =
+            Tray::create(&[(region, first), (screen, second)], |_| {}).expect("the tray");
+        let swapped = tray.set_hotkeys(&[(region, second), (screen, first)]);
+        assert_eq!(swapped, []);
+        let now: Vec<_> = tray.hotkeys().collect();
+        assert!(matches!(now[0], (_, key, Ok(())) if key == second));
+        assert!(matches!(now[1], (_, key, Ok(())) if key == first));
+
+        let other = Tray::create(&[(region, held)], |_| {}).expect("the other program");
+        assert_eq!(tray.set_hotkeys(&[(region, held)]), [region]);
+        assert!(matches!(tray.hotkeys().next(), Some((_, key, Ok(()))) if key == second));
+        assert!(in_use(second), "the region keeps its old key registered");
+        drop(other);
     }
 
     #[test]
