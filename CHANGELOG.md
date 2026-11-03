@@ -11,6 +11,9 @@ section exists.
 
 ### Changed
 
+- The editor opens sized round the capture at 100%, with the toolbar above it, instead of
+  at 80% of the primary display (F-23). A capture too large for the screen opens fitted to
+  it. The capture, fitted or not, now sits below the toolbar instead of under it.
 - Esc in the editor goes back to the Select tool and clears the selection, from any tool
   (F-30). With Select already picked and nothing selected it does nothing.
 

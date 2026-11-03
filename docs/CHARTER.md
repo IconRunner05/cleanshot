@@ -119,7 +119,7 @@ The capture UI follows macOS Sequoia's Screenshot tool: a dimmed freeze-frame, a
 | F-20 | Copy | M1 | Clipboard gets `CF_DIBV5` and a registered `PNG` format. Pastes correctly into Outlook, Teams, Word, Paint and Edge (manual checklist). |
 | F-21 | Save | M1 | Writes to the configured folder (default: Pictures\Screenshots) using template `Screenshot {date} {time}`. PNG by default; JPG (quality 90) and BMP optional. Obeys C-15. Write is atomic (temp name in the same folder, then rename). |
 | F-22 | Save As | M1 | Ctrl+Shift+S opens the native save dialog. Choosing an existing file asks before replacing it; on yes the file is replaced atomically. |
-| F-23 | Edit | M2 | Opens the editor with the capture. The overlay closes first. |
+| F-23 | Edit | M2 | Opens the editor with the capture, sized round it at 100% where it fits (D-110). The overlay closes first. |
 | F-24 | Identical output | M2 | Copy/Save from the overlay and from the editor run the same export code; a golden test proves byte-identical PNG for the same document. |
 
 ### Editor

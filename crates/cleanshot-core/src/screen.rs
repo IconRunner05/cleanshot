@@ -47,6 +47,14 @@ impl Rect {
     }
 }
 
+/// The monitor a capture came from (D-110): its work area on the desktop, and its scale in
+/// physical pixels per DIP.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Monitor {
+    pub work_area: Rect,
+    pub scale: f32,
+}
+
 /// The first of `rectangles` holding `point`.
 #[must_use]
 pub fn first_holding(rectangles: impl IntoIterator<Item = Rect>, point: Point) -> Option<Rect> {

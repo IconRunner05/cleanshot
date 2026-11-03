@@ -62,7 +62,7 @@ pub fn bench(
     let start = Instant::now();
     // The bench runs from cleanshot-fieldtest, a console tool whose stderr is read.
     let log = Rc::new(|event| eprintln!("{event}"));
-    let opened = open_with(cx, document, None, log, |window, cx| {
+    let opened = open_with(cx, document, None, None, log, |window, cx| {
         let Some(on_done) = on_done.take() else {
             return;
         };

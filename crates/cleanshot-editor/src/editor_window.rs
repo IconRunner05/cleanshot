@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
-    KeyAction, Looks, Modifiers, Output, PointF, Press, Property, PropertyError, RgbaImage,
-    Setting, ShapeId, Start, TextBlockError, TextKey, TextOrigin, Tool, action_for_key,
+    KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError,
+    RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextOrigin, Tool, action_for_key,
     delivery_notice, save_as_notice,
 };
 use gpui::{
@@ -21,7 +21,7 @@ use gpui::{
 use crate::canvas::{
     OnPointer, Overlay, Pointer, RedactionPreviews, document_canvas, render_image,
 };
-use crate::placement::Placement;
+use crate::placement::{MIN_WINDOW, Placement, opening_size};
 use crate::strip::property_strip;
 use crate::text::register_inter;
 use crate::text_box::TextBox;
@@ -529,19 +529,26 @@ pub fn ask_save_path<L: Fn(&'static str) + 'static>(
 /// An open editor window. Dropping it leaves the window open; [`EditorWindow::close`] closes it.
 pub struct EditorWindow(WindowHandle<EditorView>);
 
-/// Opens an editor window on `capture`, with no shapes yet (F-23). Ctrl+C and Ctrl+S hand the
-/// document to `deliver` and show what it reports (F-40, D-48). Ctrl+Shift+S opens the save
-/// dialog on the folder and file name `save_as_start` gives at that moment, or shows why it
-/// cannot, and hands the document and the confirmed path to `save_to` (F-22). `on_first_frame`
-/// gets the moment the frame after the window's first draw begins (P-07), as the bench times it.
+/// Opens an editor window on `capture`, with no shapes yet (F-23), sized round it and centred
+/// on `monitor`, the one it came from, or on the primary display for `None` (D-110). Ctrl+C
+/// and Ctrl+S hand the document to `deliver` and show what it reports (F-40, D-48).
+/// Ctrl+Shift+S opens the save dialog on the folder and file name `save_as_start` gives at
+/// that moment, or shows why it cannot, and hands the document and the confirmed path to
+/// `save_to` (F-22). `on_first_frame` gets the moment the frame after the window's first draw
+/// begins (P-07), as the bench times it.
 /// What fails out of sight, such as a redaction preview, goes to `log`.
 ///
 /// # Errors
 ///
 /// [`Error::WindowOpen`] if the platform cannot create the window.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a separate hook the app wires; a struct of them would only be unpacked here"
+)]
 pub fn open(
     cx: &mut App,
     capture: RgbaImage,
+    monitor: Option<Monitor>,
     deliver: impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static,
     save_as_start: impl Fn() -> Result<(PathBuf, String), DeliveryError> + 'static,
     save_to: impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static,
@@ -557,6 +564,7 @@ pub fn open(
     open_with(
         cx,
         document,
+        monitor,
         Some(outputs),
         Rc::new(log),
         move |window, _| {
@@ -570,12 +578,13 @@ pub fn open(
 pub(crate) fn open_with(
     cx: &mut App,
     document: Document,
+    monitor: Option<Monitor>,
     outputs: Option<Outputs>,
     log: Log,
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
     register_inter(cx)?;
-    let options = window_options(cx);
+    let options = window_options(cx, document.base(), monitor);
     cx.open_window(options, |window, cx| {
         on_open(window, cx);
         cx.new(|cx| EditorView::new(document, outputs, log, window, cx))
@@ -642,25 +651,48 @@ impl EditorWindow {
     }
 }
 
-/// D-41: the editor opens centred, filling most of the primary display, under the native
-/// title bar so the Windows caption buttons and Snap behave as everywhere else (CHARTER 4).
-fn window_options(cx: &App) -> WindowOptions {
-    let window_size = cx
-        .primary_display()
-        .map_or(size(px(1280.0), px(800.0)), |display| {
-            display.visible_bounds().size.map(|side| side * 0.8)
-        });
+/// D-110: the editor opens sized round `image` and centred on `monitor`'s display, under the
+/// native title bar so the Windows caption buttons and Snap behave as everywhere else
+/// (CHARTER 4). With no monitor, or none GPUI knows, it opens on the primary display, sized
+/// as at 100% scaling.
+fn window_options(cx: &App, image: &RgbaImage, monitor: Option<Monitor>) -> WindowOptions {
+    let display = monitor
+        .and_then(|monitor| {
+            cx.displays()
+                .into_iter()
+                .find(|display| shows(display.visible_bounds().origin, monitor))
+        })
+        .or_else(|| cx.primary_display());
+    let display_id = display.as_ref().map(|display| display.id());
+    let work_area = display.map_or(size(px(1280.0), px(800.0)), |display| {
+        display.visible_bounds().size
+    });
+    let scale = monitor.map_or(1.0, |monitor| monitor.scale);
+    let window_size = opening_size(image, scale, work_area);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
+            display_id,
             window_size,
             cx,
         ))),
+        display_id,
         titlebar: Some(TitlebarOptions {
             title: Some("Cleanshot".into()),
             ..TitlebarOptions::default()
         }),
-        window_min_size: Some(size(px(480.0), px(320.0))),
+        window_min_size: Some(MIN_WINDOW),
         ..WindowOptions::default()
     }
+}
+
+/// Whether a display whose work area starts at `origin`, in DIPs, is `monitor`: GPUI places a
+/// display's work area at its physical corner divided by its scale.
+fn shows(origin: Point<Pixels>, monitor: Monitor) -> bool {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "desktop coordinates are far below 2^24, where f32 stops being exact"
+    )]
+    let near =
+        |at: Pixels, physical: i32| (f32::from(at) - physical as f32 / monitor.scale).abs() < 0.5;
+    near(origin.x, monitor.work_area.left) && near(origin.y, monitor.work_area.top)
 }

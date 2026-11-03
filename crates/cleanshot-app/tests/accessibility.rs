@@ -78,6 +78,7 @@ fn main() {
         let opened = cleanshot_editor::open(
             cx,
             capture,
+            None,
             |_, _| Err(DeliveryError::ClipboardBusy),
             || Ok((PathBuf::new(), String::new())),
             |_, _| Err(DeliveryError::ClipboardBusy),

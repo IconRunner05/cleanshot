@@ -480,6 +480,7 @@ fn open_editor(cx: &mut cleanshot_editor::App, image: RgbaImage, session: &Rc<Se
     if let Err(error) = cleanshot_editor::open(
         cx,
         image,
+        None,
         editor_deliver(session),
         editor_save_as_start(session),
         editor_save_to(session),
