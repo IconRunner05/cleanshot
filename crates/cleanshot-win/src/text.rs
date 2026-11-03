@@ -655,15 +655,15 @@ mod tests {
         history
             .apply(Command::Add {
                 shape,
-                style: Style {
-                    color: Color {
+                style: Style::new(
+                    Color {
                         r: 0,
                         g: 0,
                         b: 0,
                         a: 255,
                     },
-                    stroke_width: 1.0,
-                },
+                    1.0,
+                ),
             })
             .expect("adding a shape always applies");
         history.document().clone()

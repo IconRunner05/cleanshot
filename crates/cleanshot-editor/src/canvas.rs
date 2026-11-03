@@ -665,15 +665,15 @@ mod tests {
         let mode = RedactMode::Blur;
         let add = || Command::Add {
             shape: Shape::Redact { rect, mode },
-            style: Style {
-                color: Color {
+            style: Style::new(
+                Color {
                     r: 0,
                     g: 0,
                     b: 0,
                     a: 255,
                 },
-                stroke_width: 1.0,
-            },
+                1.0,
+            ),
         };
         let mut history = History::new(Document::new(Arc::new(image)));
         history.apply(add()).unwrap();

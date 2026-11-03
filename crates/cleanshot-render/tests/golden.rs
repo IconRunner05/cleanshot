@@ -3,8 +3,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, GlyphMask, History, PointF, RectF, RedactMode, RgbaImage,
-    Shape, Style, TextBlock, TextMasks,
+    Color, Command, Document, Fill, GlyphMask, History, Look, PointF, Property, RectF, RedactMode,
+    RgbaImage, Shape, Style, TextBlock, TextMasks, Tool,
 };
 use cleanshot_render::Format;
 
@@ -104,10 +104,7 @@ fn gradient() -> RgbaImage {
 fn add(shape: Shape, color: Color, stroke_width: f32) -> Command {
     Command::Add {
         shape,
-        style: Style {
-            color,
-            stroke_width,
-        },
+        style: Style::new(color, stroke_width),
     }
 }
 
@@ -156,6 +153,7 @@ fn scenes() -> Vec<(&'static str, Vec<Command>)> {
         ("highlight_over_shapes", highlight_over_shapes()),
         ("redact", redact()),
         ("crop", crop()),
+        ("shadows", shadows()),
     ]
 }
 
@@ -296,7 +294,11 @@ fn crop() -> Vec<Command> {
 type Step = (Command, Option<Vec<GlyphMask>>);
 
 fn text_scenes() -> Vec<(&'static str, Vec<Step>)> {
-    vec![("text", text()), ("text_redact_crop", text_redact_crop())]
+    vec![
+        ("text", text()),
+        ("text_redact_crop", text_redact_crop()),
+        ("text_shadow", text_shadow()),
+    ]
 }
 
 fn text_shape(color: Color) -> Command {
@@ -356,4 +358,71 @@ fn text_redact_crop() -> Vec<Step> {
         (text_shape(WHITE), Some(vec![solid(28, 36, 20, 6, None)])),
         (Command::SetCrop(Some(rect(5.0, 5.0, 60.0, 50.0))), None),
     ]
+}
+
+/// `shape` in `color` and `stroke_width`, casting a shadow: only a look can give it one (D-114).
+fn shadowed(shape: Shape, color: Color, stroke_width: f32, fill: Fill) -> Command {
+    let (shape, style) = Look::default_for(Tool::drawing(&shape))
+        .with(Property::Color(color))
+        .and_then(|look| look.with(Property::StrokeWidth(stroke_width)))
+        .and_then(|look| look.with(Property::Fill(fill)))
+        .and_then(|look| look.with(Property::Shadow(true)))
+        .unwrap()
+        .dress(shape);
+    Command::Add { shape, style }
+}
+
+fn shadows() -> Vec<Command> {
+    vec![
+        shadowed(
+            Shape::Line {
+                from: point(8.0, 8.0),
+                to: point(40.0, 8.0),
+            },
+            WHITE,
+            3.0,
+            Fill::Hollow,
+        ),
+        shadowed(
+            Shape::Arrow {
+                from: point(52.0, 24.0),
+                to: point(88.0, 6.0),
+            },
+            RED,
+            3.0,
+            Fill::Hollow,
+        ),
+        shadowed(
+            Shape::Rect {
+                rect: rect(8.0, 22.0, 32.0, 20.0),
+                fill: Fill::Hollow,
+            },
+            RED,
+            2.0,
+            Fill::Hollow,
+        ),
+        shadowed(
+            Shape::Ellipse {
+                rect: rect(52.0, 34.0, 32.0, 22.0),
+                fill: Fill::Solid,
+            },
+            WHITE,
+            1.0,
+            Fill::Solid,
+        ),
+        shadowed(
+            Shape::Highlight(rect(8.0, 48.0, 32.0, 10.0)),
+            YELLOW,
+            1.0,
+            Fill::Hollow,
+        ),
+    ]
+}
+
+fn text_shadow() -> Vec<Step> {
+    let block = TextBlock::new(point(0.0, 0.0), "synthetic".into(), 12.0, 1.0).unwrap();
+    vec![(
+        shadowed(Shape::Text(block), WHITE, 1.0, Fill::Hollow),
+        Some(vec![solid(10, 10, 30, 12, None), ramp(50, 30, 30, 16)]),
+    )]
 }

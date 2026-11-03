@@ -283,11 +283,44 @@ pub const SPOTLIGHT_DIM: Color = Color {
     a: 153,
 };
 
-/// The colour a shape is drawn in, and its stroke width in image pixels.
+/// The colour a shape is drawn in, its stroke width in image pixels, and whether it casts a
+/// shadow (D-114).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
     pub color: Color,
     pub stroke_width: f32,
+    // D-114: only Look::dress turns it on, and only for a shape that casts a shadow.
+    shadow: bool,
+}
+
+// D-114: a shape's shadow is smaller than the image frame's (D-80).
+impl Style {
+    /// How far, in image pixels, a shape's shadow falls below it.
+    pub const SHADOW_OFFSET: u32 = 2;
+    /// The shadow's blur radius in image pixels: twice its standard deviation.
+    pub const SHADOW_BLUR: u32 = 8;
+    /// The shadow's opacity where the shape fully covers it: black at 30%.
+    pub const SHADOW_ALPHA: f32 = 0.3;
+
+    /// A style casting no shadow.
+    #[must_use]
+    pub const fn new(color: Color, stroke_width: f32) -> Self {
+        Self {
+            color,
+            stroke_width,
+            shadow: false,
+        }
+    }
+
+    /// Whether the shape casts a shadow.
+    #[must_use]
+    pub fn shadow(&self) -> bool {
+        self.shadow
+    }
+
+    pub(crate) fn with_shadow(self, shadow: bool) -> Self {
+        Self { shadow, ..self }
+    }
 }
 
 /// Straight (not premultiplied) alpha.

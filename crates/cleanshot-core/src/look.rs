@@ -27,6 +27,7 @@ pub struct Look {
     fill: Fill,
     redact: RedactMode,
     text_size: f32,
+    shadow: bool,
 }
 
 impl Look {
@@ -34,10 +35,7 @@ impl Look {
     #[must_use]
     pub fn default_for(tool: Tool) -> Self {
         let style = match tool {
-            Tool::Highlighter => Style {
-                color: HIGHLIGHTER_YELLOW,
-                stroke_width: 0.0,
-            },
+            Tool::Highlighter => Style::new(HIGHLIGHTER_YELLOW, 0.0),
             Tool::Select
             | Tool::Arrow
             | Tool::Line
@@ -49,17 +47,21 @@ impl Look {
             | Tool::Text
             | Tool::Spotlight
             | Tool::Step
-            | Tool::Bubble => Style {
-                color: ANNOTATION_RED,
-                stroke_width: 3.0,
-            },
+            | Tool::Bubble => Style::new(ANNOTATION_RED, 3.0),
         };
         Self {
             style,
             fill: Fill::Hollow,
             redact: RedactMode::Pixelate,
             text_size: DEFAULT_TEXT_SIZE,
+            shadow: false,
         }
+    }
+
+    /// Whether this look's shapes cast a shadow, where the shape can cast one (D-114).
+    #[must_use]
+    pub fn shadow(&self) -> bool {
+        self.shadow
     }
 
     #[must_use]
@@ -85,10 +87,14 @@ impl Look {
         self.redact
     }
 
-    /// `shape` drawn in this look: in its style, and with its fill, redaction or text size where
-    /// `shape` has one. New shapes and restyled ones both take their look through here.
+    /// `shape` drawn in this look: in its style, and with its fill, redaction, text size or
+    /// shadow where `shape` has one. New shapes and restyled ones both take their look through
+    /// here, and nothing else gives a shape a shadow (D-114).
     #[must_use]
     pub fn dress(&self, shape: Shape) -> (Shape, Style) {
+        let style = self
+            .style
+            .with_shadow(self.shadow && casts_shadow(Tool::drawing(&shape)));
         let shape = match shape {
             Shape::Rect { rect, .. } => Shape::Rect {
                 rect,
@@ -113,7 +119,7 @@ impl Look {
             | Shape::Highlight(_)
             | Shape::Spotlight(_)) => shape,
         };
-        (shape, self.style)
+        (shape, style)
     }
 
     fn dress_text(&self, block: &TextBlock) -> TextBlock {
@@ -140,17 +146,11 @@ impl Look {
         };
         Ok(match property {
             Property::Color(color) => Self {
-                style: Style {
-                    color,
-                    ..self.style
-                },
+                style: Style::new(color, self.style.stroke_width),
                 ..self
             },
             Property::StrokeWidth(width) => Self {
-                style: Style {
-                    stroke_width: positive(width)?,
-                    ..self.style
-                },
+                style: Style::new(self.style.color, positive(width)?),
                 ..self
             },
             Property::Fill(fill) => Self { fill, ..self },
@@ -159,6 +159,7 @@ impl Look {
                 text_size: positive(size)?,
                 ..self
             },
+            Property::Shadow(shadow) => Self { shadow, ..self },
         })
     }
 
@@ -166,7 +167,8 @@ impl Look {
     /// from `rest`.
     fn of(entry: &ShapeEntry, rest: Self) -> Self {
         let look = Self {
-            style: entry.style,
+            style: entry.style.with_shadow(false),
+            shadow: entry.style.shadow(),
             ..rest
         };
         match &entry.shape {
@@ -207,6 +209,7 @@ pub enum Property {
     Fill(Fill),
     Redact(RedactMode),
     TextSize(f32),
+    Shadow(bool),
 }
 
 /// A setting on the property strip, without a value.
@@ -217,6 +220,27 @@ pub enum Setting {
     Fill,
     Redact,
     TextSize,
+    /// On or off, shown as one check box, not a choice of values (D-114).
+    Shadow,
+}
+
+/// Whether the shapes `tool` draws can cast a shadow (D-114).
+fn casts_shadow(tool: Tool) -> bool {
+    match tool {
+        Tool::Arrow
+        | Tool::Line
+        | Tool::Rectangle
+        | Tool::Ellipse
+        | Tool::Text
+        | Tool::Step
+        | Tool::Bubble => true,
+        Tool::Select
+        | Tool::Pen
+        | Tool::Highlighter
+        | Tool::Redact
+        | Tool::Crop
+        | Tool::Spotlight => false,
+    }
 }
 
 impl Setting {
@@ -225,11 +249,14 @@ impl Setting {
     #[must_use]
     pub fn for_tool(tool: Tool) -> &'static [Self] {
         match tool {
-            Tool::Arrow | Tool::Line | Tool::Pen => &[Self::Color, Self::StrokeWidth],
-            Tool::Rectangle | Tool::Ellipse => &[Self::Color, Self::StrokeWidth, Self::Fill],
+            Tool::Arrow | Tool::Line => &[Self::Color, Self::StrokeWidth, Self::Shadow],
+            Tool::Pen => &[Self::Color, Self::StrokeWidth],
+            Tool::Rectangle | Tool::Ellipse => {
+                &[Self::Color, Self::StrokeWidth, Self::Fill, Self::Shadow]
+            }
             Tool::Highlighter => &[Self::Color],
             Tool::Redact => &[Self::Redact],
-            Tool::Text | Tool::Step | Tool::Bubble => &[Self::Color, Self::TextSize],
+            Tool::Text | Tool::Step | Tool::Bubble => &[Self::Color, Self::TextSize, Self::Shadow],
             Tool::Select | Tool::Crop | Tool::Spotlight => &[],
         }
     }
@@ -243,6 +270,7 @@ impl Setting {
             Self::Fill => "Fill",
             Self::Redact => "Redaction",
             Self::TextSize => "Text size",
+            Self::Shadow => "Shadow",
         }
     }
 
@@ -256,6 +284,7 @@ impl Setting {
             Self::Fill => &FILL_CHOICES,
             Self::Redact => &REDACT_CHOICES,
             Self::TextSize => &TEXT_SIZE_CHOICES,
+            Self::Shadow => &SHADOW_CHOICES,
         }
     }
 }
@@ -299,6 +328,11 @@ const TEXT_SIZE_CHOICES: [(Property, &str); 4] = [
     (Property::TextSize(48.0), "48 pixels"),
 ];
 
+const SHADOW_CHOICES: [(Property, &str); 2] = [
+    (Property::Shadow(false), "No shadow"),
+    (Property::Shadow(true), "Shadow"),
+];
+
 /// Why the strip refused a value.
 #[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
 pub enum PropertyError {
@@ -333,10 +367,7 @@ impl Looks {
 
     fn colored(look: Look, color: Color) -> Look {
         Look {
-            style: Style {
-                color,
-                ..look.style
-            },
+            style: Style::new(color, look.style.stroke_width),
             ..look
         }
     }
@@ -555,6 +586,58 @@ mod tests {
     }
 
     #[test]
+    fn d114_only_shapes_that_cast_a_shadow_get_one_and_the_strip_offers_it_only_there() {
+        let mut looks = Looks::default();
+        for tool in [Tool::Arrow, Tool::Pen, Tool::Highlighter, Tool::Rectangle] {
+            looks.set(Property::Shadow(true), tool, None).unwrap();
+        }
+        let shadow_of = |tool| match drawn(&looks, tool) {
+            Some(Command::Add { style, .. }) => style.shadow(),
+            other => panic!("{tool:?} drew {other:?}"),
+        };
+        assert!(shadow_of(Tool::Arrow));
+        assert!(shadow_of(Tool::Rectangle));
+        assert!(
+            !shadow_of(Tool::Line),
+            "the line tool's look was left alone"
+        );
+        assert!(!shadow_of(Tool::Pen), "a pen stroke casts no shadow");
+        assert!(!shadow_of(Tool::Highlighter), "nor does a highlight");
+        for tool in TOOLS_FOR_TEST {
+            let offered = Setting::for_tool(tool).contains(&Setting::Shadow);
+            assert_eq!(offered, casts_shadow(tool), "{tool:?}");
+        }
+        let Some(Command::Add { shape, style }) = drawn(&looks, Tool::Arrow) else {
+            panic!("an arrow");
+        };
+        let arrow = entry(shape, style);
+        let (_, shown) = looks.shown(Tool::Select, Some(&arrow));
+        assert!(shown.has(Property::Shadow(true)));
+        let Ok(Some(Command::Replace { style, .. })) =
+            looks.set(Property::Shadow(false), Tool::Select, Some(&arrow))
+        else {
+            panic!("turning the shadow off restyles the arrow");
+        };
+        assert!(!style.shadow());
+    }
+
+    const TOOLS_FOR_TEST: [Tool; 13] = [
+        Tool::Select,
+        Tool::Arrow,
+        Tool::Line,
+        Tool::Rectangle,
+        Tool::Ellipse,
+        Tool::Pen,
+        Tool::Highlighter,
+        Tool::Text,
+        Tool::Step,
+        Tool::Bubble,
+        Tool::Redact,
+        Tool::Spotlight,
+        Tool::Crop,
+    ];
+
+    #[test]
     fn f32_f36_with_nothing_selected_the_strip_sets_how_the_tool_draws_its_next_shape() {
         let mut looks = Looks::default();
         let set = |looks: &mut Looks, property, tool| looks.set(property, tool, None).unwrap();
@@ -603,10 +686,7 @@ mod tests {
         ));
         assert_eq!(
             style,
-            Style {
-                color: BLUE,
-                ..Look::default_for(Tool::Ellipse).style()
-            }
+            Style::new(BLUE, Look::default_for(Tool::Ellipse).style().stroke_width)
         );
         set(&mut looks, Property::TextSize(36.0), Tool::Text);
         set(&mut looks, Property::Color(BLUE), Tool::Text);
@@ -655,10 +735,7 @@ mod tests {
         let restyled = Command::Replace {
             id: solid.id,
             shape: solid.shape.clone(),
-            style: Style {
-                color: BLUE,
-                ..style
-            },
+            style: Style::new(BLUE, style.stroke_width),
         };
         assert_eq!(blue, Some(restyled));
         assert_eq!(looks.look(Tool::Rectangle).style().color, BLUE);

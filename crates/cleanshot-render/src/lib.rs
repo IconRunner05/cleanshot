@@ -8,6 +8,7 @@ mod flatten;
 mod frame;
 mod gamma;
 mod redact;
+mod shadow;
 mod thumbnail;
 
 use cleanshot_core::{ImageError, RectF, ShapeId};

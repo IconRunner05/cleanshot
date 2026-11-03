@@ -233,15 +233,15 @@ mod tests {
                     },
                     mode: RedactMode::Pixelate,
                 },
-                style: Style {
-                    color: Color {
+                style: Style::new(
+                    Color {
                         r: 0,
                         g: 0,
                         b: 0,
                         a: 255,
                     },
-                    stroke_width: 1.0,
-                },
+                    1.0,
+                ),
             })
             .expect("the redaction is added");
         history.document().clone()
@@ -385,15 +385,15 @@ mod tests {
         history
             .apply(Command::Add {
                 shape: Shape::Text(block),
-                style: Style {
-                    color: Color {
+                style: Style::new(
+                    Color {
                         r: 0,
                         g: 0,
                         b: 0,
                         a: 255,
                     },
-                    stroke_width: 1.0,
-                },
+                    1.0,
+                ),
             })
             .expect("the text is added");
         let document = history.document().clone();

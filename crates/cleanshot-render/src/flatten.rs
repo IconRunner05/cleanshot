@@ -13,6 +13,7 @@ use crate::Error;
 use crate::frame::framed;
 use crate::gamma::coverage_table;
 use crate::redact::redact;
+use crate::shadow::cast_shadow;
 
 /// A document's final pixels, which only [`flatten`] makes, so [`crate::encode`] can export
 /// nothing else (F-24, C-22). Nothing outside this crate can make one:
@@ -71,6 +72,11 @@ pub fn flatten(document: &Document, masks: &TextMasks) -> Result<Flattened, Erro
         );
     }
     for entry in document.shapes() {
+        if entry.style.shadow() {
+            let mut layer = Pixmap::new(pixmap.width(), pixmap.height()).ok_or_else(too_large)?;
+            draw(&mut layer, entry, masks)?;
+            cast_shadow(&mut pixmap, &layer);
+        }
         draw(&mut pixmap, entry, masks)?;
     }
     if let Some(crop) = document.crop() {
@@ -302,7 +308,11 @@ fn image_index(start: i32, offset: usize, limit: u32) -> Option<usize> {
 }
 
 /// `color` at `coverage` over `under`, in premultiplied bytes rounded to nearest.
-fn source_over(under: PremultipliedColorU8, color: Color, coverage: u8) -> PremultipliedColorU8 {
+pub(crate) fn source_over(
+    under: PremultipliedColorU8,
+    color: Color,
+    coverage: u8,
+) -> PremultipliedColorU8 {
     let times = |a: u8, b: u8| {
         u8::try_from((u32::from(a) * u32::from(b) + 127) / 255)
             .expect("a byte times a byte over 255 is a byte")
@@ -418,15 +428,15 @@ mod tests {
         history
             .apply(Command::Add {
                 shape: Shape::Highlight(whole_image()),
-                style: Style {
-                    color: Color {
+                style: Style::new(
+                    Color {
                         r: 255,
                         g: 255,
                         b: 0,
                         a: 255,
                     },
-                    stroke_width: 1.0,
-                },
+                    1.0,
+                ),
             })
             .unwrap();
 
@@ -517,10 +527,7 @@ mod tests {
         history
             .apply(Command::Add {
                 shape: Shape::Text(block),
-                style: Style {
-                    color: BLUE,
-                    stroke_width: 1.0,
-                },
+                style: Style::new(BLUE, 1.0),
             })
             .unwrap();
         let id = history.document().shapes()[0].id;
@@ -578,10 +585,7 @@ mod tests {
         history
             .apply(Command::Add {
                 shape: Shape::Bubble(bubble),
-                style: Style {
-                    color: red,
-                    stroke_width: 3.0,
-                },
+                style: Style::new(red, 3.0),
             })
             .unwrap();
         let id = history.document().shapes()[0].id;
@@ -660,15 +664,15 @@ mod tests {
     #[test]
     fn f43_a_spotlight_dims_the_capture_outside_it_and_no_annotation() {
         let mut history = history(uniform([250, 250, 250, 255]));
-        let red = Style {
-            color: Color {
+        let red = Style::new(
+            Color {
                 r: 255,
                 g: 0,
                 b: 0,
                 a: 255,
             },
-            stroke_width: 1.0,
-        };
+            1.0,
+        );
         let corner = RectF {
             x: 0.0,
             y: 0.0,
@@ -703,15 +707,15 @@ mod tests {
     #[test]
     fn d78_a_redaction_outside_the_spotlight_exports_dimmed_like_the_capture() {
         let mut history = history(uniform([250, 250, 250, 255]));
-        let style = Style {
-            color: Color {
+        let style = Style::new(
+            Color {
                 r: 255,
                 g: 0,
                 b: 0,
                 a: 255,
             },
-            stroke_width: 1.0,
-        };
+            1.0,
+        );
         let spotlight = Shape::Spotlight(RectF {
             x: 3.0,
             y: 0.0,

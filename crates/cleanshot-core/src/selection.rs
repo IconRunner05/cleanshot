@@ -438,15 +438,15 @@ mod tests {
             history
                 .apply(Command::Add {
                     shape,
-                    style: Style {
-                        color: Color {
+                    style: Style::new(
+                        Color {
                             r: 255,
                             g: 0,
                             b: 0,
                             a: 255,
                         },
-                        stroke_width: 2.0,
-                    },
+                        2.0,
+                    ),
                 })
                 .unwrap();
         }

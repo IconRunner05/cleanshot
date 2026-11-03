@@ -315,15 +315,15 @@ fn synthetic_shape(index: u32) -> Command {
     };
     Command::Add {
         shape,
-        style: Style {
-            color: Color {
+        style: Style::new(
+            Color {
                 r: 230,
                 g: 60,
                 b: 50,
                 a: alpha,
             },
-            stroke_width: 4.0,
-        },
+            4.0,
+        ),
     }
 }
 

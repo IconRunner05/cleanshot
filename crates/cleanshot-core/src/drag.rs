@@ -591,15 +591,15 @@ mod tests {
         let (document, box_id, _) = document();
         let mut history = History::new(document);
         let block = TextBlock::new(point(100.0, 150.0), "hi".into(), 20.0, 2.0).unwrap();
-        let style = Style {
-            color: crate::Color {
+        let style = Style::new(
+            crate::Color {
                 r: 0,
                 g: 0,
                 b: 255,
                 a: 255,
             },
-            stroke_width: 1.0,
-        };
+            1.0,
+        );
         let shape = Shape::Text(block.clone());
         history.apply(Command::Add { shape, style }).unwrap();
         let document = history.document();

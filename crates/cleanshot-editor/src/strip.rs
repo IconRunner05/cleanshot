@@ -21,16 +21,35 @@ pub(crate) fn property_strip(
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
     on_frame: impl Fn(Frame, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
-    let groups = settings.iter().enumerate().map(|(index, setting)| {
-        let choices = setting.choices().iter().map(|&(property, name)| {
-            let on_set = on_set.clone();
-            let id = format!("{}: {name}", setting.name());
-            strip_button(id, Role::RadioButton, name, look.has(property), theme)
-                .on_click(move |_, window, cx| on_set(property, window, cx))
-                .child(swatch(property, name, theme))
+    let groups = settings
+        .iter()
+        .enumerate()
+        .map(|(index, &setting)| match setting {
+            Setting::Shadow => {
+                let on_set = on_set.clone();
+                let toggled = Property::Shadow(!look.shadow());
+                let name = setting.name();
+                let check =
+                    strip_button(name.to_owned(), Role::CheckBox, name, look.shadow(), theme)
+                        .on_click(move |_, window, cx| on_set(toggled, window, cx))
+                        .child(div().text_xs().text_color(theme.text).child(name));
+                group(name, Role::Group, index > 0, theme).child(check)
+            }
+            Setting::Color
+            | Setting::StrokeWidth
+            | Setting::Fill
+            | Setting::Redact
+            | Setting::TextSize => {
+                let choices = setting.choices().iter().map(|&(property, name)| {
+                    let on_set = on_set.clone();
+                    let id = format!("{}: {name}", setting.name());
+                    strip_button(id, Role::RadioButton, name, look.has(property), theme)
+                        .on_click(move |_, window, cx| on_set(property, window, cx))
+                        .child(swatch(property, name, theme))
+                });
+                group(setting.name(), Role::RadioGroup, index > 0, theme).children(choices)
+            }
         });
-        group(setting.name(), Role::RadioGroup, index > 0, theme).children(choices)
-    });
     let toggles = [
         (
             "Border",
@@ -52,7 +71,7 @@ pub(crate) fn property_strip(
     .map(|(name, checked, toggled)| {
         let on_frame = on_frame.clone();
         strip_button(
-            format!("Frame: {name}"),
+            format!("{IMAGE_FRAME}: {name}"),
             Role::CheckBox,
             name,
             checked,
@@ -67,8 +86,22 @@ pub(crate) fn property_strip(
         .aria_label("Properties")
         .gap(px(8.0))
         .children(groups)
-        .child(group("Frame", Role::Group, !settings.is_empty(), theme).children(toggles))
+        .child(
+            group(IMAGE_FRAME, Role::Group, !settings.is_empty(), theme)
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text)
+                        .pr(px(4.0))
+                        .child(IMAGE_FRAME),
+                )
+                .children(toggles),
+        )
 }
+
+/// What the strip calls the border and shadow round the whole image, apart from a shape's own
+/// shadow (F-44, D-114).
+const IMAGE_FRAME: &str = "Image frame";
 
 /// A labelled row of buttons, `after` another: then set off from it by a hairline.
 fn group(name: &'static str, role: Role, after: bool, theme: Theme) -> Stateful<Div> {
@@ -135,7 +168,9 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
             .border_2()
             .border_color(theme.text),
         Property::Fill(Fill::Solid) => div().size(px(14.0)).rounded(px(3.0)).bg(theme.text),
-        Property::Redact(_) => div().text_xs().text_color(theme.text).child(name),
+        Property::Redact(_) | Property::Shadow(_) => {
+            div().text_xs().text_color(theme.text).child(name)
+        }
         Property::TextSize(size) => div()
             .text_xs()
             .text_color(theme.text)

@@ -4,6 +4,7 @@ use cleanshot_core::Frame;
 use tiny_skia::{BlendMode, ColorU8, Paint, PathBuilder, Pixmap, Rect, Transform};
 
 use crate::Error;
+use crate::shadow::gaussian;
 
 /// The space a frame adds on each side of the image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,15 +132,8 @@ fn cast_shadow(
 
 /// For each of `length` pixels, the share of a Gaussian centred on it that falls in `span`.
 fn blurred_span(length: u32, span: (u32, u32)) -> Vec<f64> {
-    let sigma = f64::from(Frame::SHADOW_BLUR) / 2.0;
-    let reach = i64::from(Frame::SHADOW_BLUR) * 3 / 2;
-    let weights: Vec<f64> = (-reach..=reach)
-        .map(|offset| {
-            #[expect(clippy::cast_precision_loss, reason = "offsets are under 2^52")]
-            let offset = offset as f64;
-            (-(offset * offset) / (2.0 * sigma * sigma)).exp()
-        })
-        .collect();
+    let (reach, weights) = gaussian(Frame::SHADOW_BLUR);
+    let reach = i64::from(reach);
     let total: f64 = weights.iter().sum();
     let inside = |pixel: i64| (i64::from(span.0)..i64::from(span.1)).contains(&pixel);
     (0..i64::from(length))

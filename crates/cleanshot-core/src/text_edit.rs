@@ -615,24 +615,24 @@ mod tests {
         assert_eq!((edit.text(), edit.selection()), ("a!\u{1F600}bd", 6..6));
     }
 
-    const STYLE: Style = Style {
-        color: crate::Color {
+    const STYLE: Style = Style::new(
+        crate::Color {
             r: 0,
             g: 0,
             b: 255,
             a: 255,
         },
-        stroke_width: 2.0,
-    };
-    const OWN_STYLE: Style = Style {
-        color: crate::Color {
+        2.0,
+    );
+    const OWN_STYLE: Style = Style::new(
+        crate::Color {
             r: 255,
             g: 0,
             b: 0,
             a: 255,
         },
-        stroke_width: 4.0,
-    };
+        4.0,
+    );
     const AT: PointF = PointF { x: 4.0, y: 8.0 };
 
     fn existing(text: &str) -> TextOrigin {

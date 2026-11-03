@@ -291,15 +291,15 @@ mod tests {
     }
 
     fn style() -> Style {
-        Style {
-            color: Color {
+        Style::new(
+            Color {
                 r: 255,
                 g: 0,
                 b: 0,
                 a: 255,
             },
-            stroke_width: 3.0,
-        }
+            3.0,
+        )
     }
 
     fn add(history: &mut History, shape: Shape) -> ShapeId {

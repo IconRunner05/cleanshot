@@ -14,6 +14,8 @@ section exists.
 - Ctrl+] and Ctrl+[ move the selected shape in front of or behind its neighbour, and
   Ctrl+Shift+] and Ctrl+Shift+[ move it to the front or back. Each move can be undone
   (F-38). Right-clicking a shape opens a menu with the same four moves.
+- Arrows, lines, rectangles, ellipses, text, numbered steps and speech bubbles can cast a
+  soft shadow, turned on by Shadow on the property strip (F-44).
 - Undo and Redo buttons at the end of the editor toolbar. Each is greyed out when there is
   nothing to undo or redo, and otherwise names the step, as in "Undo arrow" (F-38).
 - A speech bubble's box can be resized by its sides and corners. The text wraps inside
@@ -21,6 +23,8 @@ section exists.
 
 ### Changed
 
+- The property strip's Border and Shadow for the whole image now sit under the label
+  Image frame, apart from a shape's own Shadow (F-44).
 - The editor opens sized round the capture at 100%, with the toolbar above it, instead of
   at 80% of the primary display (F-23). A capture too large for the screen opens fitted to
   it. The capture, fitted or not, now sits below the toolbar instead of under it.

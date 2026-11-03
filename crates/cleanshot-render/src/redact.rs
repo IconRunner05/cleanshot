@@ -218,10 +218,7 @@ mod tests {
 
     fn style(rgba: [u8; 4]) -> Style {
         let [r, g, b, a] = rgba;
-        Style {
-            color: Color { r, g, b, a },
-            stroke_width: 1.0,
-        }
+        Style::new(Color { r, g, b, a }, 1.0)
     }
 
     fn flatten_with(shapes: Vec<(Shape, Style)>) -> RgbaImage {
