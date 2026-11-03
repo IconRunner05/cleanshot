@@ -5,6 +5,7 @@
 
 mod bubble;
 mod capture_mode;
+mod capture_panel;
 mod delivery;
 mod document;
 mod drag;
@@ -26,6 +27,7 @@ mod toolbar;
 
 pub use bubble::{BUBBLE_PADDING, Bubble};
 pub use capture_mode::CaptureMode;
+pub use capture_panel::{CapturePanel, PanelOutcome};
 pub use delivery::{Delivered, DeliveryError, Output, delivery_notice, save_as_notice};
 pub use document::{
     Color, Document, Fill, Frame, ImageError, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM,
