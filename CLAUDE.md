@@ -69,7 +69,7 @@ The charter outranks STANDARDS.md where they meet; STANDARDS.md outranks any ski
 - **Units.** The five crates in CHARTER §5 are the units; that table is the map STANDARDS.md's "Records" asks for (no separate README map). A new crate needs a charter change.
 - **Dependency direction** is CHARTER §5's (`core` depends on nothing in the workspace). Enforce it with a test once the workspace exists.
 - **Comments.** Default to none, as STANDARDS.md says. One exception: a short `// C-15: ...` or `// F-21: ...` comment on the line that enforces a charter rule is a pointer to the why, and is allowed.
-- **Crashing.** `panic = "abort"` in release. `unwrap()`/`expect()` only in tests and in `main` start-up (CHARTER §7); everywhere else an error reaches the user as a toast. Nothing supervises this process, so an invariant break fails loudly, it is never caught and carried on.
+- **Crashing.** `panic = "abort"` in release, behind a panic hook that shows a fixed-text crash notice. Expected failures reach the user as a toast. An "impossible" state is designed out by its type where that is cheap; where it is not, it crashes loudly with the invariant named (`expect("<the invariant>")`, or `panic!`/`unreachable!` with a message). Bare `unwrap()` and message-less panics only in tests and `main` start-up. Nothing supervises this process, so an invariant break is never caught and carried on, and no error is swallowed (CHARTER §7, D-120).
 - **Errors.** `anyhow` only in `cleanshot-app`; every other crate has its own `thiserror` enum.
 - **`unsafe`** only in `cleanshot-win`, every block with `// SAFETY:` (C-16).
 - **Decisions** go in CHARTER §11's Decisions log (one row, `Status: assumed` until the owner confirms); longer ones in `docs/decisions/`.
