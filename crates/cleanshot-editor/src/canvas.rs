@@ -8,7 +8,7 @@ use cleanshot_core::{
     RedactStrength, RgbaImage, SPOTLIGHT_DIM, Shape, ShapeEntry, ShapeId, Style, areas_outside,
     arrow_head, box_handles, dimmed_areas, handles, step_numbers, text_on,
 };
-use cleanshot_render::{Patch, redacted, shape_shadow};
+use cleanshot_render::{Patch, highlighted, redacted, shape_shadow};
 use gpui::{
     App, BorderStyle, Bounds, BoxShadow, Canvas, Corners, DispatchPhase, Hitbox, HitboxBehavior,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point,
@@ -35,11 +35,12 @@ pub(crate) fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
 }
 
 /// What the canvas shows as the export draws it, made once rather than every frame (D-58,
-/// D-114), and the log the canvas reports what it could not paint to (D-120).
+/// D-114, D-125), and the log the canvas reports what it could not paint to (D-120).
 #[derive(Clone)]
 pub(crate) struct Previews {
     redactions: RedactionPreviews,
     shadows: ShadowPreviews,
+    highlights: HighlightPreviews,
     log: Log,
 }
 
@@ -48,6 +49,7 @@ impl Previews {
         Self {
             redactions: RedactionPreviews::new(Rc::clone(&log)),
             shadows: ShadowPreviews::new(Rc::clone(&log)),
+            highlights: HighlightPreviews::new(Rc::clone(&log)),
             log,
         }
     }
@@ -56,8 +58,120 @@ impl Previews {
     pub(crate) fn update(&mut self, document: &Document) {
         self.redactions.update(document);
         self.shadows.update(document);
+        self.highlights.update(document);
+    }
+
+    /// Paints every highlight among `shapes`, under the spotlight dim and before any shape: a
+    /// dim and a multiply both scale each channel, so either order gives the export's pixels.
+    fn paint_highlights<'a>(
+        &self,
+        shapes: impl Iterator<Item = (&'a Shape, &'a Style)>,
+        fit: &Fit,
+        window: &mut Window,
+    ) {
+        for (shape, style) in shapes {
+            if let Shape::Highlight(rect) = shape {
+                self.highlights.paint(*rect, style.color, fit, window);
+            }
+        }
     }
 }
+
+fn rect_bits(rect: RectF) -> [u32; 4] {
+    [rect.x, rect.y, rect.width, rect.height].map(f32::to_bits)
+}
+
+/// What the canvas shows for each highlight: the image multiplied as an export multiplies it
+/// (F-35, D-125), made once for each rectangle and colour rather than every frame. GPUI has no
+/// multiply blend, so a highlight still being dragged is a translucent fill until release.
+#[derive(Clone)]
+struct HighlightPreviews {
+    previews: HashMap<HighlightKey, Option<(RectF, Arc<RenderImage>)>>,
+    log: Log,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct HighlightKey {
+    rect: [u32; 4],
+    color: [u8; 4],
+}
+
+impl HighlightPreviews {
+    fn new(log: Log) -> Self {
+        Self {
+            previews: HashMap::new(),
+            log,
+        }
+    }
+
+    fn key(rect: RectF, color: Color) -> HighlightKey {
+        HighlightKey {
+            rect: rect_bits(rect),
+            color: [color.r, color.g, color.b, color.a],
+        }
+    }
+
+    /// Keeps a preview for each highlight in `document`, making the ones it lacks and dropping
+    /// the ones no longer there. One that could not be made is logged and tried again next time.
+    fn update(&mut self, document: &Document) {
+        let mut kept = HashMap::new();
+        for entry in document.shapes() {
+            let Shape::Highlight(rect) = entry.shape else {
+                continue;
+            };
+            let key = Self::key(rect, entry.style.color);
+            if let Some(preview) = self.previews.remove(&key) {
+                kept.insert(key, preview);
+                continue;
+            }
+            match highlighted(document.base(), rect, entry.style.color) {
+                Ok(patch) => {
+                    kept.insert(key, patch.as_ref().map(placed));
+                }
+                Err(_) => (self.log)("highlight_preview not_made"),
+            }
+        }
+        self.previews = kept;
+    }
+
+    /// What the canvas paints for the highlight at `rect` in `color`.
+    fn painted(&self, rect: RectF, color: Color) -> HighlightPaint {
+        match self.previews.get(&Self::key(rect, color)) {
+            Some(Some((bounds, image))) => HighlightPaint::Image(*bounds, Arc::clone(image)),
+            Some(None) => HighlightPaint::Nothing,
+            None => HighlightPaint::Fill(Rgba {
+                a: DRAGGED_HIGHLIGHT_ALPHA,
+                ..rgba(color)
+            }),
+        }
+    }
+
+    fn paint(&self, rect: RectF, color: Color, fit: &Fit, window: &mut Window) {
+        match self.painted(rect, color) {
+            HighlightPaint::Image(bounds, image) => {
+                let bounds = fit.bounds(bounds);
+                let painted = window.paint_image(bounds, bounds, 0.0.into(), image, 0, false);
+                if painted.is_err() {
+                    (self.log)("highlight_preview not_painted");
+                }
+            }
+            HighlightPaint::Fill(color) => window.paint_quad(fill(fit.bounds(rect), color)),
+            HighlightPaint::Nothing => {}
+        }
+    }
+}
+
+/// What the canvas paints for one highlight.
+enum HighlightPaint {
+    /// The export's own pixels, at their place on the image.
+    Image(RectF, Arc<RenderImage>),
+    /// A translucent fill, for a highlight still being dragged, which has no image yet.
+    Fill(Rgba),
+    /// Nothing: the highlight covers no pixel.
+    Nothing,
+}
+
+const DRAGGED_HIGHLIGHT_ALPHA: f32 = 0.4;
 
 /// What the canvas shows for each redaction: the pixels an export leaves there (F-36, D-58),
 /// made once for each rectangle and mode rather than every frame.
@@ -77,7 +191,7 @@ struct RedactionKey {
 impl RedactionKey {
     fn new(rect: RectF, mode: RedactMode, strength: RedactStrength) -> Self {
         Self {
-            rect: [rect.x, rect.y, rect.width, rect.height].map(f32::to_bits),
+            rect: rect_bits(rect),
             mode,
             strength,
         }
@@ -410,6 +524,34 @@ const PIXELS_PER_WHEEL_LINE: f32 = 20.0;
 
 /// Draws the document's base image scaled to fit the element, its shapes with `overlay`'s
 /// preview on top, and reports the pointer to `on_pointer`, following a drag outside the element.
+/// `document`'s shapes in drawing order as the canvas shows them: the one `preview` changes in
+/// its changed form, and the one it adds last, without an id.
+fn shown_shapes<'a>(
+    document: &'a Document,
+    preview: Option<&'a Command>,
+) -> Vec<(Option<ShapeId>, &'a Shape, &'a Style)> {
+    let (replaced, added) = match preview {
+        Some(Command::Replace { id, shape, style }) => (Some((*id, shape, style)), None),
+        Some(Command::Add { shape, style }) => (None, Some((shape, style))),
+        Some(
+            Command::Remove(_)
+            | Command::Restack { .. }
+            | Command::SetCrop(_)
+            | Command::SetFrame(_),
+        )
+        | None => (None, None),
+    };
+    document
+        .shapes()
+        .iter()
+        .map(|entry| match replaced {
+            Some((id, shape, style)) if id == entry.id => (Some(entry.id), shape, style),
+            Some(_) | None => (Some(entry.id), &entry.shape, &entry.style),
+        })
+        .chain(added.map(|(shape, style)| (None, shape, style)))
+        .collect()
+}
+
 pub(crate) fn document_canvas(
     document: Rc<Document>,
     base: Arc<RenderImage>,
@@ -444,26 +586,12 @@ pub(crate) fn document_canvas(
             if painted.is_err() {
                 (previews.log)("base_image not_painted");
             }
-            let (replaced, added) = match &overlay.preview {
-                Some(Command::Replace { id, shape, style }) => (Some((*id, shape, style)), None),
-                Some(Command::Add { shape, style }) => (None, Some((shape, style))),
-                Some(
-                    Command::Remove(_)
-                    | Command::Restack { .. }
-                    | Command::SetCrop(_)
-                    | Command::SetFrame(_),
-                )
-                | None => (None, None),
-            };
-            let shown: Vec<_> = document
-                .shapes()
-                .iter()
-                .map(|entry| match replaced {
-                    Some((id, shape, style)) if id == entry.id => (Some(entry.id), shape, style),
-                    Some(_) | None => (Some(entry.id), &entry.shape, &entry.style),
-                })
-                .chain(added.map(|(shape, style)| (None, shape, style)))
-                .collect();
+            let shown = shown_shapes(&document, overlay.preview.as_ref());
+            previews.paint_highlights(
+                shown.iter().map(|(_, shape, style)| (*shape, *style)),
+                &fit,
+                window,
+            );
             let dimmed = dimmed_areas(image, shown.iter().map(|(_, shape, _)| *shape));
             paint_dim(&dimmed, fit.image_bounds, &fit, window);
             let mut selected_shape = None;
@@ -729,8 +857,7 @@ fn paint_shape(
         Shape::Rect {
             rect,
             fill: Fill::Solid,
-        }
-        | Shape::Highlight(rect) => {
+        } => {
             window.paint_quad(fill(fit.bounds(*rect), color));
             Ok(())
         }
@@ -764,8 +891,9 @@ fn paint_shape(
             }
             Ok(())
         }
-        // F-43: the canvas dims around every spotlight before it paints any shape.
-        Shape::Spotlight(_) => Ok(()),
+        // F-43, D-125: the canvas dims around every spotlight, and paints every highlight, before
+        // it paints any shape.
+        Shape::Spotlight(_) | Shape::Highlight(_) => Ok(()),
         Shape::Step(step) => {
             let circle = paint_polygon(
                 window,
@@ -1009,5 +1137,124 @@ mod tests {
             .unwrap();
         previews.update(history.document());
         assert!(!Arc::ptr_eq(&first, &image_of(&previews, arrow_id)));
+    }
+
+    #[test]
+    fn d125_a_highlight_preview_is_made_once_kept_until_it_changes_and_dropped_after() {
+        let image = RgbaImage::new(64, 48, vec![200; 64 * 48 * 4]).unwrap();
+        let rect = RectF {
+            x: 3.5,
+            y: 2.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        let yellow = Color {
+            r: 255,
+            g: 230,
+            b: 0,
+            a: 255,
+        };
+        let mut history = History::new(Document::new(Arc::new(image)));
+        history
+            .apply(Command::Add {
+                shape: Shape::Highlight(rect),
+                style: Style::new(yellow, 0.0),
+            })
+            .unwrap();
+        let image_of = |previews: &HighlightPreviews, color| match &previews.previews
+            [&HighlightPreviews::key(rect, color)]
+        {
+            Some((bounds, image)) => (*bounds, Arc::clone(image)),
+            None => panic!("a highlight image"),
+        };
+        let mut previews = HighlightPreviews::new(Rc::new(|_| {}));
+        previews.update(history.document());
+        let (bounds, first) = image_of(&previews, yellow);
+        assert_eq!(
+            (bounds.x, bounds.y, bounds.width, bounds.height),
+            (3.0, 2.0, 21.0, 10.0)
+        );
+        let pen = Command::Add {
+            shape: Shape::Pen(vec![PointF { x: 1.0, y: 1.0 }]),
+            style: Style::new(yellow, 2.0),
+        };
+        history.apply(pen).unwrap();
+        previews.update(history.document());
+        assert!(Arc::ptr_eq(&first, &image_of(&previews, yellow).1));
+        let id = history.document().shapes()[0].id;
+        let blue = Color { b: 255, ..yellow };
+        history
+            .apply(Command::Replace {
+                id,
+                shape: Shape::Highlight(rect),
+                style: Style::new(blue, 0.0),
+            })
+            .unwrap();
+        previews.update(history.document());
+        image_of(&previews, blue);
+        assert_eq!(previews.previews.len(), 1, "the yellow preview is dropped");
+    }
+
+    #[test]
+    fn d125_a_drawn_highlight_paints_the_exported_pixels_and_a_dragged_one_a_translucent_fill() {
+        use cleanshot_core::TextMasks;
+
+        let (width, height) = (40, 30);
+        let text = (0..width * height)
+            .flat_map(|index| {
+                if index % 3 == 0 {
+                    [20, 20, 20, 255]
+                } else {
+                    [240, 240, 240, 255]
+                }
+            })
+            .collect();
+        let image = RgbaImage::new(width, height, text).unwrap();
+        let rect = RectF {
+            x: 4.0,
+            y: 3.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        let yellow = Color {
+            r: 255,
+            g: 230,
+            b: 0,
+            a: 255,
+        };
+        let mut history = History::new(Document::new(Arc::new(image)));
+        history
+            .apply(Command::Add {
+                shape: Shape::Highlight(rect),
+                style: Style::new(yellow, 0.0),
+            })
+            .unwrap();
+        let mut previews = HighlightPreviews::new(Rc::new(|_| {}));
+        previews.update(history.document());
+        let HighlightPaint::Image(bounds, image) = previews.painted(rect, yellow) else {
+            panic!("a drawn highlight paints the export's pixels");
+        };
+        assert_eq!(
+            (bounds.x, bounds.y, bounds.width, bounds.height),
+            (4.0, 3.0, 20.0, 10.0)
+        );
+        let export = cleanshot_render::flatten(history.document(), &TextMasks::default()).unwrap();
+        let shown = image.as_bytes(0).unwrap().as_chunks::<4>().0;
+        let mut index = 0;
+        for y in 3..13 {
+            for x in 4..24 {
+                let at = ((y * width + x) * 4) as usize;
+                let [r, g, b, a] = export.image().pixels()[at..at + 4] else {
+                    unreachable!("a pixel is four bytes");
+                };
+                assert_eq!(shown[index], [b, g, r, a], "{x},{y}");
+                index += 1;
+            }
+        }
+        let dragged = RectF { x: 1.0, ..rect };
+        let HighlightPaint::Fill(fill) = previews.painted(dragged, yellow) else {
+            panic!("a dragged highlight paints a fill");
+        };
+        assert_eq!(fill.a, DRAGGED_HIGHLIGHT_ALPHA);
     }
 }

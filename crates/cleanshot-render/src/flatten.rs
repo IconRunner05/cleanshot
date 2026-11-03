@@ -9,11 +9,11 @@ use tiny_skia::{
     Pixmap, PremultipliedColorU8, Rect, Stroke, Transform,
 };
 
-use crate::Error;
 use crate::frame::framed;
 use crate::gamma::coverage_table;
 use crate::redact::redact;
 use crate::shadow::cast_shadow;
+use crate::{Error, Patch};
 
 /// A document's final pixels, which only [`flatten`] makes, so [`crate::encode`] can export
 /// nothing else (F-24, C-22). Nothing outside this crate can make one:
@@ -149,6 +149,78 @@ pub(crate) fn covered_pixels(
     ))
 }
 
+/// The pixels of an image that a rectangle touches, premultiplied, with their top left corner
+/// on the image, for drawing one shape alone as the export draws it there.
+pub(crate) struct Covered {
+    left: u32,
+    top: u32,
+    pub(crate) pixmap: Pixmap,
+}
+
+impl Covered {
+    /// The pixels of `image` that `rect` touches; `None` if it touches none.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TooLarge`] if the covered area exceeds the renderer's size limit.
+    pub(crate) fn of(image: &RgbaImage, rect: RectF) -> Result<Option<Self>, Error> {
+        let Some((columns, rows)) = covered_pixels(rect, image.width(), image.height()) else {
+            return Ok(None);
+        };
+        let (width, height) = (columns.end - columns.start, rows.end - rows.start);
+        let too_large = || Error::TooLarge { width, height };
+        let stride = image.width() as usize * 4;
+        let (start, length) = (columns.start as usize * 4, width as usize * 4);
+        let covered: Vec<u8> = rows
+            .clone()
+            .flat_map(|y| {
+                let row = y as usize * stride + start;
+                &image.pixels()[row..row + length]
+            })
+            .copied()
+            .collect();
+        let size = IntSize::from_wh(width, height).ok_or_else(too_large)?;
+        let pixmap = Pixmap::from_vec(premultiplied(&covered), size).ok_or_else(too_large)?;
+        Ok(Some(Self {
+            left: columns.start,
+            top: rows.start,
+            pixmap,
+        }))
+    }
+
+    /// `rect` moved so that the covered pixels' corner is the origin.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "an image side is far below 2^24, where f32 stops being exact"
+    )]
+    pub(crate) fn local(&self, rect: RectF) -> RectF {
+        RectF {
+            x: rect.x - self.left as f32,
+            y: rect.y - self.top as f32,
+            ..rect
+        }
+    }
+
+    /// The covered pixels as drawn, back at their place on the image.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Output`] if the pixels do not make an image, which tiny-skia rules out.
+    pub(crate) fn into_patch(self) -> Result<Patch, Error> {
+        let pixels = RgbaImage::new(
+            self.pixmap.width(),
+            self.pixmap.height(),
+            straight(&self.pixmap),
+        )
+        .map_err(Error::Output)?;
+        Ok(Patch {
+            left: self.left,
+            top: self.top,
+            pixels,
+        })
+    }
+}
+
 /// Draws `entry` on `pixmap`, its text from `masks`, or without its text when there are none.
 pub(crate) fn draw(
     pixmap: &mut Pixmap,
@@ -195,12 +267,7 @@ pub(crate) fn draw(
             skia_rect(*rect).and_then(PathBuilder::from_oval),
             &paint,
         ),
-        // F-35: the highlighter darkens what is under it, like a marker on paper.
-        Shape::Highlight(rect) => fill(
-            pixmap,
-            skia_rect(*rect).map(PathBuilder::from_rect),
-            &self::paint(entry.style.color, BlendMode::Multiply),
-        ),
+        Shape::Highlight(rect) => highlight(pixmap, *rect, entry.style.color),
         Shape::Redact {
             rect,
             mode,
@@ -344,6 +411,15 @@ pub(crate) fn source_over(
         over.alpha() + times(under.alpha(), keep),
     )
     .expect("source over two premultiplied colours is premultiplied")
+}
+
+/// F-35: the highlighter darkens what is under it, like a marker on paper.
+pub(crate) fn highlight(pixmap: &mut Pixmap, rect: RectF, color: Color) {
+    fill(
+        pixmap,
+        skia_rect(rect).map(PathBuilder::from_rect),
+        &paint(color, BlendMode::Multiply),
+    );
 }
 
 fn fill(pixmap: &mut Pixmap, path: Option<Path>, paint: &Paint) {

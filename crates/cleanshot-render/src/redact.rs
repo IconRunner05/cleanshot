@@ -1,9 +1,9 @@
 use std::ops::Range;
 
 use cleanshot_core::{RectF, RedactMode, RedactStrength, RgbaImage};
-use tiny_skia::{IntSize, Pixmap};
+use tiny_skia::Pixmap;
 
-use crate::flatten::{covered_pixels, premultiplied, straight};
+use crate::flatten::{Covered, covered_pixels};
 use crate::{Error, Patch};
 
 /// Replaces every pixel `rect` touches (C-22). Pixelate sets each cell, `strength`'s side, to its
@@ -57,46 +57,18 @@ pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode, strengt
 /// # Errors
 ///
 /// [`Error::TooLarge`] if the covered area exceeds the renderer's size limit.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "an image side is far below 2^24, where f32 stops being exact"
-)]
 pub fn redacted(
     image: &RgbaImage,
     rect: RectF,
     mode: RedactMode,
     strength: RedactStrength,
 ) -> Result<Option<Patch>, Error> {
-    let Some((columns, rows)) = covered_pixels(rect, image.width(), image.height()) else {
+    let Some(mut covered) = Covered::of(image, rect)? else {
         return Ok(None);
     };
-    let (width, height) = (columns.end - columns.start, rows.end - rows.start);
-    let too_large = || Error::TooLarge { width, height };
-    let stride = image.width() as usize * 4;
-    let (start, length) = (columns.start as usize * 4, width as usize * 4);
-    let covered: Vec<u8> = rows
-        .clone()
-        .flat_map(|y| {
-            let row = y as usize * stride + start;
-            &image.pixels()[row..row + length]
-        })
-        .copied()
-        .collect();
-    let size = IntSize::from_wh(width, height).ok_or_else(too_large)?;
-    let mut pixmap = Pixmap::from_vec(premultiplied(&covered), size).ok_or_else(too_large)?;
-    let whole = RectF {
-        x: 0.0,
-        y: 0.0,
-        width: width as f32,
-        height: height as f32,
-    };
-    redact(&mut pixmap, whole, mode, strength);
-    let pixels = RgbaImage::new(width, height, straight(&pixmap)).map_err(Error::Output)?;
-    Ok(Some(Patch {
-        left: columns.start,
-        top: rows.start,
-        pixels,
-    }))
+    let local = covered.local(rect);
+    redact(&mut covered.pixmap, local, mode, strength);
+    covered.into_patch().map(Some)
 }
 
 /// Premultiplied RGBA bytes, `stride` pixels to a row.

@@ -60,6 +60,8 @@ section exists.
 
 - After Print Screen the pointer over the capture overlay, the capture panel and the
   thumbnail is the arrow, not the busy cursor another app left up.
+- A highlight hid the text under it in the editor, though the copied or saved image showed
+  the text through it. The editor now shows a highlight as the export draws it (F-35).
 - A crop showed in the editor only while it was being dragged, so the Crop tool looked
   as if it did nothing (F-37). Now the view fits the crop and everything outside it is
   dimmed. Copy and Save were already cropped.
