@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HMODULE, LPARAM, RECT, WPARAM};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, HMODULE, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
 };
@@ -24,9 +24,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 use windows::Win32::System::Ole::{CF_DIBV5, CF_UNICODETEXT};
-use windows::Win32::System::Registry::{
-    HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
-};
+use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
@@ -43,6 +41,7 @@ use crate::overlay::WINDOW_CLASS;
 
 use crate::Error;
 use crate::capture::monitor_handles;
+use crate::registry::{read_number, read_text};
 use crate::struct_size;
 use cleanshot_core::{Hotkey, HotkeyAction};
 
@@ -144,45 +143,13 @@ pub fn windows_version() -> Result<WindowsVersion, windows::core::Error> {
 const CURRENT_VERSION: PCWSTR = w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
 
 fn registry_string(value: PCWSTR) -> Result<String, windows::core::Error> {
-    let mut buffer = [0u16; 256];
-    let mut bytes = u32::try_from(size_of_val(&buffer)).expect("512 fits in u32");
-    // SAFETY: `buffer` is writable for `bytes` bytes, and RRF_RT_REG_SZ NUL-terminates it.
-    unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            CURRENT_VERSION,
-            value,
-            RRF_RT_REG_SZ,
-            None,
-            Some(buffer.as_mut_ptr().cast()),
-            Some(&raw mut bytes),
-        )
-    }
-    .ok()?;
-    let length = buffer
-        .iter()
-        .position(|&unit| unit == 0)
-        .unwrap_or(buffer.len());
-    Ok(String::from_utf16_lossy(&buffer[..length]))
+    read_text(HKEY_LOCAL_MACHINE, CURRENT_VERSION, value)?
+        .ok_or_else(|| ERROR_FILE_NOT_FOUND.into())
 }
 
 fn registry_number(value: PCWSTR) -> Result<u32, windows::core::Error> {
-    let mut number = 0u32;
-    let mut bytes = u32::try_from(size_of::<u32>()).expect("4 fits in u32");
-    // SAFETY: `number` is writable for the 4 bytes a REG_DWORD holds.
-    unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            CURRENT_VERSION,
-            value,
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut number).cast()),
-            Some(&raw mut bytes),
-        )
-    }
-    .ok()?;
-    Ok(number)
+    read_number(HKEY_LOCAL_MACHINE, CURRENT_VERSION, value)?
+        .ok_or_else(|| ERROR_FILE_NOT_FOUND.into())
 }
 
 /// Every monitor attached to the desktop, in the order Windows lists them.
