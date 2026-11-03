@@ -2,7 +2,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cleanshot_core::{DeliveryError, Document, Output, RgbaImage, Saving, delivery_notice};
+use cleanshot_core::{Document, Output, RgbaImage, Saving};
 use cleanshot_win::capture::RECT;
 use cleanshot_win::thumbnail::{self, Dragged, Thumbnail, ThumbnailEvent};
 use cleanshot_win::tray::LastCaptureItems;
@@ -46,9 +46,7 @@ pub(super) fn show(
     };
     let saving_off = matches!(session.policy.saving(), Saving::Off(_));
     let saving = match session.policy.saving() {
-        Saving::Off(off) => {
-            thumbnail::Saving::Off(delivery_notice(&Err(DeliveryError::SavingOff(*off))))
-        }
+        Saving::Off(off) => thumbnail::Saving::Off(*off),
         Saving::Allowed { .. } => thumbnail::Saving::On {
             drag: drag_out(Rc::downgrade(session), Arc::clone(&image)),
         },

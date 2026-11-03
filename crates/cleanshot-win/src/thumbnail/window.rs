@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use cleanshot_core::thumbnail_layout::{
     INSET, STAY, ThumbnailButton, button_at, buttons, centred, left_after, place, slid, window_size,
 };
-use cleanshot_core::{Rect, RgbaImage};
+use cleanshot_core::{Rect, RgbaImage, saving_off_notice};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
@@ -333,8 +333,8 @@ fn surface(
     let buttons = buttons(client.0, client.1, scale);
     let (drag, save_off) = match saving {
         Saving::On { drag } => (Some(drag), None),
-        Saving::Off(reason) => {
-            let tip = OffTip::new(window, &reason)?;
+        Saving::Off(off) => {
+            let tip = OffTip::new(window, &saving_off_notice(off))?;
             let [(_, save), _] = buttons;
             tip.place(win32_rect(save));
             (None, Some(tip))

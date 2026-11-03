@@ -35,7 +35,7 @@ use windows::Win32::UI::Accessibility::{
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{BOOL, BSTR, Error, HRESULT, IUnknown, Interface, PCWSTR, Result, implement};
 
-use cleanshot_core::{CapturePanel, Timer, Toolbar, ToolbarControl};
+use cleanshot_core::{CapturePanel, SavingOff, Timer, Toolbar, ToolbarControl, saving_off_notice};
 
 use super::{Layout, name};
 
@@ -72,11 +72,11 @@ pub(crate) struct Mirror {
 
 impl Mirror {
     /// `toolbar`, with Save off for the reason `saving_off` says (F-57), or on when `None`.
-    pub(crate) fn new(toolbar: Toolbar, saving_off: Option<String>) -> Self {
+    pub(crate) fn new(toolbar: Toolbar, saving_off: Option<SavingOff>) -> Self {
         Self {
             toolbar,
             state: Arc::default(),
-            saving_off: saving_off.map(Arc::from),
+            saving_off: saving_off.map(|off| Arc::from(saving_off_notice(off))),
         }
     }
 

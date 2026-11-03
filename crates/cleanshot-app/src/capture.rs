@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use cleanshot_core::{
     AfterCapture, CaptureMode, Delivered, DeliveryError, Document, Output, Pickable, Rect,
-    RgbaImage, Saving, delivery_notice,
+    RgbaImage, Saving,
 };
 use cleanshot_win::capture::{
     Desktop, MonitorImage, RECT, capture_desktop, draw_pointer, monitor_under_cursor,
@@ -171,7 +171,7 @@ pub(super) fn capture(
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
     let saving_off = match session.policy.saving() {
-        Saving::Off(off) => Some(delivery_notice(&Err(DeliveryError::SavingOff(*off)))),
+        Saving::Off(off) => Some(*off),
         Saving::Allowed { .. } => None,
     };
     let options = settings_window::options_for(session);

@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cleanshot_core::{DeliveryError, RgbaImage, SavingOff, delivery_notice};
+use cleanshot_core::{RgbaImage, SavingOff, saving_off_notice};
 use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_container};
 use cleanshot_win::capture::{MonitorImage, RECT};
 use cleanshot_win::overlay::{Frozen, Overlay};
@@ -21,7 +21,7 @@ const SELECTED: RECT = RECT {
 };
 fn main() {
     let start = Instant::now();
-    let reason = delivery_notice(&Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly)));
+    let reason = saving_off_notice(SavingOff::ClipboardOnly);
     let expected = reason.clone();
     let (chosen, choice) = mpsc::channel();
     let (painted, shown) = mpsc::channel();
@@ -90,7 +90,7 @@ fn main() {
             Frozen {
                 captures: &[monitor],
                 selected: Some(SELECTED),
-                saving_off: Some(reason),
+                saving_off: Some(SavingOff::ClipboardOnly),
                 ..Frozen::default()
             },
             Vec::new,

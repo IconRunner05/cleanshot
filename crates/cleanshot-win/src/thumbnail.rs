@@ -1,5 +1,5 @@
-use cleanshot_core::RgbaImage;
 use cleanshot_core::thumbnail_layout::LARGEST_PREVIEW;
+use cleanshot_core::{RgbaImage, SavingOff};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, UpdateWindow,
@@ -45,9 +45,9 @@ pub enum Saving {
     On {
         drag: Box<dyn Fn() -> Option<Dragged>>,
     },
-    /// Save shows greyed with this sentence as its tooltip and sends nothing, as the toolbar's
-    /// does (D-95), and nothing drags out.
-    Off(String),
+    /// Save shows greyed, with [`cleanshot_core::saving_off_notice`] for this reason as its
+    /// tooltip, and sends nothing, as the toolbar's does (D-95); nothing drags out.
+    Off(SavingOff),
 }
 
 /// F-09: the post-capture preview, a window in the bottom-right corner of a monitor's work
@@ -341,10 +341,7 @@ mod tests {
     #[test]
     fn f57_with_saving_off_a_click_on_save_sends_nothing_and_a_click_on_the_preview_still_opens() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let thumbnail = shown(
-            &events,
-            Saving::Off(String::from("Your organisation has turned saving off.")),
-        );
+        let thumbnail = shown(&events, Saving::Off(SavingOff::ClipboardOnly));
         let scale = crate::capture::dpi_scale(RECT::default()).expect("the primary monitor's dpi");
         let (width, height) = window_size(120, 80, scale);
         let [(_, save), _] = buttons(width, height, scale);

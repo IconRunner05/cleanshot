@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::path::PathBuf;
 
 use cleanshot_core::{
-    OptionsEntry, OptionsItem, Pickable, Rect, TabDirection, Toolbar, ToolbarControl,
+    OptionsEntry, OptionsItem, Pickable, Rect, SavingOff, TabDirection, Toolbar, ToolbarControl,
 };
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::{
@@ -268,9 +268,10 @@ pub struct Frozen<'a> {
     /// The windows W switches to picking from, as [`crate::capture::pickable_windows`] listed
     /// them at the freeze (F-08).
     pub pickable: Vec<Pickable>,
-    /// With saving off, the toolbar shows Save greyed, out of Tab order, with this sentence as
-    /// its accessible help text (F-57); choosing it still sends [`OverlayEvent::Save`].
-    pub saving_off: Option<String>,
+    /// With saving off, the toolbar shows Save greyed, out of Tab order, with
+    /// [`cleanshot_core::saving_off_notice`] for this reason as its accessible help text (F-57);
+    /// choosing it still sends [`OverlayEvent::Save`].
+    pub saving_off: Option<SavingOff>,
 }
 
 /// One topmost, never-activated window per monitor, each showing that monitor's frozen
@@ -855,12 +856,11 @@ pub(crate) mod tests {
         let chosen = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&chosen);
         let selected = monitor().bounds;
-        let off = Some("Saving is off".to_owned());
         let overlay = Overlay::show(
             Frozen {
                 captures: &[monitor()],
                 selected: Some(selected),
-                saving_off: off,
+                saving_off: Some(SavingOff::ClipboardOnly),
                 ..Frozen::default()
             },
             Vec::new,
