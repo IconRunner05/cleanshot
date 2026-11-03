@@ -88,6 +88,16 @@ fn holds(bounds: RECT, point: POINT) -> bool {
     (bounds.left..bounds.right).contains(&point.x) && (bounds.top..bounds.bottom).contains(&point.y)
 }
 
+fn overlap(a: RECT, b: RECT) -> Option<RECT> {
+    let shared = RECT {
+        left: a.left.max(b.left),
+        top: a.top.max(b.top),
+        right: a.right.min(b.right),
+        bottom: a.bottom.min(b.bottom),
+    };
+    (shared.left < shared.right && shared.top < shared.bottom).then_some(shared)
+}
+
 /// What the hotkey path copied (D-28), and what each output's duplication did, for `--log`.
 #[derive(Debug)]
 pub struct Desktop {
@@ -183,17 +193,11 @@ pub fn region(captures: &[MonitorImage], selected: RECT) -> Result<RgbaImage, Er
     let mut pixels = vec![0; row_bytes * height as usize];
     for capture in captures {
         let bounds = capture.bounds;
-        let overlap = RECT {
-            left: selected.left.max(bounds.left),
-            top: selected.top.max(bounds.top),
-            right: selected.right.min(bounds.right),
-            bottom: selected.bottom.min(bounds.bottom),
-        };
-        let Ok((overlap_width, _)) = size_of_rect(overlap) else {
+        let Some(overlap) = overlap(selected, bounds) else {
             continue;
         };
         let source_row_bytes = capture.image.width() as usize * 4;
-        let span = overlap_width as usize * 4;
+        let span = overlap.right.abs_diff(overlap.left) as usize * 4;
         for y in overlap.top..overlap.bottom {
             let source = offset(y - bounds.top, overlap.left - bounds.left, source_row_bytes);
             let target = offset(y - selected.top, overlap.left - selected.left, row_bytes);

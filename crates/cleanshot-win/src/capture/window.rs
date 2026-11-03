@@ -9,7 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::BOOL;
 
-use super::{MonitorImage, first_holding, holds};
+use super::{MonitorImage, first_holding, holds, overlap};
 use crate::Error;
 
 /// A window a window capture can pick: its frame, DWM's extended frame bounds without the
@@ -37,7 +37,7 @@ pub fn pickable_windows(captures: &[MonitorImage]) -> Result<Vec<Pickable>, Erro
         .into_iter()
         .filter(|&window| pickable(window))
         .filter_map(|window| {
-            let frame = frame(window).and_then(|frame| cut_to(frame, desktop))?;
+            let frame = frame(window).and_then(|frame| overlap(frame, desktop))?;
             Some(Pickable {
                 frame,
                 title: title(window),
@@ -156,16 +156,6 @@ fn desktop_bounds(captures: &[MonitorImage]) -> RECT {
         .unwrap_or_default()
 }
 
-fn cut_to(frame: RECT, desktop: RECT) -> Option<RECT> {
-    let cut = RECT {
-        left: frame.left.max(desktop.left),
-        top: frame.top.max(desktop.top),
-        right: frame.right.min(desktop.right),
-        bottom: frame.bottom.min(desktop.bottom),
-    };
-    (cut.left < cut.right && cut.top < cut.bottom).then_some(cut)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,13 +194,13 @@ mod tests {
     fn f08_a_frame_is_cut_to_the_desktop_and_a_frame_off_it_is_dropped() {
         let desktop = rect(-1920, 0, 1920, 1080);
         assert_eq!(
-            cut_to(rect(1800, 900, 2100, 1200), desktop),
+            overlap(rect(1800, 900, 2100, 1200), desktop),
             Some(rect(1800, 900, 1920, 1080))
         );
         assert_eq!(
-            cut_to(rect(-2000, -10, -1900, 10), desktop),
+            overlap(rect(-2000, -10, -1900, 10), desktop),
             Some(rect(-1920, 0, -1900, 10))
         );
-        assert_eq!(cut_to(rect(1920, 0, 2000, 100), desktop), None);
+        assert_eq!(overlap(rect(1920, 0, 2000, 100), desktop), None);
     }
 }
