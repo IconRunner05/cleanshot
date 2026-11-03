@@ -13,6 +13,7 @@ pub struct Document {
     pub(crate) shapes: Vec<ShapeEntry>,
     pub(crate) crop: Option<RectF>,
     pub(crate) frame: Frame,
+    pub(crate) dim: SpotlightDim,
 }
 
 impl Document {
@@ -24,6 +25,7 @@ impl Document {
             shapes: Vec::new(),
             crop: None,
             frame: Frame::default(),
+            dim: SpotlightDim::Medium,
         }
     }
 
@@ -83,6 +85,12 @@ impl Document {
     #[must_use]
     pub fn frame(&self) -> Frame {
         self.frame
+    }
+
+    /// How dark the image is outside every spotlight (F-43, D-123).
+    #[must_use]
+    pub fn dim(&self) -> SpotlightDim {
+        self.dim
     }
 
     /// The text each shape shows, in drawing order, with the shape showing it.
@@ -322,13 +330,31 @@ impl RedactStrength {
     }
 }
 
-/// What a spotlight lays over the image outside it (F-43, D-78).
-pub const SPOTLIGHT_DIM: Color = Color {
-    r: 0,
-    g: 0,
-    b: 0,
-    a: 153,
-};
+/// How dark the image is outside every spotlight, one setting for the document (F-43, D-123).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpotlightDim {
+    Light,
+    Medium,
+    Dark,
+}
+
+impl SpotlightDim {
+    /// What the dim lays over the image outside the spotlights: black at 40%, 60% or 80%.
+    #[must_use]
+    pub const fn color(self) -> Color {
+        let a = match self {
+            Self::Light => 102,
+            Self::Medium => 153,
+            Self::Dark => 204,
+        };
+        Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a,
+        }
+    }
+}
 
 /// The colour a shape is drawn in, its stroke width in image pixels, and whether it casts a
 /// shadow (D-114).

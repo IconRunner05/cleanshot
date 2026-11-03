@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Bubble, Color, Command, Document, Fill, Frame, HighlightStrength, Label, PointF, RectF,
-    RedactMode, RedactStrength, RgbaImage, SPOTLIGHT_DIM, Shape, ShapeEntry, ShapeId, Style,
+    RedactMode, RedactStrength, RgbaImage, Shape, ShapeEntry, ShapeId, SpotlightDim, Style,
     areas_outside, arrow_head, box_handles, dimmed_areas, handles, step_numbers, text_on,
 };
 use cleanshot_render::{Patch, highlighted, redacted, shape_shadow};
@@ -547,7 +547,8 @@ fn shown_shapes<'a>(
             Command::Remove(_)
             | Command::Restack { .. }
             | Command::SetCrop(_)
-            | Command::SetFrame(_),
+            | Command::SetFrame(_)
+            | Command::SetDim(_),
         )
         | None => (None, None),
     };
@@ -603,7 +604,8 @@ pub(crate) fn document_canvas(
                 window,
             );
             let dimmed = dimmed_areas(image, shown.iter().map(|(_, shape, _)| *shape));
-            paint_dim(&dimmed, fit.image_bounds, &fit, window);
+            let dim = document.dim().color();
+            paint_dim(&dimmed, dim, fit.image_bounds, &fit, window);
             let mut selected_shape = None;
             let numbers =
                 step_numbers(shown.iter().map(|(_, shape, _)| *shape)).collect::<Vec<_>>();
@@ -613,6 +615,7 @@ pub(crate) fn document_canvas(
                     redactions: &previews.redactions,
                     shadows: &previews.shadows,
                     dimmed: &dimmed,
+                    dim,
                     number,
                 };
                 let shadow = paint_shadow(id, shape, *style, &painting, window, cx);
@@ -627,6 +630,7 @@ pub(crate) fn document_canvas(
             if let Some(crop) = document.crop() {
                 paint_dim(
                     &areas_outside(image, &[crop]),
+                    OUTSIDE_CROP,
                     fit.image_bounds,
                     &fit,
                     window,
@@ -811,6 +815,7 @@ struct Painting<'a> {
     redactions: &'a RedactionPreviews,
     shadows: &'a ShadowPreviews,
     dimmed: &'a [RectF],
+    dim: Color,
     number: usize,
 }
 
@@ -826,6 +831,7 @@ fn paint_shape(
         redactions,
         shadows: _,
         dimmed,
+        dim,
         number,
     } = *painting;
     let color = rgba(style.color);
@@ -897,7 +903,7 @@ fn paint_shape(
         } => {
             // D-78: a redaction is the capture with its pixels destroyed, so it dims like the capture.
             if let Some(painted) = redactions.paint(*rect, *mode, *strength, fit, window) {
-                paint_dim(dimmed, painted, fit, window);
+                paint_dim(dimmed, dim, painted, fit, window);
             }
             Ok(())
         }
@@ -956,11 +962,20 @@ fn paint_bubble(
 }
 
 /// Lays the spotlight dim over each of `areas`, cut to `within` (F-43, D-78).
-fn paint_dim(areas: &[RectF], within: Bounds<Pixels>, fit: &Fit, window: &mut Window) {
+/// What the canvas lays over the image outside the crop while it is being changed (F-37).
+const OUTSIDE_CROP: Color = SpotlightDim::Medium.color();
+
+fn paint_dim(
+    areas: &[RectF],
+    color: Color,
+    within: Bounds<Pixels>,
+    fit: &Fit,
+    window: &mut Window,
+) {
     for area in areas {
         let bounds = fit.bounds(*area).intersect(&within);
         if !bounds.is_empty() {
-            window.paint_quad(fill(bounds, rgba(SPOTLIGHT_DIM)));
+            window.paint_quad(fill(bounds, rgba(color)));
         }
     }
 }

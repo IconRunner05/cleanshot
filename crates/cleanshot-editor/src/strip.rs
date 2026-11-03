@@ -1,4 +1,4 @@
-use cleanshot_core::{Fill, Frame, Look, Property, Setting};
+use cleanshot_core::{Command, Fill, Frame, Look, Property, Setting, SpotlightDim};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Role, Stateful,
@@ -11,16 +11,17 @@ use crate::toolbar::panel;
 use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// The property strip under the toolbar (CHARTER 4, D-55): a radio group for each of
-/// `settings`, with `look`'s values checked, then the document's frame toggles (F-44). `on_set`
-/// is called with the choice picked and `on_frame` with the frame toggled, by click, Enter or
-/// Space.
+/// `settings`, with `look`'s values checked, then the document's spotlight `dim` where there is
+/// one to show (D-123), then its frame toggles (F-44). `on_set` is called with the choice picked
+/// and `on_document` with the document change, by click, Enter or Space.
 pub(crate) fn property_strip(
     settings: &[Setting],
     look: Look,
     frame: Frame,
+    dim: Option<SpotlightDim>,
     theme: Theme,
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
-    on_frame: impl Fn(Frame, &mut Window, &mut App) + Clone + 'static,
+    on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
     let groups = settings
         .iter()
@@ -72,7 +73,7 @@ pub(crate) fn property_strip(
         ),
     ]
     .map(|(name, checked, toggled)| {
-        let on_frame = on_frame.clone();
+        let on_document = on_document.clone();
         strip_button(
             format!("{IMAGE_FRAME}: {name}"),
             Role::CheckBox,
@@ -80,7 +81,7 @@ pub(crate) fn property_strip(
             checked,
             theme,
         )
-        .on_click(move |_, window, cx| on_frame(toggled, window, cx))
+        .on_click(move |_, window, cx| on_document(Command::SetFrame(toggled), window, cx))
         .child(div().text_xs().text_color(theme.text).child(name))
     });
     panel(theme)
@@ -89,22 +90,57 @@ pub(crate) fn property_strip(
         .aria_label("Properties")
         .gap(px(8.0))
         .children(groups)
+        .children(dim.map(|dim| dim_group(dim, !settings.is_empty(), theme, on_document)))
         .child(
-            group(IMAGE_FRAME, Role::Group, !settings.is_empty(), theme)
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text)
-                        .pr(px(4.0))
-                        .child(IMAGE_FRAME),
-                )
-                .children(toggles),
+            group(
+                IMAGE_FRAME,
+                Role::Group,
+                !settings.is_empty() || dim.is_some(),
+                theme,
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.text)
+                    .pr(px(4.0))
+                    .child(IMAGE_FRAME),
+            )
+            .children(toggles),
         )
 }
 
 /// What the strip calls the border and shadow round the whole image, apart from a shape's own
 /// shadow (F-44, D-114).
 const IMAGE_FRAME: &str = "Image frame";
+
+/// The spotlight dim's three steps, with `dim` checked (F-43, D-123).
+fn dim_group(
+    dim: SpotlightDim,
+    after: bool,
+    theme: Theme,
+    on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
+) -> Stateful<Div> {
+    let choices = [
+        (SpotlightDim::Light, "Light"),
+        (SpotlightDim::Medium, "Medium"),
+        (SpotlightDim::Dark, "Dark"),
+    ]
+    .map(|(choice, name)| {
+        let on_document = on_document.clone();
+        strip_button(
+            format!("{SPOTLIGHT_DIM}: {name}"),
+            Role::RadioButton,
+            name,
+            choice == dim,
+            theme,
+        )
+        .on_click(move |_, window, cx| on_document(Command::SetDim(choice), window, cx))
+        .child(div().text_xs().text_color(theme.text).child(name))
+    });
+    group(SPOTLIGHT_DIM, Role::RadioGroup, after, theme).children(choices)
+}
+
+const SPOTLIGHT_DIM: &str = "Dim";
 
 /// A labelled row of buttons, `after` another: then set off from it by a hairline.
 fn group(name: &'static str, role: Role, after: bool, theme: Theme) -> Stateful<Div> {

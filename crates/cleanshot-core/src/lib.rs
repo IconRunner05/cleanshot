@@ -39,7 +39,7 @@ pub use delivery::{
 };
 pub use document::{
     Color, Document, Fill, Frame, HighlightStrength, ImageError, PointF, RectF, RedactMode,
-    RedactStrength, RgbaImage, SPOTLIGHT_DIM, Shape, ShapeEntry, ShapeId, Style, areas_outside,
+    RedactStrength, RgbaImage, Shape, ShapeEntry, ShapeId, SpotlightDim, Style, areas_outside,
     arrow_head, dimmed_areas, step_numbers,
 };
 pub use drag::{Drag, Press, Start};

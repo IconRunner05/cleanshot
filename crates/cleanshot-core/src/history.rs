@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::document::{Document, Frame, RectF, Shape, ShapeEntry, ShapeId, Style};
+use crate::document::{Document, Frame, RectF, Shape, ShapeEntry, ShapeId, SpotlightDim, Style};
 use crate::tool::Tool;
 
 /// One edit to a document (F-38: every edit is a command).
@@ -27,6 +27,7 @@ pub enum Command {
     /// `None` exports the whole image (F-37).
     SetCrop(Option<RectF>),
     SetFrame(Frame),
+    SetDim(SpotlightDim),
 }
 
 /// Where [`Command::Restack`] moves a shape: past the one above or below it, or to the top or
@@ -75,12 +76,13 @@ pub struct History {
 }
 
 /// What an edit changed, so the editor can name the step to undo or redo (D-116): a shape,
-/// by the tool that draws it, the crop or the image frame.
+/// by the tool that draws it, the crop, the image frame or the spotlight dim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
     Shape(Tool),
     Crop,
     Frame,
+    Dim,
 }
 
 /// A change that, applied, returns the change that reverts it.
@@ -92,6 +94,7 @@ enum Edit {
     Restack { id: ShapeId, index: usize },
     SetCrop(Option<RectF>),
     SetFrame(Frame),
+    SetDim(SpotlightDim),
 }
 
 impl History {
@@ -155,6 +158,7 @@ impl History {
             }
             Command::SetCrop(crop) => (Change::Crop, Edit::SetCrop(crop)),
             Command::SetFrame(frame) => (Change::Frame, Edit::SetFrame(frame)),
+            Command::SetDim(dim) => (Change::Dim, Edit::SetDim(dim)),
         };
         let inverse = edit.apply(&mut self.document)?;
         self.undo.push((change, inverse));
@@ -241,6 +245,7 @@ impl Edit {
                 Ok(Edit::SetCrop(mem::replace(&mut document.crop, crop)))
             }
             Edit::SetFrame(frame) => Ok(Edit::SetFrame(mem::replace(&mut document.frame, frame))),
+            Edit::SetDim(dim) => Ok(Edit::SetDim(mem::replace(&mut document.dim, dim))),
         }
     }
 }
@@ -609,5 +614,21 @@ mod tests {
         assert_eq!(history.document().frame(), Frame::default());
         assert_eq!(history.redo(), Ok(true));
         assert_eq!(history.document().frame(), framed);
+    }
+
+    #[test]
+    fn d123_the_spotlight_dim_starts_at_60_percent_and_setting_it_is_an_edit_to_undo() {
+        let mut history = history();
+        assert_eq!(history.document().dim(), SpotlightDim::Medium);
+        assert_eq!(
+            SpotlightDim::Medium.color().a,
+            153,
+            "the dim F-43 shipped with"
+        );
+        history.apply(Command::SetDim(SpotlightDim::Dark)).unwrap();
+        assert_eq!(history.document().dim(), SpotlightDim::Dark);
+        assert_eq!(history.to_undo(), Some(Change::Dim));
+        assert_eq!(history.undo(), Ok(true));
+        assert_eq!(history.document().dim(), SpotlightDim::Medium);
     }
 }

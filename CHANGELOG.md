@@ -18,6 +18,9 @@ section exists.
   weakest, so a redaction is never easier to read than before (F-36, C-22).
 - The highlighter has a Strength setting on the property strip: Light, Medium or Strong.
   Strong, the default, is the highlight as it was. It can be changed after drawing (F-35).
+- A spotlight's dim can be Light, Medium or Dark, picked on the property strip while the
+  Spotlight tool or a spotlight is selected. It is one setting for the whole image, and
+  Medium, the default, is the dim as it was (F-43).
 - Ctrl+] and Ctrl+[ move the selected shape in front of or behind its neighbour, and
   Ctrl+Shift+] and Ctrl+Shift+[ move it to the front or back. Each move can be undone
   (F-38). Right-clicking a shape opens a menu with the same four moves.

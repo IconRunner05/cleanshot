@@ -442,7 +442,8 @@ fn refusal(error: &CommandError) -> &'static str {
 }
 
 impl EditorView {
-    /// The property strip for what the next strip change would restyle, and the frame toggles.
+    /// The property strip for what the next strip change would restyle, the spotlight dim while
+    /// a spotlight is picked, and the frame toggles.
     fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
         let setter = view.clone();
         let on_set = move |property, window: &mut Window, cx: &mut App| {
@@ -455,11 +456,11 @@ impl EditorView {
                 cx.notify();
             });
         };
-        let framer = view.clone();
-        let on_frame = move |frame, _: &mut Window, cx: &mut App| {
+        let changer = view.clone();
+        let on_document = move |command, _: &mut Window, cx: &mut App| {
             // Err only means a late event reached the view as its window closed: nothing is left to change.
-            let _ = framer.update(cx, |view, cx| {
-                view.apply(Command::SetFrame(frame));
+            let _ = changer.update(cx, |view, cx| {
+                view.apply(command);
                 cx.notify();
             });
         };
@@ -474,9 +475,10 @@ impl EditorView {
             settings,
             look,
             self.document.frame(),
+            (strip_tool == Tool::Spotlight).then(|| self.document.dim()),
             theme,
             on_set,
-            on_frame,
+            on_document,
         )
     }
 }

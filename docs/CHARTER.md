@@ -141,7 +141,7 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 | F-40 | Copy / save from editor | Ctrl+C, Ctrl+S | M2 | Uses F-24's pipeline. |
 | F-41 | Numbered step | N | M4 | Auto-increments 1, 2, 3…; renumbers when one is deleted. |
 | F-42 | Speech bubble | B | M4 | Text box with a draggable tail. The box's sides and corners set its width and the text wraps inside it at the same size; its height follows the text (D-119). |
-| F-43 | Spotlight | S | M4 | Dims everything outside the rectangle. |
+| F-43 | Spotlight | S | M4 | Dims everything outside the rectangle. How dark is one setting for the image, Light, Medium or Dark, on the strip while a spotlight is picked (D-123). |
 | F-44 | Shape shadow and image frame | — | M4 | An arrow, line, rectangle, ellipse, text, numbered step or speech bubble can cast a soft shadow, toggled by Shadow on the property strip while that shape or its tool is picked (D-114). Separately, the strip's Image frame group adds a border and a drop shadow round the whole exported image. |
 
 ### App, tray and settings

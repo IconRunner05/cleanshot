@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use cleanshot_core::{
-    Color, Document, Fill, GlyphMask, HighlightStrength, PointF, RectF, RgbaImage, SPOTLIGHT_DIM,
-    Shape, ShapeEntry, ShapeId, TextMasks, arrow_head, dimmed_areas, text_on,
+    Color, Document, Fill, GlyphMask, HighlightStrength, PointF, RectF, RgbaImage, Shape,
+    ShapeEntry, ShapeId, TextMasks, arrow_head, dimmed_areas, text_on,
 };
 use tiny_skia::{
     BlendMode, ColorU8, FillRule, IntRect, IntSize, LineCap, LineJoin, Paint, Path, PathBuilder,
@@ -62,7 +62,7 @@ pub fn flatten(document: &Document, masks: &TextMasks) -> Result<Flattened, Erro
     let mut pixmap = Pixmap::from_vec(premultiplied, size).ok_or_else(too_large)?;
     let dim = Paint {
         anti_alias: false,
-        ..paint(SPOTLIGHT_DIM, BlendMode::SourceOver)
+        ..paint(document.dim().color(), BlendMode::SourceOver)
     };
     for area in dimmed_areas(base, document.shapes().iter().map(|entry| &entry.shape)) {
         fill(
@@ -470,7 +470,7 @@ fn skia_rect(rect: RectF) -> Option<Rect> {
 mod tests {
     use std::sync::Arc;
 
-    use cleanshot_core::{Command, History, Style};
+    use cleanshot_core::{Command, History, SpotlightDim, Style};
 
     use super::*;
 
@@ -810,6 +810,46 @@ mod tests {
         assert_eq!(pixel(&flat, 0, 0), [255, 0, 0, 255]);
         assert_eq!(pixel(&flat, 3, 2), [250, 250, 250, 255]);
         assert_eq!(pixel(&flat, 1, 1), [100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn d123_the_export_dims_outside_a_spotlight_as_dark_as_the_document_says() {
+        let mut history = history(uniform([250, 250, 250, 255]));
+        let spotlight = Shape::Spotlight(RectF {
+            x: 2.0,
+            y: 1.0,
+            width: 2.0,
+            height: 2.0,
+        });
+        let style = Style::new(
+            Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            1.0,
+        );
+        history
+            .apply(Command::Add {
+                shape: spotlight,
+                style,
+            })
+            .unwrap();
+        let outside = |history: &History| {
+            let flat = flatten(history.document(), &TextMasks::default()).unwrap();
+            pixel(flat.image(), 0, 0)[0]
+        };
+        let mut shades = Vec::new();
+        for dim in [
+            SpotlightDim::Light,
+            SpotlightDim::Medium,
+            SpotlightDim::Dark,
+        ] {
+            history.apply(Command::SetDim(dim)).unwrap();
+            shades.push(outside(&history));
+        }
+        assert_eq!(shades, [150, 100, 50]);
     }
 
     #[test]
