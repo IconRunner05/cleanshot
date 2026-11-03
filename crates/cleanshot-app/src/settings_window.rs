@@ -1,7 +1,9 @@
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use cleanshot_core::{
-    Applied, HotkeyAction, Settings, SettingsSaveError, StartupEntryError, run_command, starts,
+    Applied, HotkeyAction, OptionsEntry, OptionsItem, Picked, Settings, SettingsSaveError,
+    StartupEntryError, options_menu, run_command, starts,
 };
 use cleanshot_win::settings_file::{settings_path, write_settings};
 use cleanshot_win::startup::{remove_run_value, run_value, set_run_value};
@@ -73,6 +75,45 @@ fn exe_path(session: &Session) -> Option<String> {
             session.log_line("startup", |_| String::from("exe_path not_unicode"));
             None
         }
+    }
+}
+
+/// F-12: the Options menu for the settings and policy in force when it opens.
+pub(super) fn options_for(session: &Rc<Session>) -> impl Fn() -> Vec<OptionsEntry> + 'static {
+    let session = Rc::clone(session);
+    move || options_menu(&session.settings.borrow(), &session.policy)
+}
+
+/// F-12: applies a pick on the Options menu as the settings window applies a change (D-81).
+/// Save folder... asks `choose_folder` for the folder.
+pub(super) fn apply_option(
+    session: &Session,
+    item: OptionsItem,
+    choose_folder: impl FnOnce() -> Result<Option<PathBuf>, cleanshot_win::Error>,
+) {
+    let current = session.settings.borrow().clone();
+    let changed = match item.choose(&current) {
+        Picked::Changed(changed) => changed,
+        Picked::ChooseFolder => match choose_folder() {
+            Ok(None) => return,
+            Ok(Some(folder)) => match folder.into_os_string().into_string() {
+                Ok(folder) => Settings {
+                    save_folder: Some(folder),
+                    ..current
+                },
+                Err(_unnamed) => {
+                    return session.warn(
+                        "That folder's name cannot be kept in the settings. Choose another folder.",
+                    );
+                }
+            },
+            Err(error) => {
+                return session.warn(&format!("The folder dialog could not open: {error}."));
+            }
+        },
+    };
+    if let Err(error) = apply_settings(session, changed).saved {
+        session.warn(&format!("The setting could not be saved: {error}."));
     }
 }
 

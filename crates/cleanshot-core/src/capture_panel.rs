@@ -33,7 +33,8 @@ impl CapturePanel {
     }
 
     /// Presses `control`: a mode becomes the panel's mode, Timer steps the timer, and Capture
-    /// or Cancel ends the panel. A control the panel does not show changes nothing.
+    /// or Cancel ends the panel. Options, which opens its menu (F-12), and a control the panel
+    /// does not show change nothing.
     pub fn press(&mut self, control: ToolbarControl) -> PanelOutcome {
         match control {
             ToolbarControl::Mode(mode) => {
@@ -49,9 +50,10 @@ impl CapturePanel {
                 timer: self.timer,
             },
             ToolbarControl::Cancel => PanelOutcome::Cancel,
-            ToolbarControl::Copy | ToolbarControl::Save | ToolbarControl::Edit => {
-                PanelOutcome::Stay
-            }
+            ToolbarControl::Options
+            | ToolbarControl::Copy
+            | ToolbarControl::Save
+            | ToolbarControl::Edit => PanelOutcome::Stay,
         }
     }
 }
@@ -99,8 +101,9 @@ mod tests {
     }
 
     #[test]
-    fn f11_a_control_the_panel_does_not_show_changes_nothing() {
+    fn f11_f12_options_and_a_control_the_panel_does_not_show_change_nothing() {
         for control in [
+            ToolbarControl::Options,
             ToolbarControl::Copy,
             ToolbarControl::Save,
             ToolbarControl::Edit,

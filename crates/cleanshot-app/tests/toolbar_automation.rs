@@ -14,7 +14,7 @@ use cleanshot_win::capture::{MonitorImage, RECT};
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
 const TEST: &str = "f05_ui_automation_names_the_toolbar_buttons_and_copy_presses_copy";
-const BUTTONS: [&str; 4] = ["Copy", "Save", "Edit", "Cancel"];
+const BUTTONS: [&str; 5] = ["Options", "Copy", "Save", "Edit", "Cancel"];
 const SELECTED: RECT = RECT {
     left: 100,
     top: 100,
@@ -74,19 +74,28 @@ fn main() {
             },
             image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
         };
-        let shown = Overlay::show(&[monitor], Some(SELECTED), Vec::new(), None, move |event| {
-            let copied = match event {
-                OverlayEvent::Copy(selected) => Some(selected),
-                OverlayEvent::Cancelled
-                | OverlayEvent::Save(_)
-                | OverlayEvent::SaveAs(_)
-                | OverlayEvent::Edit(_)
-                | OverlayEvent::DrawFailed(_) => None,
-            };
-            if chosen.send(copied).is_err() {
-                println!("the walk ended before the overlay answered");
-            }
-        });
+        let shown = Overlay::show(
+            &[monitor],
+            Some(SELECTED),
+            Vec::new(),
+            None,
+            Vec::new,
+            move |event| {
+                let copied = match event {
+                    OverlayEvent::Copy(selected) => Some(selected),
+                    OverlayEvent::Cancelled
+                    | OverlayEvent::Save(_)
+                    | OverlayEvent::SaveAs(_)
+                    | OverlayEvent::Edit(_)
+                    | OverlayEvent::DrawFailed(_)
+                    | OverlayEvent::Options(_)
+                    | OverlayEvent::OptionsFailed(_) => None,
+                };
+                if chosen.send(copied).is_err() {
+                    println!("the walk ended before the overlay answered");
+                }
+            },
+        );
         match shown {
             // The overlay stays up until the walk ends the process.
             Ok(overlay) => {

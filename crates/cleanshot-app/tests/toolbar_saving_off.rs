@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use cleanshot_core::{DeliveryError, RgbaImage, SavingOff, delivery_notice};
 use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_container};
 use cleanshot_win::capture::{MonitorImage, RECT};
-use cleanshot_win::overlay::{Overlay, OverlayEvent};
+use cleanshot_win::overlay::Overlay;
 
 const TEST: &str = "f57_ui_automation_reports_save_off_with_the_reason_and_refuses_to_press_it";
 const SELECTED: RECT = RECT {
@@ -46,6 +46,7 @@ fn main() {
                 })
                 .collect();
             let wanted = [
+                ("Options", true, ""),
                 ("Copy", true, ""),
                 ("Save", false, expected.as_str()),
                 ("Edit", true, ""),
@@ -90,16 +91,9 @@ fn main() {
             Some(SELECTED),
             Vec::new(),
             Some(reason),
+            Vec::new,
             move |event| {
-                let name = match event {
-                    OverlayEvent::Cancelled => "Cancelled",
-                    OverlayEvent::Copy(_) => "Copy",
-                    OverlayEvent::Save(_) => "Save",
-                    OverlayEvent::Edit(_) => "Edit",
-                    OverlayEvent::SaveAs(_) => "SaveAs",
-                    OverlayEvent::DrawFailed(_) => "DrawFailed",
-                };
-                if chosen.send(name).is_err() {
+                if chosen.send(format!("{event:?}")).is_err() {
                     println!("the walk ended before the overlay answered");
                 }
             },

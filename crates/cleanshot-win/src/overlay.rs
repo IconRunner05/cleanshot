@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use cleanshot_core::{TabDirection, Toolbar, ToolbarControl};
+use std::path::PathBuf;
+
+use cleanshot_core::{OptionsEntry, OptionsItem, TabDirection, Toolbar, ToolbarControl};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory,
@@ -22,7 +24,7 @@ use crate::fade;
 use crate::palette::Palette;
 use crate::selection::{Grip, nudged};
 use crate::toolbar::automation::{self, Change, Mirror};
-use crate::toolbar::{self, Layout};
+use crate::toolbar::{self, Layout, options};
 
 mod picking;
 mod window;
@@ -49,6 +51,10 @@ pub enum OverlayEvent {
     SaveAs(RECT),
     /// Direct2D could not draw a monitor's frozen image.
     DrawFailed(windows::core::Error),
+    /// This item was picked on the Options menu (F-12). The overlay stays open.
+    Options(OptionsItem),
+    /// The Options menu could not show, or the overlay could not take its keys back after it.
+    OptionsFailed(Error),
 }
 
 /// A key the overlay holds as a hotkey while it is up (D-23).
@@ -123,6 +129,8 @@ struct Shared {
     focus: Cell<ToolbarControl>,
     mirror: Mirror,
     palette: Palette,
+    /// The Options menu as it stands, read each time it opens (F-12).
+    options: Box<dyn Fn() -> Vec<OptionsEntry>>,
 }
 
 impl Shared {
@@ -198,6 +206,37 @@ impl Shared {
         }
     }
 
+    /// F-12: the Options menu over the toolbar. The overlay's keys are hotkeys, which would
+    /// take Esc, Enter, Tab and the arrows from the menu, so they are let go while it shows.
+    fn options_menu(&self) {
+        let Some(button) = self
+            .toolbar()
+            .map(|layout| layout.area(ToolbarControl::Options))
+        else {
+            return;
+        };
+        let entries = (self.options)();
+        match self.without_keys(|| options::pick(button, &entries).map_err(Error::Window)) {
+            Ok(Some(item)) => self.send(OverlayEvent::Options(item)),
+            Ok(None) => {}
+            Err(error) => self.send(OverlayEvent::OptionsFailed(error)),
+        }
+    }
+
+    /// Runs `modal` with the overlay's keys given back to Windows, and takes them again after.
+    fn without_keys<T>(&self, modal: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+        let first = self
+            .windows
+            .borrow()
+            .first()
+            .copied()
+            .ok_or(Error::NoCaptures)?;
+        free_keys(first);
+        let done = modal();
+        take_keys(first)?;
+        done
+    }
+
     /// F-05: Cancel always closes; the others need a selection to act on.
     fn choose(&self, control: ToolbarControl) {
         match (control, self.selected.get()) {
@@ -206,6 +245,7 @@ impl Shared {
             (ToolbarControl::Save, Some(selected)) => self.send(OverlayEvent::Save(selected)),
             (ToolbarControl::Edit, Some(selected)) => self.send(OverlayEvent::Edit(selected)),
             (ToolbarControl::Copy | ToolbarControl::Save | ToolbarControl::Edit, None) => {}
+            (ToolbarControl::Options, _) => self.options_menu(),
             (ToolbarControl::Mode(_) | ToolbarControl::Timer | ToolbarControl::Capture, _) => {
                 unreachable!("the overlay toolbar shows no capture panel control")
             }
@@ -259,6 +299,7 @@ impl Overlay {
         selected: Option<RECT>,
         pickable: Vec<Pickable>,
         saving_off: Option<String>,
+        options: impl Fn() -> Vec<OptionsEntry> + 'static,
         on_event: impl FnMut(OverlayEvent) + 'static,
     ) -> Result<Self, Error> {
         register_class()?;
@@ -287,6 +328,7 @@ impl Overlay {
             focus: Cell::new(ToolbarControl::Copy),
             mirror: Mirror::new(Toolbar::Overlay, saving_off),
             palette: Palette::current().map_err(Error::Window)?,
+            options: Box::new(options),
         });
         shared.changed();
         let mut overlay = Self {
@@ -303,11 +345,7 @@ impl Overlay {
             shared.windows.borrow_mut().push(window);
         }
         let first = *overlay.windows.first().ok_or(Error::NoCaptures)?;
-        for (id, (modifiers, key, _)) in (0..).zip(KEYS) {
-            // SAFETY: `first` was created above on this thread.
-            unsafe { RegisterHotKey(Some(first), id, modifiers, u32::from(key.0)) }
-                .map_err(Error::HotkeyTaken)?;
-        }
+        take_keys(first)?;
         for &window in &overlay.windows {
             // SAFETY: `window` was created above; showing it without activation is F-02's rule.
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
@@ -342,11 +380,43 @@ impl Overlay {
 
     fn free_hotkeys(&self) {
         if let Some(&first) = self.windows.first() {
-            for (id, _) in (0..).zip(KEYS) {
-                // SAFETY: unregistering an id this window may not hold only returns an error.
-                let _ = unsafe { UnregisterHotKey(Some(first), id) };
-            }
+            free_keys(first);
         }
+    }
+
+    /// F-12 Save folder...: the folder dialog, owned by the toolbar's window, and the folder
+    /// chosen, or None when it was cancelled. The overlay's keys are let go while it shows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Window`] if the dialog cannot show; [`Error::HotkeyTaken`] if another program
+    /// took one of the overlay's keys while it showed.
+    pub fn choose_folder(&self) -> Result<Option<PathBuf>, Error> {
+        let owner = self
+            .shared
+            .toolbar_window
+            .get()
+            .or_else(|| self.windows.first().copied());
+        let owner = owner.ok_or(Error::NoCaptures)?;
+        self.shared
+            .without_keys(|| options::choose_folder(owner).map_err(Error::Window))
+    }
+}
+
+/// Holds every overlay key as a hotkey of `first` (D-23).
+fn take_keys(first: HWND) -> Result<(), Error> {
+    for (id, (modifiers, key, _)) in (0..).zip(KEYS) {
+        // SAFETY: `first` is an overlay window of this thread.
+        unsafe { RegisterHotKey(Some(first), id, modifiers, u32::from(key.0)) }
+            .map_err(Error::HotkeyTaken)?;
+    }
+    Ok(())
+}
+
+fn free_keys(first: HWND) {
+    for (id, _) in (0..).zip(KEYS) {
+        // SAFETY: unregistering an id this window may not hold only returns an error.
+        let _ = unsafe { UnregisterHotKey(Some(first), id) };
     }
 }
 
@@ -454,9 +524,16 @@ pub(crate) mod tests {
         let _screen = screen();
         let events = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&events);
-        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, move |event| {
-            sink.borrow_mut().push(format!("{event:?}"));
-        })
+        let overlay = Overlay::show(
+            &[monitor()],
+            None,
+            Vec::new(),
+            None,
+            Vec::new,
+            move |event| {
+                sink.borrow_mut().push(format!("{event:?}"));
+            },
+        )
         .expect("the overlay opens");
         pump(Duration::from_millis(500));
         let points = [(5, 7), (40, 30), (63, 47)];
@@ -503,8 +580,8 @@ pub(crate) mod tests {
     fn f13_closing_fades_the_overlay_only_with_animation_effects_on() {
         let _screen = screen();
         let animations = fade::animations_on().expect("the setting is readable");
-        let overlay =
-            Overlay::show(&[monitor()], None, Vec::new(), None, |_| {}).expect("the overlay opens");
+        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, Vec::new, |_| {})
+            .expect("the overlay opens");
         let closing = Instant::now();
         overlay.close().expect("the overlay fades");
         let closed = closing.elapsed();
@@ -519,8 +596,8 @@ pub(crate) mod tests {
     #[test]
     fn p01_show_returns_with_every_window_painted() {
         let _screen = screen();
-        let overlay =
-            Overlay::show(&[monitor()], None, Vec::new(), None, |_| {}).expect("the overlay opens");
+        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, Vec::new, |_| {})
+            .expect("the overlay opens");
         let pending: Vec<bool> = overlay
             .windows
             .iter()
@@ -540,11 +617,18 @@ pub(crate) mod tests {
         let screen = monitor().bounds;
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
-        let overlay = Overlay::show(&[monitor()], Some(screen), Vec::new(), None, move |event| {
-            if let OverlayEvent::Copy(selected) = event {
-                sink.set(Some(selected));
-            }
-        })
+        let overlay = Overlay::show(
+            &[monitor()],
+            Some(screen),
+            Vec::new(),
+            None,
+            Vec::new,
+            move |event| {
+                if let OverlayEvent::Copy(selected) = event {
+                    sink.set(Some(selected));
+                }
+            },
+        )
         .expect("the overlay opens");
         let enter = KEYS
             .iter()
@@ -614,6 +698,7 @@ pub(crate) mod tests {
             None,
             Vec::new(),
             None,
+            Vec::new,
             move |event| {
                 if let OverlayEvent::Copy(selected) = event {
                     sink.set(Some(selected));
@@ -654,11 +739,18 @@ pub(crate) mod tests {
         let screen = monitor().bounds;
         let asked = Rc::new(Cell::new(None));
         let sink = Rc::clone(&asked);
-        let overlay = Overlay::show(&[monitor()], Some(screen), Vec::new(), None, move |event| {
-            if let OverlayEvent::SaveAs(selected) = event {
-                sink.set(Some(selected));
-            }
-        })
+        let overlay = Overlay::show(
+            &[monitor()],
+            Some(screen),
+            Vec::new(),
+            None,
+            Vec::new,
+            move |event| {
+                if let OverlayEvent::SaveAs(selected) = event {
+                    sink.set(Some(selected));
+                }
+            },
+        )
         .expect("the overlay opens");
         let save_as = KEYS
             .iter()
@@ -690,6 +782,7 @@ pub(crate) mod tests {
             Some(monitor().bounds),
             Vec::new(),
             None,
+            Vec::new,
             |_| {},
         )
         .expect("the overlay opens");
@@ -732,13 +825,17 @@ pub(crate) mod tests {
             Some(selected),
             Vec::new(),
             off,
+            Vec::new,
             move |event| {
                 sink.borrow_mut().push(match event {
                     OverlayEvent::Copy(_) => "Copy",
                     OverlayEvent::Save(_) => "Save",
                     OverlayEvent::Edit(_) => "Edit",
                     OverlayEvent::Cancelled => "Cancel",
-                    OverlayEvent::SaveAs(_) | OverlayEvent::DrawFailed(_) => "other",
+                    OverlayEvent::SaveAs(_)
+                    | OverlayEvent::DrawFailed(_)
+                    | OverlayEvent::Options(_)
+                    | OverlayEvent::OptionsFailed(_) => "other",
                 });
             },
         )
@@ -748,11 +845,81 @@ pub(crate) mod tests {
             Key::Focus(TabDirection::Forward),
             Key::Focus(TabDirection::Back),
         );
-        for key in [tab, Key::Press, back, Key::Press, back, Key::Press] {
+        // From Copy, Shift+Tab passes Options to reach Cancel.
+        for key in [tab, Key::Press, back, Key::Press, back, back, Key::Press] {
             press(window, key);
         }
         drop(overlay);
         assert_eq!(*chosen.borrow(), ["Edit", "Copy", "Cancel"]);
+    }
+
+    #[test]
+    fn f12_the_overlay_lets_its_keys_go_while_the_options_menu_shows() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use cleanshot_core::OptionsEntry;
+        use windows::Win32::UI::Input::KeyboardAndMouse::VK_DOWN;
+
+        use crate::toolbar::options::answering::answer_menu;
+
+        let _screen = screen();
+        let picked = Rc::new(Cell::new(None));
+        let sink = Rc::clone(&picked);
+        let menu = || {
+            vec![OptionsEntry {
+                item: OptionsItem::ShowThumbnail,
+                checked: true,
+                off: None,
+            }]
+        };
+        // The toolbar, and so the Options button the menu opens beside, needs a monitor
+        // larger than monitor().
+        let large = MonitorImage {
+            bounds: RECT {
+                left: 0,
+                top: 0,
+                right: 800,
+                bottom: 600,
+            },
+            image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
+        };
+        let overlay = Overlay::show(
+            &[large],
+            Some(RECT {
+                left: 100,
+                top: 100,
+                right: 300,
+                bottom: 200,
+            }),
+            Vec::new(),
+            None,
+            menu,
+            move |event| {
+                if let OverlayEvent::Options(item) = event {
+                    sink.set(Some(item));
+                }
+            },
+        )
+        .expect("the overlay opens");
+        let window = overlay.windows[0];
+        let esc_free = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&esc_free);
+        let answering = answer_menu(&[VK_DOWN, VK_RETURN], move || {
+            seen.store(!held(MOD_NOREPEAT, VK_ESCAPE), Ordering::SeqCst);
+        });
+        // From Copy, Shift+Tab reaches Options.
+        press(window, Key::Focus(TabDirection::Back));
+        press(window, Key::Press);
+        answering.join().expect("the menu was answered");
+        let held_after = held(MOD_NOREPEAT, VK_ESCAPE);
+        drop(overlay);
+        assert!(
+            esc_free.load(Ordering::SeqCst),
+            "Esc was free while the menu showed"
+        );
+        assert!(held_after, "the overlay took Esc back after the menu");
+        assert_eq!(picked.get(), Some(OptionsItem::ShowThumbnail));
     }
 
     /// Whether another registration holds `key`: a thread hotkey for it is refused.
@@ -786,7 +953,7 @@ pub(crate) mod tests {
             Rc::clone(&freed),
             Rc::clone(&freed_during),
         );
-        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, move |_| {
+        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, Vec::new, move |_| {
             let Freed(_) = &guard;
             drop(closing.borrow_mut().take());
             report.set(Some(watching.get()));
@@ -808,7 +975,7 @@ pub(crate) mod tests {
     #[test]
     fn f01_an_overlay_given_no_monitor_says_so_and_opens_nothing() {
         let _screen = screen();
-        let shown = Overlay::show(&[], None, Vec::new(), None, |_| {});
+        let shown = Overlay::show(&[], None, Vec::new(), None, Vec::new, |_| {});
         assert!(matches!(shown, Err(Error::NoCaptures)), "{:?}", shown.err());
     }
 
@@ -817,9 +984,16 @@ pub(crate) mod tests {
         let _screen = screen();
         let cancelled = Rc::new(Cell::new(false));
         let sink = Rc::clone(&cancelled);
-        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, move |event| {
-            sink.set(matches!(event, OverlayEvent::Cancelled));
-        })
+        let overlay = Overlay::show(
+            &[monitor()],
+            None,
+            Vec::new(),
+            None,
+            Vec::new,
+            move |event| {
+                sink.set(matches!(event, OverlayEvent::Cancelled));
+            },
+        )
         .expect("the overlay opens");
         assert!(
             held(HOT_KEY_MODIFIERS(0), VK_TAB),
@@ -855,7 +1029,7 @@ pub(crate) mod tests {
         // SAFETY: a thread hotkey needs no window; it is released below.
         unsafe { RegisterHotKey(None, TAKEN, modifiers, u32::from(last.0)) }
             .expect("no other program holds the overlay's last key");
-        let shown = Overlay::show(&[monitor()], None, Vec::new(), None, |_| {});
+        let shown = Overlay::show(&[monitor()], None, Vec::new(), None, Vec::new, |_| {});
         // SAFETY: TAKEN was registered above on this thread.
         unsafe { UnregisterHotKey(None, TAKEN) }.expect("the taken key was registered");
         assert!(

@@ -86,6 +86,7 @@ impl Mirror {
             ToolbarControl::Save => self.saving_off.as_deref(),
             ToolbarControl::Mode(_)
             | ToolbarControl::Timer
+            | ToolbarControl::Options
             | ToolbarControl::Capture
             | ToolbarControl::Copy
             | ToolbarControl::Edit
@@ -528,6 +529,7 @@ mod providers {
                 UIA_ControlTypePropertyId => match self.control {
                     ToolbarControl::Mode(_) => number(UIA_RadioButtonControlTypeId.0),
                     ToolbarControl::Timer
+                    | ToolbarControl::Options
                     | ToolbarControl::Capture
                     | ToolbarControl::Copy
                     | ToolbarControl::Save

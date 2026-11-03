@@ -5,6 +5,7 @@ use crate::CaptureMode;
 pub enum ToolbarControl {
     Mode(CaptureMode),
     Timer,
+    Options,
     Capture,
     Copy,
     Save,
@@ -27,16 +28,18 @@ pub enum TabDirection {
     Back,
 }
 
-const PANEL: [ToolbarControl; 6] = [
+const PANEL: [ToolbarControl; 7] = [
     ToolbarControl::Mode(CaptureMode::Region),
     ToolbarControl::Mode(CaptureMode::Window),
     ToolbarControl::Mode(CaptureMode::FullScreen),
     ToolbarControl::Timer,
+    ToolbarControl::Options,
     ToolbarControl::Capture,
     ToolbarControl::Cancel,
 ];
 
-const OVERLAY: [ToolbarControl; 4] = [
+const OVERLAY: [ToolbarControl; 5] = [
+    ToolbarControl::Options,
     ToolbarControl::Copy,
     ToolbarControl::Save,
     ToolbarControl::Edit,
@@ -102,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn f11_the_panel_shows_the_three_modes_then_timer_capture_and_cancel() {
+    fn f11_f12_the_panel_shows_the_three_modes_then_timer_options_capture_and_cancel() {
         assert_eq!(
             Toolbar::Panel.controls(),
             [
@@ -110,6 +113,7 @@ mod tests {
                 ToolbarControl::Mode(CaptureMode::Window),
                 ToolbarControl::Mode(CaptureMode::FullScreen),
                 ToolbarControl::Timer,
+                ToolbarControl::Options,
                 ToolbarControl::Capture,
                 ToolbarControl::Cancel,
             ]
@@ -155,6 +159,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn f12_the_overlay_shows_options_before_copy_save_edit_and_cancel() {
+        assert_eq!(
+            Toolbar::Overlay.controls(),
+            [
+                ToolbarControl::Options,
+                ToolbarControl::Copy,
+                ToolbarControl::Save,
+                ToolbarControl::Edit,
+                ToolbarControl::Cancel,
+            ]
+        );
     }
 
     #[test]

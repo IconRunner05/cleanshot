@@ -1,6 +1,7 @@
 use std::borrow::Cow;
+use std::path::PathBuf;
 
-use cleanshot_core::{CapturePanel, PanelOutcome, Timer};
+use cleanshot_core::{CapturePanel, OptionsEntry, OptionsItem, PanelOutcome, Timer};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
@@ -9,6 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetCursorPos};
 
 use crate::Error;
 use crate::struct_size;
+use crate::toolbar::options;
 
 mod countdown;
 mod window;
@@ -26,6 +28,10 @@ pub enum PanelEvent {
     },
     /// Direct2D could not draw the panel.
     DrawFailed(windows::core::Error),
+    /// This item was picked on the Options menu (F-12). The panel stays open.
+    Options(OptionsItem),
+    /// The Options menu could not show.
+    OptionsFailed(windows::core::Error),
 }
 
 /// The capture panel (F-11): the toolbar shown before a selection, where the mode and the
@@ -37,7 +43,8 @@ pub struct Panel {
 
 impl Panel {
     /// Shows `panel`'s choices on the monitor under the pointer, with the keyboard focus on
-    /// Capture, and tells `on_event` what happens on it.
+    /// Capture, and tells `on_event` what happens on it. Its Options button shows the menu
+    /// `options` gives as it opens (F-12).
     ///
     /// # Errors
     ///
@@ -46,12 +53,23 @@ impl Panel {
     /// [`Error::MonitorTooSmall`] if that monitor cannot hold the panel.
     pub fn show(
         panel: CapturePanel,
+        options: impl Fn() -> Vec<OptionsEntry> + 'static,
         on_event: impl FnMut(PanelEvent) + 'static,
     ) -> Result<Self, Error> {
         window::register_class()?;
         let monitor = monitor_under_pointer().map_err(Error::Monitor)?;
-        let window = window::open_window(monitor, panel, Box::new(on_event))?;
+        let window = window::open_window(monitor, panel, Box::new(options), Box::new(on_event))?;
         Ok(Self { window })
+    }
+
+    /// F-12 Save folder...: the folder dialog, owned by the panel, and the folder chosen, or
+    /// None when it was cancelled.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Window`] if the dialog cannot show.
+    pub fn choose_folder(&self) -> Result<Option<PathBuf>, Error> {
+        options::choose_folder(self.window).map_err(Error::Window)
     }
 
     /// Brings the panel forward with the keyboard focus, as a second Ctrl+Shift+5 does.
@@ -119,7 +137,7 @@ mod tests {
     fn shown(panel: CapturePanel) -> (Panel, Closed) {
         let closed: Closed = Rc::default();
         let sink = Rc::clone(&closed);
-        let shown = Panel::show(panel, move |event| match event {
+        let shown = Panel::show(panel, Vec::new, move |event| match event {
             PanelEvent::Closed { panel, outcome } => {
                 assert!(
                     sink.borrow_mut().replace((panel, outcome)).is_none(),
@@ -127,6 +145,8 @@ mod tests {
                 );
             }
             PanelEvent::DrawFailed(error) => panic!("the panel draws: {error}"),
+            PanelEvent::Options(item) => panic!("no Options menu here, yet {item:?} was picked"),
+            PanelEvent::OptionsFailed(error) => panic!("no Options menu here: {error}"),
         })
         .expect("the panel opens");
         pump(Duration::from_millis(100));
@@ -163,7 +183,8 @@ mod tests {
             closed.borrow().is_none(),
             "a mode or the timer keeps it open"
         );
-        keys(&panel, &[VK_TAB, VK_RETURN]);
+        // Timer, then Options, to Capture.
+        keys(&panel, &[VK_TAB, VK_TAB, VK_RETURN]);
         let (choices, outcome) = closed.borrow_mut().take().expect("Capture closed it");
         let capture = PanelOutcome::Capture {
             mode: CaptureMode::FullScreen,
@@ -176,6 +197,41 @@ mod tests {
         );
         // SAFETY: IsWindowVisible only reads the window's style.
         assert!(!unsafe { IsWindowVisible(panel.window) }.as_bool());
+    }
+
+    #[test]
+    fn f12_options_shows_the_menu_and_tells_the_pick_while_the_panel_stays_open() {
+        use std::cell::Cell;
+
+        use windows::Win32::UI::Input::KeyboardAndMouse::VK_DOWN;
+
+        use crate::toolbar::options::answering::answer_menu;
+
+        let _screen = screen();
+        let picked = Rc::new(Cell::new(None));
+        let sink = Rc::clone(&picked);
+        let menu = || {
+            vec![OptionsEntry {
+                item: OptionsItem::ShowPointer,
+                checked: false,
+                off: None,
+            }]
+        };
+        let panel = Panel::show(CapturePanel::default(), menu, move |event| {
+            if let PanelEvent::Options(item) = event {
+                sink.set(Some(item));
+            }
+        })
+        .expect("the panel opens");
+        pump(Duration::from_millis(100));
+        let answering = answer_menu(&[VK_DOWN, VK_RETURN], || {});
+        // From Capture, Tab goes Cancel, Region, Window, Screen, Timer, Options.
+        keys(&panel, &[VK_TAB; 6]);
+        keys(&panel, &[VK_RETURN]);
+        answering.join().expect("the menu was answered");
+        assert_eq!(picked.get(), Some(OptionsItem::ShowPointer));
+        // SAFETY: IsWindowVisible only reads the window's style.
+        assert!(unsafe { IsWindowVisible(panel.window) }.as_bool());
     }
 
     #[test]

@@ -24,6 +24,7 @@ use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
 
 pub(crate) mod automation;
+pub(crate) mod options;
 
 /// A control's accessible name.
 pub(crate) fn name(control: ToolbarControl) -> &'static str {
@@ -32,6 +33,7 @@ pub(crate) fn name(control: ToolbarControl) -> &'static str {
         ToolbarControl::Mode(CaptureMode::Window) => "Window",
         ToolbarControl::Mode(CaptureMode::FullScreen) => "Screen",
         ToolbarControl::Timer => "Timer",
+        ToolbarControl::Options => "Options",
         ToolbarControl::Capture => "Capture",
         ToolbarControl::Copy => "Copy",
         ToolbarControl::Save => "Save",
@@ -45,6 +47,7 @@ pub(crate) fn label(control: ToolbarControl) -> &'static str {
     match control {
         ToolbarControl::Mode(_)
         | ToolbarControl::Timer
+        | ToolbarControl::Options
         | ToolbarControl::Capture
         | ToolbarControl::Copy
         | ToolbarControl::Save
@@ -57,6 +60,7 @@ fn button_width(control: ToolbarControl) -> f32 {
     match control {
         ToolbarControl::Mode(_)
         | ToolbarControl::Timer
+        | ToolbarControl::Options
         | ToolbarControl::Capture
         | ToolbarControl::Copy
         | ToolbarControl::Save

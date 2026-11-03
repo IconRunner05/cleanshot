@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use cleanshot_core::{CapturePanel, PanelOutcome, TabDirection, Toolbar, ToolbarControl};
+use cleanshot_core::{
+    CapturePanel, OptionsEntry, PanelOutcome, TabDirection, Toolbar, ToolbarControl,
+};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U;
 use windows::Win32::Graphics::Direct2D::{
@@ -27,12 +29,14 @@ use crate::palette::Palette;
 use crate::render_target::target;
 use crate::struct_size;
 use crate::toolbar::automation::{self, Change, Mirror, Request};
-use crate::toolbar::{self, Layout, Look, Mark, Paint};
+use crate::toolbar::{self, Layout, Look, Mark, Paint, options};
 use crate::window_state::{self, client_point};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotCapturePanel");
 
 type Listener = Box<dyn FnMut(PanelEvent)>;
+/// The Options menu as it stands, read each time it opens (F-12).
+pub(super) type Options = Box<dyn Fn() -> Vec<OptionsEntry>>;
 
 struct Surface {
     target: ID2D1HwndRenderTarget,
@@ -46,6 +50,7 @@ struct Surface {
     /// Set by the press that ends the panel; every key, click and request after it is ignored.
     closed: Cell<bool>,
     listener: RefCell<Listener>,
+    options: Options,
 }
 
 impl Surface {
@@ -92,6 +97,7 @@ impl Surface {
                             after: panel.timer(),
                         },
                     ),
+                    ToolbarControl::Options => self.options_menu(),
                     ToolbarControl::Capture
                     | ToolbarControl::Copy
                     | ToolbarControl::Save
@@ -100,6 +106,16 @@ impl Surface {
                 }
             }
             PanelOutcome::Capture { .. } | PanelOutcome::Cancel => self.close(window, outcome),
+        }
+    }
+
+    /// F-12: the Options menu over its button.
+    fn options_menu(&self) {
+        let entries = (self.options)();
+        match options::pick(self.layout.area(ToolbarControl::Options), &entries) {
+            Ok(Some(item)) => self.send(PanelEvent::Options(item)),
+            Ok(None) => {}
+            Err(error) => self.send(PanelEvent::OptionsFailed(error)),
         }
     }
 
@@ -168,6 +184,7 @@ fn look(panel: CapturePanel, control: ToolbarControl) -> Look {
     let label = match control {
         ToolbarControl::Timer => timer_label(panel.timer()),
         ToolbarControl::Mode(_)
+        | ToolbarControl::Options
         | ToolbarControl::Capture
         | ToolbarControl::Copy
         | ToolbarControl::Save
@@ -178,6 +195,7 @@ fn look(panel: CapturePanel, control: ToolbarControl) -> Look {
         ToolbarControl::Mode(mode) if mode == panel.mode() => Mark::Chosen,
         ToolbarControl::Mode(_)
         | ToolbarControl::Timer
+        | ToolbarControl::Options
         | ToolbarControl::Capture
         | ToolbarControl::Copy
         | ToolbarControl::Save
@@ -204,6 +222,7 @@ pub(super) fn register_class() -> Result<(), Error> {
 pub(super) fn open_window(
     monitor: RECT,
     panel: CapturePanel,
+    options: Options,
     listener: Listener,
 ) -> Result<HWND, Error> {
     let scale = dpi_scale(monitor).map_err(Error::Monitor)?;
@@ -232,17 +251,18 @@ pub(super) fn open_window(
         )
     }
     .map_err(Error::Window)?;
-    let made = surface(window, layout, scale, panel, previous, listener).and_then(|surface| {
-        crate::round_window(window, width, height, height / 2)?;
-        // SAFETY: `window` was created above with nothing stored on it, and
-        // window_procedure takes every message's Surface through window_state. D-106: the
-        // panel is left out of every capture.
-        unsafe {
-            window_state::attach(window, Rc::new(surface));
-            SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE)?;
-        }
-        Ok(())
-    });
+    let made =
+        surface(window, layout, scale, panel, previous, options, listener).and_then(|surface| {
+            crate::round_window(window, width, height, height / 2)?;
+            // SAFETY: `window` was created above with nothing stored on it, and
+            // window_procedure takes every message's Surface through window_state. D-106: the
+            // panel is left out of every capture.
+            unsafe {
+                window_state::attach(window, Rc::new(surface));
+                SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE)?;
+            }
+            Ok(())
+        });
     if let Err(error) = made {
         // SAFETY: the window was created above; WM_NCDESTROY frees any state on it.
         let destroyed = unsafe { DestroyWindow(window) };
@@ -268,6 +288,7 @@ fn surface(
     scale: f32,
     panel: CapturePanel,
     previous: HWND,
+    options: Options,
     listener: Listener,
 ) -> windows::core::Result<Surface> {
     // SAFETY: D2D1CreateFactory has no preconditions.
@@ -297,6 +318,7 @@ fn surface(
         previous,
         closed: Cell::new(false),
         listener: RefCell::new(listener),
+        options,
     })
 }
 

@@ -14,7 +14,7 @@ use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
 use crate::Session;
 use crate::delivery::deliver;
-use crate::thumbnail;
+use crate::{settings_window, thumbnail};
 
 /// Runs a job on GPUI's executor after a wait, outside any window procedure.
 pub(super) type Defer = dyn Fn(Duration, Box<dyn FnOnce()>);
@@ -171,12 +171,49 @@ pub(super) fn capture(
     let pickable = listed_windows(session, &captures);
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
-    let finishing = Rc::clone(session);
     let saving_off = match session.policy.saving() {
         Saving::Off(off) => Some(delivery_notice(&Err(DeliveryError::SavingOff(*off)))),
         Saving::Allowed { .. } => None,
     };
-    let shown = Overlay::show(&captures, selected, pickable, saving_off, move |event| {
+    let options = settings_window::options_for(session);
+    let shown = Overlay::show(
+        &captures,
+        selected,
+        pickable,
+        saving_off,
+        options,
+        overlay_listener(session, frozen, defer, pass_on),
+    );
+    match shown {
+        Ok(shown) => {
+            if picking {
+                shown.pick_window();
+            }
+            *session.overlay.borrow_mut() = Some(shown);
+            session.perf(|_| format!("P-01 overlay_visible_ms={}", asked.elapsed().as_millis()));
+        }
+        Err(error) => session.warn(&format!("The overlay could not open: {error}.")),
+    }
+    // P-01: the black-share pass runs after the overlay is visible.
+    session.log_capture(&copied, &outputs, &captures);
+}
+
+/// What the overlay's events do: an Options pick applies and leaves it open (F-12); every
+/// other event closes it once its window procedure has returned.
+fn overlay_listener(
+    session: &Rc<Session>,
+    frozen: Rc<Vec<MonitorImage>>,
+    defer: Rc<Defer>,
+    pass_on: Rc<PassOn>,
+) -> impl FnMut(OverlayEvent) + 'static {
+    let finishing = Rc::clone(session);
+    move |event| {
+        // F-12: a pick on the Options menu leaves the overlay open.
+        if let OverlayEvent::Options(item) = event {
+            let overlay = finishing.overlay.borrow();
+            let folder = || overlay.as_ref().map_or(Ok(None), Overlay::choose_folder);
+            return settings_window::apply_option(&finishing, item, folder);
+        }
         // F-13 (D-68): the editor takes over from the overlay with no fade between them.
         let handoff = matches!(event, OverlayEvent::Edit(_));
         let next = on_overlay_event(&finishing, &frozen, event, &*pass_on);
@@ -206,19 +243,7 @@ pub(super) fn capture(
                 closing.sample_after_use(&*sampling);
             }),
         );
-    });
-    match shown {
-        Ok(shown) => {
-            if picking {
-                shown.pick_window();
-            }
-            *session.overlay.borrow_mut() = Some(shown);
-            session.perf(|_| format!("P-01 overlay_visible_ms={}", asked.elapsed().as_millis()));
-        }
-        Err(error) => session.warn(&format!("The overlay could not open: {error}.")),
     }
-    // P-01: the black-share pass runs after the overlay is visible.
-    session.log_capture(&copied, &outputs, &captures);
 }
 
 /// Copies every monitor, with the pointer drawn in when Show pointer is on (F-12), so the
@@ -302,6 +327,10 @@ fn on_overlay_event(
         },
         OverlayEvent::DrawFailed(error) => {
             session.warn(&format!("The overlay could not draw: {error}."));
+        }
+        OverlayEvent::Options(_) => unreachable!("the overlay's listener applies Options picks"),
+        OverlayEvent::OptionsFailed(error) => {
+            session.warn(&format!("The Options menu could not open: {error}."));
         }
     }
     Next::Nothing

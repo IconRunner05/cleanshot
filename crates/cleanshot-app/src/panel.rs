@@ -6,6 +6,7 @@ use cleanshot_win::panel::{Countdown, CountdownEvent, Panel, PanelEvent};
 
 use crate::Session;
 use crate::capture::{Defer, Handoff, PassOn, Shot, capture};
+use crate::settings_window;
 
 /// F-11: shows the capture panel with the session's mode and timer (D-99), or brings it
 /// forward when it already shows. A capture or countdown under way leaves it shut.
@@ -23,31 +24,44 @@ pub(super) fn open(
     let defer: Rc<Defer> = Rc::new(defer);
     let pass_on: Rc<PassOn> = Rc::new(pass_on);
     let closing = Rc::clone(session);
-    let shown = Panel::show(session.capture_panel.get(), move |event| match event {
-        PanelEvent::Closed { panel, outcome } => {
-            closing.capture_panel.set(panel);
-            // The event arrives inside the panel's window procedure, so the window goes, and
-            // the countdown or capture starts, after it returns.
-            let after = Rc::clone(&closing);
-            let defer_again = Rc::clone(&defer);
-            let pass_on = Rc::clone(&pass_on);
-            defer(
-                Duration::ZERO,
-                Box::new(move || {
-                    after.panel.borrow_mut().take();
-                    match outcome {
-                        PanelOutcome::Capture { mode, timer } => {
-                            wait(&after, Shot::Mode(mode), timer, defer_again, pass_on);
+    let options = settings_window::options_for(session);
+    let shown = Panel::show(
+        session.capture_panel.get(),
+        options,
+        move |event| match event {
+            PanelEvent::Closed { panel, outcome } => {
+                closing.capture_panel.set(panel);
+                // The event arrives inside the panel's window procedure, so the window goes, and
+                // the countdown or capture starts, after it returns.
+                let after = Rc::clone(&closing);
+                let defer_again = Rc::clone(&defer);
+                let pass_on = Rc::clone(&pass_on);
+                defer(
+                    Duration::ZERO,
+                    Box::new(move || {
+                        after.panel.borrow_mut().take();
+                        match outcome {
+                            PanelOutcome::Capture { mode, timer } => {
+                                wait(&after, Shot::Mode(mode), timer, defer_again, pass_on);
+                            }
+                            PanelOutcome::Stay | PanelOutcome::Cancel => {}
                         }
-                        PanelOutcome::Stay | PanelOutcome::Cancel => {}
-                    }
-                }),
-            );
-        }
-        PanelEvent::DrawFailed(error) => {
-            closing.warn(&format!("The capture panel could not be drawn: {error}."));
-        }
-    });
+                    }),
+                );
+            }
+            PanelEvent::DrawFailed(error) => {
+                closing.warn(&format!("The capture panel could not be drawn: {error}."));
+            }
+            PanelEvent::Options(item) => {
+                let panel = closing.panel.borrow();
+                let folder = || panel.as_ref().map_or(Ok(None), Panel::choose_folder);
+                settings_window::apply_option(&closing, item, folder);
+            }
+            PanelEvent::OptionsFailed(error) => {
+                closing.warn(&format!("The Options menu could not open: {error}."));
+            }
+        },
+    );
     match shown {
         Ok(shown) => *session.panel.borrow_mut() = Some(shown),
         Err(error) => session.warn(&format!("The capture panel could not open: {error}.")),

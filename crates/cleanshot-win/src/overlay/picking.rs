@@ -36,6 +36,7 @@ impl Shared {
             Key::Choose(
                 control @ (ToolbarControl::Mode(_)
                 | ToolbarControl::Timer
+                | ToolbarControl::Options
                 | ToolbarControl::Capture),
             ) => self.choose(control),
         }
@@ -137,7 +138,7 @@ mod tests {
             .collect();
         let copied = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&copied);
-        let overlay = Overlay::show(&[monitor()], None, pickable, None, move |event| {
+        let overlay = Overlay::show(&[monitor()], None, pickable, None, Vec::new, move |event| {
             if let OverlayEvent::Copy(selected) = event {
                 sink.borrow_mut().push(selected);
             }
@@ -259,8 +260,8 @@ mod tests {
             frame: desktop.bounds,
             title: "Notes".to_owned(),
         }];
-        let overlay =
-            Overlay::show(&[desktop], None, pickable, None, |_| {}).expect("the overlay opens");
+        let overlay = Overlay::show(&[desktop], None, pickable, None, Vec::new, |_| {})
+            .expect("the overlay opens");
         let window = overlay.windows[0];
         for key in [Key::SwitchMode, Key::Focus(TabDirection::Forward)] {
             press(window, key);
