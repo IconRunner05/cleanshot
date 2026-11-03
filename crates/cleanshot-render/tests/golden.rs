@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "test target: D-120 allows unwrap in tests"
+)]
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;

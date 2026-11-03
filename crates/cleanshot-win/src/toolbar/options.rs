@@ -114,10 +114,10 @@ pub(crate) fn pick(
         cbSize: struct_size::<TPMPARAMS>(),
         rcExclude: button,
     };
-    // SAFETY: the menu and the owner live until after the call. A refused SetForegroundWindow
-    // leaves the menu open until a key or a click on it; posting WM_NULL is the documented
-    // way to let the menu close; and the owner is destroyed once, here.
+    // SAFETY: the menu and the owner live until after the call, and the owner is destroyed
+    // once, here.
     let chosen = unsafe {
+        // A refused SetForegroundWindow leaves the menu open until a key or a click on it.
         let _ = SetForegroundWindow(owner);
         let chosen = TrackPopupMenuEx(
             menu.0,
@@ -127,9 +127,12 @@ pub(crate) fn pick(
             owner,
             Some(&raw const params),
         );
+        // WM_NULL is the documented way to let the menu close; the menu has already
+        // returned, so a post that fails changes nothing.
         let _ = PostMessageW(Some(owner), WM_NULL, WPARAM(0), LPARAM(0));
         let destroyed = DestroyWindow(owner);
         debug_assert!(destroyed.is_ok(), "the menu's owner is destroyed once");
+        // A refused SetForegroundWindow leaves the focus where Windows puts it.
         let _ = SetForegroundWindow(previous);
         chosen
     };
@@ -148,10 +151,11 @@ pub(crate) fn choose_folder(owner: HWND) -> windows::core::Result<Option<PathBuf
     // SAFETY: reads which window is in the foreground.
     let previous = unsafe { GetForegroundWindow() };
     let chosen = folder_from_dialog(owner);
-    // SAFETY: the dialog has closed, so the foreground goes back where it was, and a refusal
-    // leaves it where Windows puts it. CoUninitialize balances a successful CoInitializeEx,
-    // after every COM object here is dropped.
+    // SAFETY: the dialog has closed, so the foreground goes back where it was.
+    // CoUninitialize balances a successful CoInitializeEx, after every COM object here is
+    // dropped.
     unsafe {
+        // A refused SetForegroundWindow leaves the focus where Windows puts it.
         let _ = SetForegroundWindow(previous);
         if initialised {
             CoUninitialize();

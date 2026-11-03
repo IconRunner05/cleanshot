@@ -94,6 +94,8 @@ pub(crate) fn round_window(
     unsafe {
         let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 2 * radius, 2 * radius);
         if SetWindowRgn(window, Some(region), false) == 0 {
+            // SetWindowRgn's failure is the one reported; a region that will not delete
+            // only leaks its handle.
             let _ = DeleteObject(region.into());
             return Err(windows::core::Error::from_thread());
         }

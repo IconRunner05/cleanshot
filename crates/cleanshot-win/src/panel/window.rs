@@ -131,10 +131,10 @@ impl Surface {
         if self.closed.replace(true) {
             return;
         }
-        // SAFETY: hiding and handing the focus on touch only these windows. ShowWindow returns
-        // whether the window was visible, and a refused SetForegroundWindow leaves the focus
-        // where Windows puts it, so neither result is an error.
+        // SAFETY: hiding and handing the focus on touch only these windows.
         unsafe {
+            // ShowWindow returns whether the window was visible, and a refused
+            // SetForegroundWindow leaves the focus where Windows puts it: neither is an error.
             let _ = ShowWindow(window, SW_HIDE);
             let _ = SetForegroundWindow(self.previous);
         }

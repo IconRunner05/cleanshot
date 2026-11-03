@@ -77,9 +77,9 @@ impl Countdown {
 
 impl Drop for Countdown {
     fn drop(&mut self) {
-        // SAFETY: the window belongs to this thread and is destroyed once, here; an id it no
-        // longer holds only makes UnregisterHotKey return an error.
+        // SAFETY: the window belongs to this thread and is destroyed once, here.
         let destroyed = unsafe {
+            // An id the window no longer holds is the only way this fails.
             let _ = UnregisterHotKey(Some(self.window), ESCAPE);
             DestroyWindow(self.window)
         };
@@ -164,9 +164,10 @@ impl Surface {
             return;
         }
         self.left.set(None);
-        // SAFETY: stops this window's own timer and hotkey; hiding returns whether it was
-        // visible, not an error, and an id no longer held only makes the calls fail.
+        // SAFETY: stops this window's own timer and hotkey, and hides it.
         unsafe {
+            // An id no longer held is the only way the first two fail, and ShowWindow returns
+            // whether the window was visible, not an error.
             let _ = KillTimer(Some(window), TICK);
             let _ = UnregisterHotKey(Some(window), ESCAPE);
             let _ = ShowWindow(window, SW_HIDE);

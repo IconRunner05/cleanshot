@@ -468,6 +468,7 @@ fn pump_messages(wait: Duration) {
     // its window.
     unsafe {
         while PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE).as_bool() {
+            // TranslateMessage returns whether it made a character message, not an error.
             let _ = TranslateMessage(&raw const message);
             DispatchMessageW(&raw const message);
         }

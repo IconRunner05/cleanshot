@@ -151,8 +151,9 @@ impl Surface {
     /// Moves the window one frame further into its resting place, and stops once it is there.
     fn slide(&self, window: HWND) {
         let offset = slid(self.shown.elapsed(), self.distance);
-        // SAFETY: `window` is this surface's own window; a failed move only skips a frame.
+        // SAFETY: `window` is this surface's own window.
         unsafe {
+            // A failed move only skips a frame.
             let _ = SetWindowPos(
                 window,
                 None,
@@ -163,6 +164,7 @@ impl Surface {
                 SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
             );
             if offset.is_none() {
+                // The timer is this window's own, so it fails only if already killed.
                 let _ = KillTimer(Some(window), SLIDE_TIMER);
             }
         }
@@ -393,9 +395,10 @@ unsafe extern "system" fn window_procedure(
                     hwndTrack: window,
                     dwHoverTime: 0,
                 };
-                // SAFETY: `leave` is writable and names this thread's window. Without it the
-                // buttons stay up until the next move, which is all a failure costs.
+                // SAFETY: `leave` is writable and names this thread's window.
                 unsafe {
+                    // Without them the buttons stay up until the next move, which is all a
+                    // failure costs.
                     let _ = TrackMouseEvent(&raw mut leave);
                     let _ = InvalidateRect(Some(window), None, false);
                 }

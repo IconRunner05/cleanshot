@@ -208,6 +208,8 @@ impl PatternWindow {
         .map_err(Error::Window)?;
         // SAFETY: the window was created on this thread just above.
         unsafe {
+            // ShowWindow returns whether the window was visible; a window that does not
+            // paint fails the copy it is measured by.
             let _ = ShowWindow(window, SW_SHOWNOACTIVATE);
             let _ = UpdateWindow(window);
         }
@@ -270,6 +272,7 @@ extern "system" fn paint_pattern(
             &raw const info,
             DIB_RGB_COLORS,
         );
+        // EndPaint always returns nonzero.
         let _ = EndPaint(window, &raw const paint);
     }
     LRESULT(0)

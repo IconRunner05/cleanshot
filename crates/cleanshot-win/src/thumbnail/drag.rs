@@ -304,6 +304,8 @@ mod tests {
             let block = medium.u.hGlobal;
             assert!(GlobalSize(block) >= length);
             let bytes = std::slice::from_raw_parts(GlobalLock(block).cast::<u8>(), length).to_vec();
+            // GlobalUnlock reports an error once the lock count reaches zero, which is
+            // this call's purpose.
             let _ = GlobalUnlock(block);
             ReleaseStgMedium(&raw mut medium);
             bytes
@@ -373,6 +375,7 @@ mod tests {
         // is released once.
         unsafe {
             let stream = contents.u.pstm.as_ref().expect("a stream");
+            // The bytes read, counted in `count`, are what the test checks.
             let _ = stream.Read(
                 read.as_mut_ptr().cast(),
                 u32::try_from(read.len()).expect("small"),

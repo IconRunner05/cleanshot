@@ -17,6 +17,7 @@ cleanshot-editor = { path = "crates/cleanshot-editor" }
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
 
 [profile.release]
 lto = "fat"
