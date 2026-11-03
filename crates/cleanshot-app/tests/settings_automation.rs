@@ -2,8 +2,9 @@
 //! Narrator's activate command would press them, Show a thumbnail is written to the settings
 //! file and Start with Windows sets and clears the HKCU Run value (D-30, D-93). A format picked
 //! from the Options menu (F-12) while the window is open is kept when the window next writes
-//! the file. Run as for `toolbar_automation`: GPUI owns the window's thread and the walk ends
-//! the process.
+//! the file. Closing the window, the last one open, leaves GPUI running for the tray (F-55).
+//! Run as for `toolbar_automation`: GPUI owns the window's thread and the walk ends the
+//! process.
 
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant};
 use cleanshot_core::{
     Applied, MAX_SETTINGS_BYTES, Policy, PolicyValue, SaveFormat, Settings, run_command, starts,
 };
+use cleanshot_editor::AsyncApp;
 use cleanshot_win::accessibility::{ControlKind, toggle_in_own_windows, wait_for_container};
 use cleanshot_win::settings_file::{read_settings, write_settings};
 use cleanshot_win::startup::{remove_run_value, run_value, set_run_value};
@@ -24,6 +26,9 @@ const THUMBNAIL: &str = "Show a thumbnail";
 const START_WITH_WINDOWS: &str = "Start with Windows";
 // A debug build on a cold runner can take seconds to apply a press; no budget is judged here.
 const PATIENCE: Duration = Duration::from_secs(10);
+const POLL: Duration = Duration::from_millis(50);
+// GPUI quitting on a closed window returns from `run` well inside this.
+const STILL_RUNNING: Duration = Duration::from_secs(1);
 
 fn main() {
     let exe = std::env::current_exe()
@@ -44,15 +49,13 @@ fn main() {
     // The settings the app holds, as apply_settings keeps them and the Options menu changes them.
     let in_force = Arc::new(Mutex::new(Settings::default()));
     let (opened, shown) = mpsc::channel();
-    let walked = (
-        file.clone(),
-        exe.clone(),
-        left_as_found.clone(),
-        Arc::clone(&in_force),
-    );
+    let walked = (file.clone(), exe.clone(), Arc::clone(&in_force));
+    let (verdict, walk_verdict) = mpsc::channel();
     thread::spawn(move || {
-        let (file, exe, left_as_found, in_force) = walked;
-        left_as_found.finish(walk(&file, &exe, &in_force, start, &shown));
+        let (file, exe, in_force) = walked;
+        verdict
+            .send(walk(&file, &exe, &in_force, start, &shown))
+            .expect("GPUI runs until the walk's verdict, or main finishes the run");
     });
     let stopped = left_as_found.clone();
     let ran = cleanshot_editor::run(move |cx| {
@@ -118,6 +121,8 @@ fn main() {
                 left_as_found.finish(Err(format!("the settings window did not open: {error}")))
             }
         }
+        cx.spawn(async move |cx| close_after_walk(cx, &walk_verdict, &left_as_found).await)
+            .detach();
     });
     stopped.finish(Err(format!(
         "GPUI stopped before the walk finished: {ran:?}"
@@ -152,6 +157,37 @@ impl LeftAsFound {
             }
         }
     }
+}
+
+/// F-55: once the walk passes, closes Settings, the last window open, and finishes only if
+/// GPUI is still running for the tray a second later.
+async fn close_after_walk(
+    cx: &mut AsyncApp,
+    walk_verdict: &mpsc::Receiver<Result<(), String>>,
+    left_as_found: &LeftAsFound,
+) -> ! {
+    let walked = loop {
+        match walk_verdict.try_recv() {
+            Ok(walked) => break walked,
+            Err(mpsc::TryRecvError::Empty) => cx.background_executor().timer(POLL).await,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                break Err("the walk thread ended with no verdict".into());
+            }
+        }
+    };
+    if walked.is_err() {
+        left_as_found.finish(walked);
+    }
+    let closed = cx.update(|cx| {
+        cx.windows()
+            .into_iter()
+            .try_for_each(|window| window.update(cx, |_, window, _| window.remove_window()))
+    });
+    if let Err(error) = closed {
+        left_as_found.finish(Err(format!("the settings window did not close: {error}")));
+    }
+    cx.background_executor().timer(STILL_RUNNING).await;
+    left_as_found.finish(Ok(()))
 }
 
 // A file from an earlier run would pass the thumbnail check before any press.

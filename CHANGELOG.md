@@ -7,6 +7,13 @@ All notable changes to Cleanshot are listed here. The format follows
 A release's notes on GitHub are its section below, so a version is tagged only once its
 section exists.
 
+## [Unreleased]
+
+### Fixed
+
+- Closing the settings window or the editor when no other Cleanshot window was open quit
+  Cleanshot too. It now closes only that window, and Cleanshot stays in the tray (F-55).
+
 ## [1.0.0-rc.1] - 2026-11-03
 
 ### Added

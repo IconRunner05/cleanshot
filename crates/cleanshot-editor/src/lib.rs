@@ -15,8 +15,8 @@ mod toolbar;
 use std::rc::Rc;
 
 use cleanshot_core::{CommandError, ImageError};
-use gpui::Application;
 pub use gpui::{App, AsyncApp};
+use gpui::{Application, QuitMode};
 use gpui_windows::WindowsPlatform;
 
 pub use crate::bench::{BenchReport, bench};
@@ -48,8 +48,8 @@ pub enum Error {
     SettingsHidden,
 }
 
-/// Runs the GPUI event loop on this thread until the app quits, calling `on_launch` once it
-/// is ready.
+/// Runs the GPUI event loop on this thread until something calls `quit`, calling `on_launch`
+/// once it is ready. Closing the last window does not quit: the tray outlives every window.
 ///
 /// # Errors
 ///
@@ -59,6 +59,7 @@ pub fn run(on_launch: impl FnOnce(&mut App) + 'static) -> Result<(), Error> {
         WindowsPlatform::new(false).map_err(|error| Error::PlatformStart(error.into()))?;
     Application::with_platform(Rc::new(RestrictedPlatform(platform)))
         .with_assets(Icons)
+        .with_quit_mode(QuitMode::Explicit)
         .run(on_launch);
     Ok(())
 }
