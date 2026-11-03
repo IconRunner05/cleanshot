@@ -81,7 +81,7 @@ pub fn write_settings(
         not_written(match error {
             SaveError::Write(error) => error.kind(),
             SaveError::UnsafeName(_) => ErrorKind::InvalidFilename,
-            SaveError::UnknownField(_) | SaveError::NoFreeName(_) => ErrorKind::Other,
+            SaveError::NoFreeName(_) => ErrorKind::Other,
         })
     })
 }

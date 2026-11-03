@@ -46,12 +46,79 @@ impl Stamp {
     }
 }
 
+/// C-15: a file-name template, text with only `{date}`, `{time}` and `{n}` fields in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Template {
+    parts: Vec<Part>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Part {
+    Text(String),
+    Date,
+    Time,
+    Number,
+}
+
+/// C-15: the template holds something other than text and `{date}`, `{time}`, `{n}`.
+#[derive(Debug, thiserror::Error)]
+#[error("the file-name template uses {0}, which is not one of {{date}}, {{time}}, {{n}}")]
+pub struct UnknownField(pub String);
+
+impl Template {
+    /// Reads `text` as a file-name template.
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownField`] with the first field that is not `{date}`, `{time}` or `{n}`, or an
+    /// unclosed `{`.
+    pub fn parse(text: &str) -> Result<Self, UnknownField> {
+        let mut parts = Vec::new();
+        let mut rest = text;
+        while let Some(open) = rest.find('{') {
+            if open > 0 {
+                parts.push(Part::Text(rest[..open].to_owned()));
+            }
+            let close = rest[open..]
+                .find('}')
+                .map(|close| open + close)
+                .ok_or_else(|| UnknownField(rest[open..].to_owned()))?;
+            parts.push(match &rest[open..=close] {
+                "{date}" => Part::Date,
+                "{time}" => Part::Time,
+                "{n}" => Part::Number,
+                unknown => return Err(UnknownField(unknown.to_owned())),
+            });
+            rest = &rest[close + 1..];
+        }
+        if !rest.is_empty() {
+            parts.push(Part::Text(rest.to_owned()));
+        }
+        Ok(Self { parts })
+    }
+
+    fn numbered(&self) -> bool {
+        self.parts.contains(&Part::Number)
+    }
+
+    fn expand(&self, stamp: Stamp, n: u32) -> String {
+        self.parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(text) => text.clone(),
+                Part::Date => format!("{:04}-{:02}-{:02}", stamp.year, stamp.month, stamp.day),
+                Part::Time => {
+                    format!("{:02}.{:02}.{:02}", stamp.hour, stamp.minute, stamp.second)
+                }
+                Part::Number => n.to_string(),
+            })
+            .collect()
+    }
+}
+
 /// Why a file was not saved.
 #[derive(Debug, thiserror::Error)]
 pub enum SaveError {
-    /// C-15: the template holds something other than text and `{date}`, `{time}`, `{n}`.
-    #[error("the file-name template uses {0}, which is not one of {{date}}, {{time}}, {{n}}")]
-    UnknownField(String),
     /// C-15: the expanded name is empty, reserved, or could leave the folder.
     #[error("{0:?} is not a safe file name")]
     UnsafeName(String),
@@ -108,7 +175,7 @@ pub(crate) fn known_folder(id: GUID, flags: KNOWN_FOLDER_FLAG) -> windows::core:
 /// The [`SaveError`] that stopped it.
 pub fn save(
     folder: &Path,
-    template: &str,
+    template: &Template,
     stamp: Stamp,
     extension: &str,
     bytes: &[u8],
@@ -130,8 +197,12 @@ pub fn save(
 ///
 /// # Errors
 ///
-/// [`SaveError::UnknownField`] or [`SaveError::UnsafeName`] for a template C-15 refuses.
-pub fn offered_name(template: &str, stamp: Stamp, extension: &str) -> Result<String, SaveError> {
+/// [`SaveError::UnsafeName`] for a name C-15 refuses.
+pub fn offered_name(
+    template: &Template,
+    stamp: Stamp,
+    extension: &str,
+) -> Result<String, SaveError> {
     Ok(format!("{}.{extension}", file_name(template, stamp, 1)?))
 }
 
@@ -214,12 +285,12 @@ fn write_partial(
 /// exists, so this never replaces a file, even one created after the name was checked.
 fn publish(
     folder: &Path,
-    template: &str,
+    template: &Template,
     stamp: Stamp,
     extension: &str,
     partial: &Path,
 ) -> Result<PathBuf, SaveError> {
-    let numbered = template.contains("{n}");
+    let numbered = template.numbered();
     let first = file_name(template, stamp, 1)?;
     for n in 1..=MOST_COLLISIONS {
         let stem = match (numbered, n) {
@@ -239,25 +310,8 @@ fn publish(
 
 /// Expands `template` for `stamp` and collision number `n`, and checks the result is a
 /// plain file name (C-15).
-fn file_name(template: &str, stamp: Stamp, n: u32) -> Result<String, SaveError> {
-    let mut name = String::new();
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        name.push_str(&rest[..open]);
-        let close = rest[open..]
-            .find('}')
-            .map(|close| open + close)
-            .ok_or_else(|| SaveError::UnknownField(rest[open..].to_owned()))?;
-        let field = match &rest[open..=close] {
-            "{date}" => format!("{:04}-{:02}-{:02}", stamp.year, stamp.month, stamp.day),
-            "{time}" => format!("{:02}.{:02}.{:02}", stamp.hour, stamp.minute, stamp.second),
-            "{n}" => n.to_string(),
-            unknown => return Err(SaveError::UnknownField(unknown.to_owned())),
-        };
-        name.push_str(&field);
-        rest = &rest[close + 1..];
-    }
-    name.push_str(rest);
+fn file_name(template: &Template, stamp: Stamp, n: u32) -> Result<String, SaveError> {
+    let name = template.expand(stamp, n);
     if is_safe(&name) {
         Ok(name)
     } else {
@@ -337,7 +391,8 @@ mod tests {
 
     #[test]
     fn c15_the_default_template_names_the_date_and_time_without_colons() {
-        let name = file_name("Screenshot {date} {time}", STAMP, 1).expect("a safe name");
+        let template = Template::parse("Screenshot {date} {time}").expect("known fields");
+        let name = file_name(&template, STAMP, 1).expect("a safe name");
         assert_eq!(name, "Screenshot 2026-10-30 09.05.07");
     }
 
@@ -354,7 +409,8 @@ mod tests {
             " ",
         ] {
             assert!(
-                file_name(template, STAMP, 1).is_err(),
+                Template::parse(template)
+                    .map_or(true, |template| file_name(&template, STAMP, 1).is_err()),
                 "{template:?} was accepted"
             );
         }
@@ -363,10 +419,11 @@ mod tests {
     #[test]
     fn f21_never_overwrites_existing_file() {
         let folder = empty_folder("collide");
-        let first = save(&folder, "Shot", STAMP, "png", b"first", &|_, _| {}).expect("first save");
+        let shot = Template::parse("Shot").expect("no fields");
+        let first = save(&folder, &shot, STAMP, "png", b"first", &|_, _| {}).expect("first save");
         let second =
-            save(&folder, "Shot", STAMP, "png", b"second", &|_, _| {}).expect("second save");
-        let third = save(&folder, "Shot", STAMP, "png", b"third", &|_, _| {}).expect("third save");
+            save(&folder, &shot, STAMP, "png", b"second", &|_, _| {}).expect("second save");
+        let third = save(&folder, &shot, STAMP, "png", b"third", &|_, _| {}).expect("third save");
         let names: Vec<_> = [&first, &second, &third]
             .map(|path| {
                 path.file_name()
@@ -429,9 +486,9 @@ mod tests {
     #[test]
     fn f21_a_numbered_template_counts_up_instead_of_appending() {
         let folder = empty_folder("numbered");
-        save(&folder, "Shot {n}", STAMP, "png", b"a", &|_, _| {}).expect("first save");
-        let second =
-            save(&folder, "Shot {n}", STAMP, "png", b"b", &|_, _| {}).expect("second save");
+        let numbered = Template::parse("Shot {n}").expect("a known field");
+        save(&folder, &numbered, STAMP, "png", b"a", &|_, _| {}).expect("first save");
+        let second = save(&folder, &numbered, STAMP, "png", b"b", &|_, _| {}).expect("second save");
         assert_eq!(second.file_name().expect("a file"), "Shot 2.png");
         fs::remove_dir_all(&folder).expect("the test folder is removable");
     }

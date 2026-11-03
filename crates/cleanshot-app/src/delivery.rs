@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use cleanshot_core::{
     Delivered, DeliveryError, Document, Output, RgbaImage, SaveFormat, Saving, Settings,
@@ -7,11 +7,15 @@ use cleanshot_core::{
 use cleanshot_render::{Flattened, Format, encode, flatten};
 use cleanshot_win::clipboard::copy_image;
 use cleanshot_win::log::LogFailure;
-use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
+use cleanshot_win::save::{self, FolderError, SaveError, Stamp, Template};
 use cleanshot_win::text;
 use cleanshot_win::thumbnail::Dragged;
 
-const FILE_NAME_TEMPLATE: &str = "Screenshot {date} {time}";
+/// F-21: the name Save gives a capture. `main` forces it at start-up, so a template with a
+/// field C-15 does not know stops Cleanshot there, not at a save.
+pub(crate) static FILE_NAME_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse("Screenshot {date} {time}").expect("the file-name template's fields are known")
+});
 
 /// Flattens `document`, redaction included (C-22), and copies it (F-20) or saves it in the
 /// configured folder and format (F-21). The overlay and the editor both finish here (D-48).
@@ -46,7 +50,7 @@ pub(crate) fn deliver(
                 .map_err(|error| from_folder(error, log))?;
             save::save(
                 &folder,
-                FILE_NAME_TEMPLATE,
+                &FILE_NAME_TEMPLATE,
                 Stamp::now(),
                 extension,
                 &bytes,
@@ -103,8 +107,8 @@ pub(crate) fn save_as_start(
 }
 
 fn offered_name(extension: &str) -> String {
-    save::offered_name(FILE_NAME_TEMPLATE, Stamp::now(), extension)
-        .unwrap_or_else(|error| panic!("the file-name template is a safe constant: {error}"))
+    save::offered_name(&FILE_NAME_TEMPLATE, Stamp::now(), extension)
+        .unwrap_or_else(|error| panic!("the file-name template expands to a safe name: {error}"))
 }
 
 /// F-22 (D-66): flattens `document` and writes it to `path`, the name the user confirmed in
@@ -153,9 +157,6 @@ pub(crate) fn save_to(
                 folder: folder.to_owned(),
             })
         }
-        Err(error @ SaveError::UnknownField(_)) => {
-            panic!("save::replace expands no file-name template: {error}")
-        }
     }
 }
 
@@ -192,8 +193,8 @@ fn from_save(error: SaveError, folder: &Path, log: LogFailure) -> DeliveryError 
                 folder: folder.to_owned(),
             }
         }
-        SaveError::UnknownField(_) | SaveError::UnsafeName(_) => {
-            panic!("the file-name template is a safe constant: {error}")
+        SaveError::UnsafeName(_) => {
+            panic!("the file-name template expands to a safe name: {error}")
         }
     }
 }
