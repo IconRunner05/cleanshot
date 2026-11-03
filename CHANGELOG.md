@@ -7,7 +7,7 @@ All notable changes to Cleanshot are listed here. The format follows
 A release's notes on GitHub are its section below, so a version is tagged only once its
 section exists.
 
-## [Unreleased]
+## [1.0.0-rc.1] - 2026-11-03
 
 ### Added
 
@@ -59,6 +59,12 @@ section exists.
 - A winget manifest for `Cleanshot.Cleanshot` (three `.yaml` files), released beside the
   exe with the exe's SHA-256 filled in and listed in `SHA256SUMS`. It is not submitted to
   the winget repository yet.
+
+### Changed
+
+- `cleanshot.exe --log` also records each failure and each tray warning (D-109), as fixed
+  words with the Windows error code where there is one. A log line never holds a path, a
+  window title or your user name; the tray still shows the full warning.
 
 ### Fixed
 
