@@ -6,6 +6,7 @@ mod editor_window;
 mod placement;
 mod restricted_platform;
 mod settings_window;
+mod shape_menu;
 mod strip;
 mod text;
 mod text_box;

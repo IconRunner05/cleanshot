@@ -136,7 +136,7 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 | F-35 | Highlighter | H | M2 | Translucent yellow, multiply blend. |
 | F-36 | Redact | X | M2 | Pixelate (default) or blur; destructive on export (C-22); a test asserts that original pixels are absent from the output. |
 | F-37 | Crop | C | M2 | Non-destructive in the document; applied on export. The editor dims what the crop leaves out and fits the view to the crop (D-113). With the Crop tool picked, the view shows the whole image and the crop can be moved and resized by its handles (D-118). |
-| F-38 | Undo / redo | Ctrl+Z / Ctrl+Y | M2 | Unlimited within the session; every edit is a command. Ctrl+] and Ctrl+[ move the selected shape forward or back one step, with Shift to the front or back, each an edit to undo (D-115). |
+| F-38 | Undo / redo | Ctrl+Z / Ctrl+Y | M2 | Unlimited within the session; every edit is a command. Ctrl+] and Ctrl+[ move the selected shape forward or back one step, with Shift to the front or back, each an edit to undo (D-115). Right-clicking a shape selects it and opens a menu of the same four moves, each showing its shortcut; a move that would change nothing is dimmed and skipped by the arrow keys. |
 | F-39 | Zoom / pan | Ctrl+wheel, Space-drag, Ctrl+0 fit | M2 | Smooth on a 4K image. |
 | F-40 | Copy / save from editor | Ctrl+C, Ctrl+S | M2 | Uses F-24's pipeline. |
 | F-41 | Numbered step | N | M4 | Auto-increments 1, 2, 3…; renumbers when one is deleted. |

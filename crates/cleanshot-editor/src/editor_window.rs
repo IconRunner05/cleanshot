@@ -7,9 +7,9 @@ use std::time::Instant;
 
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
-    KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError,
+    KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError, Restack,
     RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextOrigin, Tool, action_for_key,
-    delivery_notice, save_as_notice,
+    delivery_notice, save_as_notice, shape_at,
 };
 use gpui::{
     App, AppContext, Bounds, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
@@ -22,6 +22,7 @@ use crate::canvas::{
     OnPointer, Overlay, Pointer, RedactionPreviews, document_canvas, render_image,
 };
 use crate::placement::{MIN_WINDOW, Placement, opening_size};
+use crate::shape_menu::ShapeMenu;
 use crate::strip::property_strip;
 use crate::text::{line_width, register_inter};
 use crate::text_box::TextBox;
@@ -74,6 +75,8 @@ struct EditorView {
     selected: Option<ShapeId>,
     drag: Option<Drag>,
     text_box: Option<TextBox>,
+    /// The right-click menu while it is open (D-115).
+    menu: Option<ShapeMenu>,
     /// How each tool draws, as the property strip sets it; not part of the document.
     looks: Looks,
     redactions: Rc<RedactionPreviews>,
@@ -122,6 +125,7 @@ impl EditorView {
             selected: None,
             drag: None,
             text_box: None,
+            menu: None,
             looks: Looks::default(),
             redactions: Rc::new(RedactionPreviews::new(Rc::clone(&log))),
             log,
@@ -138,7 +142,7 @@ impl EditorView {
         }
     }
 
-    fn pointer(&mut self, pointer: Pointer, window: &Window, cx: &mut Context<Self>) {
+    fn pointer(&mut self, pointer: Pointer, window: &mut Window, cx: &mut Context<Self>) {
         match pointer {
             Pointer::Press {
                 position,
@@ -210,6 +214,18 @@ impl EditorView {
                 around,
                 placement,
             } => self.placement = Some(placement.zoomed(factor, around)),
+            Pointer::Menu {
+                at,
+                reach,
+                position,
+            } => {
+                self.menu = None;
+                let idle = self.text_box.is_none() && self.drag.is_none();
+                if let Some(id) = shape_at(&self.document, at, reach).filter(|_| idle) {
+                    self.selected = Some(id);
+                    self.menu = Some(ShapeMenu::open(id, position, &self.document, window, cx));
+                }
+            }
         }
         cx.notify();
     }
@@ -365,10 +381,20 @@ impl EditorView {
         }
     }
 
+    /// Closes the right-click menu, moving its shape by `picked` if a move was picked (D-115).
+    fn close_menu(&mut self, picked: Option<Restack>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((menu, to)) = self.menu.take().zip(picked) {
+            self.apply(Command::Restack { id: menu.id, to });
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
     fn refresh(&mut self) {
         self.document = Rc::new(self.history.document().clone());
         let document = &self.document;
         self.selected = self.selected.filter(|id| document.contains(*id));
+        self.menu = self.menu.take().filter(|menu| document.contains(menu.id));
     }
 }
 
@@ -456,6 +482,7 @@ impl Render for EditorView {
         let theme = Theme::for_appearance(window.appearance());
         let view = cx.entity().downgrade();
         let picker = view.clone();
+        let restacker = view.clone();
         let on_pick = move |tool, window: &mut Window, cx: &mut App| {
             // Err only means the window closed, and with it the tool there was to pick.
             let _ = picker.update(cx, |view, cx| {
@@ -536,6 +563,12 @@ impl Render for EditorView {
                     .clone()
                     .map(|notice| notice_panel(notice, theme)),
             )
+            .children(self.menu.as_ref().map(|menu| {
+                menu.element(&self.document, theme, move |picked, window, cx| {
+                    // Err only means the window closed, and with it the menu.
+                    let _ = restacker.update(cx, |view, cx| view.close_menu(picked, window, cx));
+                })
+            }))
     }
 }
 
@@ -629,7 +662,7 @@ pub(crate) fn show_at(window: &Window, cx: &mut App, placement: Option<Placement
 /// P-08's bench: the redaction tool dragged in `window` as the pointer drives it, pressed at
 /// `from` the first time and moved to `to`, in image pixels, with the image at `placement`.
 pub(crate) fn drag_redaction(
-    window: &Window,
+    window: &mut Window,
     cx: &mut App,
     from: PointF,
     to: PointF,

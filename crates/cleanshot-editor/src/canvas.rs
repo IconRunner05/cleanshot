@@ -177,6 +177,12 @@ pub(crate) enum Pointer {
     Release {
         shift: bool,
     },
+    /// The right button went down over the canvas at `at`, `position` in the window (D-115).
+    Menu {
+        at: PointF,
+        reach: f32,
+        position: Point<Pixels>,
+    },
     /// Ctrl+wheel over the canvas: scale `placement` by `factor` about `around` (F-39).
     Zoom {
         factor: f32,
@@ -338,6 +344,21 @@ fn listen_for_pointer(
                 placement,
             };
             on_press(press, window, cx);
+        }
+    });
+    let on_menu = Rc::clone(on_pointer);
+    let menu_hitbox = zoom_hitbox.clone();
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble
+            && event.button == MouseButton::Right
+            && menu_hitbox.is_hovered(window)
+        {
+            let menu = Pointer::Menu {
+                at: image_point(event.position),
+                reach,
+                position: event.position,
+            };
+            on_menu(menu, window, cx);
         }
     });
     let on_move = Rc::clone(on_pointer);

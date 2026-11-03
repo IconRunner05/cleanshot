@@ -38,6 +38,23 @@ pub enum Restack {
     Back,
 }
 
+impl Restack {
+    /// Where in `document`'s stack this moves the shape `id`, bottom first, or `None` if it
+    /// would stay where it is or the document has no such shape.
+    #[must_use]
+    pub fn index(self, document: &Document, id: ShapeId) -> Option<usize> {
+        let from = position(document, id).ok()?;
+        let top = document.shapes.len() - 1;
+        let index = match self {
+            Restack::Forward => (from + 1).min(top),
+            Restack::Backward => from.saturating_sub(1),
+            Restack::Front => top,
+            Restack::Back => 0,
+        };
+        (index != from).then_some(index)
+    }
+}
+
 /// Why [`History::apply`] refused a command.
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum CommandError {
@@ -111,17 +128,10 @@ impl History {
             Command::Remove(id) => Edit::Remove(id),
             Command::Replace { id, shape, style } => Edit::Replace(ShapeEntry { id, shape, style }),
             Command::Restack { id, to } => {
-                let from = position(&self.document, id)?;
-                let top = self.document.shapes.len() - 1;
-                let index = match to {
-                    Restack::Forward => (from + 1).min(top),
-                    Restack::Backward => from.saturating_sub(1),
-                    Restack::Front => top,
-                    Restack::Back => 0,
-                };
-                if index == from {
+                position(&self.document, id)?;
+                let Some(index) = to.index(&self.document, id) else {
                     return Ok(());
-                }
+                };
                 Edit::Restack { id, index }
             }
             Command::SetCrop(crop) => Edit::SetCrop(crop),
@@ -345,6 +355,27 @@ mod tests {
         assert!(history.undo().unwrap());
         assert!(history.undo().unwrap());
         assert_eq!(xs(&history), [0.0], "no restack was left to undo");
+    }
+
+    #[test]
+    fn d115_a_move_is_offered_only_where_it_would_move_the_shape() {
+        let mut history = history();
+        let bottom = add(&mut history, rect(0.0));
+        let middle = add(&mut history, rect(1.0));
+        let top = add(&mut history, rect(2.0));
+        let document = history.document();
+        let offered = |id| {
+            [
+                Restack::Forward,
+                Restack::Front,
+                Restack::Backward,
+                Restack::Back,
+            ]
+            .map(|to| to.index(document, id))
+        };
+        assert_eq!(offered(bottom), [Some(1), Some(2), None, None]);
+        assert_eq!(offered(middle), [Some(2), Some(2), Some(0), Some(0)]);
+        assert_eq!(offered(top), [None, None, Some(1), Some(0)]);
     }
 
     #[test]
