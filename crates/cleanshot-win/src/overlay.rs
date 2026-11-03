@@ -156,7 +156,7 @@ impl Shared {
     /// Where the toolbar sits for the current selection, if its monitor can hold it.
     fn toolbar(&self) -> Option<Layout> {
         let (monitor, scale) = self.toolbar?;
-        toolbar::layout(monitor, self.selected.get(), scale)
+        toolbar::layout(Toolbar::Overlay, monitor, self.selected.get(), scale)
     }
 
     fn press(&self, key: Key) {
@@ -272,7 +272,7 @@ impl Overlay {
             toolbar_window: Cell::new(None),
             toolbar,
             focus: Cell::new(ToolbarControl::Copy),
-            mirror: Mirror::new(saving_off),
+            mirror: Mirror::new(Toolbar::Overlay, saving_off),
             palette: Palette::current().map_err(Error::Window)?,
         });
         shared.changed();
@@ -848,7 +848,7 @@ mod tests {
         };
 
         let scale = dpi_scale(primary).expect("the primary monitor has a DPI");
-        let pill = toolbar::layout(primary, None, scale)
+        let pill = toolbar::layout(Toolbar::Overlay, primary, None, scale)
             .expect("a 1080p monitor holds the toolbar at 175%")
             .pill;
 

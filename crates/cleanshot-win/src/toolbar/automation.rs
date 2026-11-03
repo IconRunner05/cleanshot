@@ -55,14 +55,16 @@ struct State {
 /// providers read and ask from whatever thread UI Automation calls them on.
 #[derive(Clone)]
 pub(crate) struct Mirror {
+    toolbar: Toolbar,
     state: Arc<Mutex<State>>,
     saving_off: Option<Arc<str>>,
 }
 
 impl Mirror {
-    /// A toolbar whose Save is off for the reason `saving_off` says (F-57), or on when `None`.
-    pub(crate) fn new(saving_off: Option<String>) -> Self {
+    /// `toolbar`, with Save off for the reason `saving_off` says (F-57), or on when `None`.
+    pub(crate) fn new(toolbar: Toolbar, saving_off: Option<String>) -> Self {
         Self {
+            toolbar,
             state: Arc::default(),
             saving_off: saving_off.map(Arc::from),
         }
@@ -102,6 +104,22 @@ impl Mirror {
     /// The requests made since the last call, oldest first.
     pub(crate) fn requests(&self) -> Vec<Request> {
         std::mem::take(&mut self.lock().requests)
+    }
+
+    fn position(&self, control: ToolbarControl) -> usize {
+        self.toolbar
+            .controls()
+            .iter()
+            .position(|&each| each == control)
+            .expect("the toolbar shows every control it names")
+    }
+
+    fn last_control(&self) -> ToolbarControl {
+        *self
+            .toolbar
+            .controls()
+            .last()
+            .expect("every toolbar ends with Cancel")
     }
 
     fn shown(&self) -> Result<(Layout, ToolbarControl)> {
@@ -184,14 +202,6 @@ fn none<T>() -> Result<T> {
     Err(Error::empty())
 }
 
-fn position(control: ToolbarControl) -> usize {
-    Toolbar::Overlay
-        .controls()
-        .iter()
-        .position(|&each| each == control)
-        .expect("the toolbar shows every control it names")
-}
-
 fn variant(vt: VARENUM, value: VARIANT_0_0_0) -> VARIANT {
     VARIANT {
         Anonymous: VARIANT_0 {
@@ -251,12 +261,12 @@ mod providers {
         NavigateDirection_FirstChild, NavigateDirection_LastChild, NavigateDirection_NextSibling,
         NavigateDirection_Parent, NavigateDirection_PreviousSibling, POINT, ProviderOptions,
         ProviderOptions_ServerSideProvider, Request, Result, SAFEARRAY, SafeArrayCreateVector,
-        SafeArrayPutElement, TOOLBAR_NAME, Toolbar, ToolbarControl, UIA_ButtonControlTypeId,
+        SafeArrayPutElement, TOOLBAR_NAME, ToolbarControl, UIA_ButtonControlTypeId,
         UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
         UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
         UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_TextControlTypeId,
         UIA_ToolBarControlTypeId, UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, VARIANT,
-        VT_I4, implement, name, none, not_enabled, number, on_screen, position, text, truth,
+        VT_I4, implement, name, none, not_enabled, number, on_screen, text, truth,
     };
 
     /// The toolbar, the root of the tree its window hands UI Automation.
@@ -302,11 +312,7 @@ mod providers {
         if mirror.picking() {
             return picking(window, mirror);
         }
-        button(
-            window,
-            mirror,
-            Toolbar::Overlay.controls()[Toolbar::Overlay.controls().len() - 1],
-        )
+        button(window, mirror, mirror.last_control())
     }
 
     fn button(
@@ -358,7 +364,7 @@ mod providers {
                 NavigateDirection_FirstChild => Ok(button(
                     self.window,
                     &self.mirror,
-                    Toolbar::Overlay.controls()[0],
+                    self.mirror.toolbar.controls()[0],
                 )),
                 NavigateDirection_LastChild => Ok(last_child(self.window, &self.mirror)),
                 _ => none(),
@@ -447,12 +453,12 @@ mod providers {
 
     impl IRawElementProviderFragment_Impl for Button_Impl {
         fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
-            let at = position(self.control);
+            let at = self.mirror.position(self.control);
             let sibling = |index: Option<usize>| match index
-                .and_then(|index| Toolbar::Overlay.controls().get(index))
+                .and_then(|index| self.mirror.toolbar.controls().get(index))
             {
                 Some(&control) => Ok(button(self.window, &self.mirror, control)),
-                None if index == Some(Toolbar::Overlay.controls().len())
+                None if index == Some(self.mirror.toolbar.controls().len())
                     && self.mirror.picking() =>
                 {
                     Ok(picking(self.window, &self.mirror))
@@ -470,7 +476,7 @@ mod providers {
         fn GetRuntimeId(&self) -> Result<*mut SAFEARRAY> {
             let id = [
                 i32::try_from(UiaAppendRuntimeId).expect("UiaAppendRuntimeId is 3"),
-                i32::try_from(position(self.control)).expect("four controls"),
+                i32::try_from(self.mirror.position(self.control)).expect("a few controls"),
             ];
             // SAFETY: a two-element vector of VT_I4, each element written in range; the
             // caller frees the array.
@@ -485,7 +491,7 @@ mod providers {
 
         fn BoundingRectangle(&self) -> Result<UiaRect> {
             let (layout, _) = self.mirror.shown()?;
-            let (_, at) = layout.controls[position(self.control)];
+            let (_, at) = layout.controls[self.mirror.position(self.control)];
             Ok(on_screen(at))
         }
 
@@ -534,7 +540,7 @@ mod providers {
                 NavigateDirection_PreviousSibling => Ok(button(
                     self.window,
                     &self.mirror,
-                    Toolbar::Overlay.controls()[Toolbar::Overlay.controls().len() - 1],
+                    self.mirror.last_control(),
                 )),
                 _ => none(),
             }
@@ -543,7 +549,7 @@ mod providers {
         fn GetRuntimeId(&self) -> Result<*mut SAFEARRAY> {
             let id = [
                 i32::try_from(UiaAppendRuntimeId).expect("UiaAppendRuntimeId is 3"),
-                i32::try_from(Toolbar::Overlay.controls().len()).expect("four controls"),
+                i32::try_from(self.mirror.toolbar.controls().len()).expect("a few controls"),
             ];
             // SAFETY: a two-element vector of VT_I4, each element written in range; the
             // caller frees the array.
