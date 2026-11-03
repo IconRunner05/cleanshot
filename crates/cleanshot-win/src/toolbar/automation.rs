@@ -134,7 +134,7 @@ pub(crate) fn answer(
     if i32::try_from(lparam.0) != Ok(UiaRootObjectId) {
         return None;
     }
-    let root: IRawElementProviderSimple = Toolbar {
+    let root: IRawElementProviderSimple = ToolbarProvider {
         window,
         mirror: mirror.clone(),
     }
@@ -146,7 +146,7 @@ pub(crate) fn answer(
 /// F-58: has a screen reader say `spoken` now, from the toolbar on `window`, without the focus
 /// moving; a newer announcement replaces one not yet said.
 pub(crate) fn announce(window: HWND, mirror: &Mirror, spoken: &str) -> Result<()> {
-    let root: IRawElementProviderSimple = Toolbar {
+    let root: IRawElementProviderSimple = ToolbarProvider {
         window,
         mirror: mirror.clone(),
     }
@@ -265,7 +265,7 @@ mod providers {
         IRawElementProviderFragment,
         IRawElementProviderFragmentRoot
     )]
-    pub(super) struct Toolbar {
+    pub(super) struct ToolbarProvider {
         pub(super) window: HWND,
         pub(super) mirror: Mirror,
     }
@@ -323,14 +323,14 @@ mod providers {
         .into()
     }
 
-    fn toolbar(window: HWND, mirror: &Mirror) -> Toolbar {
-        Toolbar {
+    fn toolbar(window: HWND, mirror: &Mirror) -> ToolbarProvider {
+        ToolbarProvider {
             window,
             mirror: mirror.clone(),
         }
     }
 
-    impl IRawElementProviderSimple_Impl for Toolbar_Impl {
+    impl IRawElementProviderSimple_Impl for ToolbarProvider_Impl {
         fn ProviderOptions(&self) -> Result<ProviderOptions> {
             Ok(ProviderOptions_ServerSideProvider)
         }
@@ -353,7 +353,7 @@ mod providers {
         }
     }
 
-    impl IRawElementProviderFragment_Impl for Toolbar_Impl {
+    impl IRawElementProviderFragment_Impl for ToolbarProvider_Impl {
         fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
             match direction {
                 NavigateDirection_FirstChild => Ok(button(
@@ -387,7 +387,7 @@ mod providers {
         }
     }
 
-    impl IRawElementProviderFragmentRoot_Impl for Toolbar_Impl {
+    impl IRawElementProviderFragmentRoot_Impl for ToolbarProvider_Impl {
         #[expect(
             clippy::cast_possible_truncation,
             reason = "UI Automation passes whole screen pixels"
@@ -586,4 +586,4 @@ mod providers {
     }
 }
 
-use providers::Toolbar;
+use providers::ToolbarProvider;
