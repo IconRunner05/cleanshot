@@ -200,6 +200,9 @@ impl EditorView {
                 };
                 if let Some(command) = drag.command(shift) {
                     self.apply(command);
+                } else if let Some(origin) = drag.typed_on_click(self.tool) {
+                    self.selected = None;
+                    self.open_text_box(origin);
                 }
             }
             Pointer::Zoom {

@@ -128,7 +128,7 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 
 | ID | Tool / feature | Key | Milestone | Acceptance criteria |
 | --- | --- | --- | --- | --- |
-| F-30 | Select, move, resize, delete | V, Del | M2 | Click selects topmost shape; handles resize; Shift constrains. Esc returns to Select with nothing selected (D-111). |
+| F-30 | Select, move, resize, delete | V, Del | M2 | Click selects topmost shape; handles resize; Shift constrains. Esc returns to Select with nothing selected (D-111). Each drawing tool also selects, moves and resizes the shapes it draws (D-118). |
 | F-31 | Arrow, line | A, L | M2 | Default red, 3 px; Shift snaps to 45°. |
 | F-32 | Rectangle, ellipse | R, O | M2 | Outline by default; optional fill. |
 | F-33 | Pen (freehand) | P | M2 | Smoothed polyline. |

@@ -1,5 +1,5 @@
 use crate::bubble::Bubble;
-use crate::document::{Document, PointF, Shape, ShapeEntry, ShapeId, Style};
+use crate::document::{Document, PointF, Shape, ShapeEntry, ShapeId};
 use crate::drawing::{snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::look::Look;
@@ -19,13 +19,13 @@ pub enum Drag {
         look: Look,
         path: Vec<PointF>,
     },
-    /// The select tool moving a shape, which keeps `original` until release.
+    /// A tool moving a shape it can edit, which keeps `original` until release.
     Move {
         original: ShapeEntry,
         from: PointF,
         to: PointF,
     },
-    /// The select tool dragging one of a shape's handles.
+    /// A tool dragging one of the handles of a shape it can edit.
     Resize {
         original: ShapeEntry,
         handle: Handle,
@@ -48,13 +48,15 @@ pub enum Start {
 }
 
 impl Drag {
-    /// A press at `at` with `tool`, while `selected` is selected (F-30). With the select tool, a
-    /// handle of the selected shape resizes it, otherwise the topmost shape under the pointer is
-    /// selected and moved, and empty canvas clears the selection. A drawing tool clears the
-    /// selection and starts drawing. The text and bubble tools clear the selection and open a text
-    /// box: on the topmost shape under the pointer if that is a text or bubble, otherwise a new
-    /// one at `at` (F-34, F-42).
-    /// `look` is how `tool` draws, and `tolerance` is the reach of the pointer in image pixels.
+    /// A press at `at` with `tool`, while `selected` is selected (F-30). A shape `tool` can
+    /// edit is any shape for the select tool, and for any other tool a shape that tool draws
+    /// (D-118). A handle of the selected shape, if `tool` can edit it, resizes it; otherwise
+    /// the topmost shape under the pointer, if `tool` can edit it, is selected and moved.
+    /// Anywhere else the select tool clears the selection, a drawing tool clears it and starts
+    /// drawing, and the text and bubble tools clear it and open a text box: on the topmost
+    /// shape under the pointer if that is a text or bubble, otherwise a new one at `at` (F-34,
+    /// F-42). `look` is how `tool` draws, and `tolerance` is the reach of the pointer in image
+    /// pixels.
     #[must_use]
     pub fn press(
         document: &Document,
@@ -65,12 +67,36 @@ impl Drag {
         tolerance: f32,
     ) -> Press {
         let entry = |id| document.shapes().iter().find(|entry| entry.id == id);
-        let hit = || shape_at(document, at, tolerance).and_then(entry);
+        let editable =
+            |entry: &&ShapeEntry| tool == Tool::Select || Tool::drawing(&entry.shape) == tool;
+        if let Some(original) = selected.and_then(entry).filter(editable)
+            && let Some(handle) = handle_at(&original.shape, at, tolerance)
+        {
+            return Press {
+                selected,
+                start: Some(Start::Drag(Self::Resize {
+                    original: original.clone(),
+                    handle,
+                    to: at,
+                })),
+            };
+        }
+        let hit = shape_at(document, at, tolerance).and_then(entry);
+        if let Some(original) = hit.filter(editable) {
+            return Press {
+                selected: Some(original.id),
+                start: Some(Start::Drag(Self::Move {
+                    original: original.clone(),
+                    from: at,
+                    to: at,
+                })),
+            };
+        }
         let start = match tool {
             Tool::Select => None,
-            Tool::Text => Some(Start::Type(text_origin(hit(), at, look, TextFrame::Plain))),
+            Tool::Text => Some(Start::Type(text_origin(hit, at, look, TextFrame::Plain))),
             Tool::Bubble => Some(Start::Type(text_origin(
-                hit(),
+                hit,
                 at,
                 look,
                 TextFrame::Bubble {
@@ -92,37 +118,34 @@ impl Drag {
                 path: vec![at],
             })),
         };
-        if start.is_some() {
-            return Press {
-                selected: None,
-                start,
-            };
-        }
-        if let Some(original) = selected.and_then(entry)
-            && let Some(handle) = handle_at(&original.shape, at, tolerance)
-        {
-            return Press {
-                selected,
-                start: Some(Start::Drag(Self::Resize {
-                    original: original.clone(),
-                    handle,
-                    to: at,
-                })),
-            };
-        }
-        let Some(original) = shape_at(document, at, tolerance).and_then(entry) else {
-            return Press {
-                selected: None,
-                start: None,
-            };
-        };
         Press {
-            selected: Some(original.id),
-            start: Some(Start::Drag(Self::Move {
-                original: original.clone(),
-                from: at,
-                to: at,
-            })),
+            selected: None,
+            start,
+        }
+    }
+
+    /// The text box a release opens: a text or bubble the text or bubble tool pressed and let
+    /// go of without moving it, so a click on one still types in it (F-34, F-42, D-118).
+    #[must_use]
+    pub fn typed_on_click(&self, tool: Tool) -> Option<TextOrigin> {
+        let Self::Move { original, .. } = self else {
+            return None;
+        };
+        match tool {
+            Tool::Text | Tool::Bubble if self.command(false).is_none() => existing_text(original),
+            Tool::Text
+            | Tool::Bubble
+            | Tool::Select
+            | Tool::Arrow
+            | Tool::Line
+            | Tool::Rectangle
+            | Tool::Ellipse
+            | Tool::Pen
+            | Tool::Highlighter
+            | Tool::Redact
+            | Tool::Crop
+            | Tool::Spotlight
+            | Tool::Step => None,
         }
     }
 
@@ -218,28 +241,39 @@ fn opposite_corner(shape: &Shape, corner: BoxHandle) -> Option<PointF> {
 /// text or bubble there reopens, whichever tool pressed it, and anywhere else a new box opens
 /// in `new`.
 fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look, new: TextFrame) -> TextOrigin {
-    let existing = |id: ShapeId, block: &TextBlock, style: Style, frame| TextOrigin::Existing {
-        id,
+    hit.and_then(existing_text).unwrap_or(TextOrigin::New {
+        at,
+        size: look.text_size(),
+        style: look.style(),
+        frame: new,
+    })
+}
+
+/// The text box that reopens `entry`, if it is a text or bubble.
+fn existing_text(entry: &ShapeEntry) -> Option<TextOrigin> {
+    let existing = |block: &TextBlock, frame| TextOrigin::Existing {
+        id: entry.id,
         block: block.clone(),
-        style,
+        style: entry.style,
         frame,
     };
-    match hit.map(|entry| (entry.id, &entry.shape, entry.style)) {
-        Some((id, Shape::Text(block), style)) => existing(id, block, style, TextFrame::Plain),
-        Some((id, Shape::Bubble(bubble), style)) => existing(
-            id,
+    match &entry.shape {
+        Shape::Text(block) => Some(existing(block, TextFrame::Plain)),
+        Shape::Bubble(bubble) => Some(existing(
             bubble.block(),
-            style,
             TextFrame::Bubble {
                 tail: bubble.tail(),
             },
-        ),
-        Some(_) | None => TextOrigin::New {
-            at,
-            size: look.text_size(),
-            style: look.style(),
-            frame: new,
-        },
+        )),
+        Shape::Arrow { .. }
+        | Shape::Line { .. }
+        | Shape::Rect { .. }
+        | Shape::Ellipse { .. }
+        | Shape::Pen(_)
+        | Shape::Highlight(_)
+        | Shape::Redact { .. }
+        | Shape::Spotlight(_)
+        | Shape::Step(_) => None,
     }
 }
 
@@ -509,15 +543,18 @@ mod tests {
         };
 
         let on_text = press(point(130.0, 160.0));
-        assert_eq!(on_text.selected, None);
+        assert_eq!(on_text.selected, Some(text_id));
+        let Some(Start::Drag(clicked)) = on_text.start else {
+            panic!("a press on a text with the text tool picks it up");
+        };
         assert_eq!(
-            on_text.start,
-            Some(Start::Type(TextOrigin::Existing {
+            clicked.typed_on_click(Tool::Text),
+            Some(TextOrigin::Existing {
                 id: text_id,
                 block,
                 style,
                 frame: TextFrame::Plain,
-            }))
+            })
         );
         let new_box = |at| {
             Some(Start::Type(TextOrigin::New {
@@ -545,14 +582,20 @@ mod tests {
         let press =
             |tool, at| Drag::press(document, tool, Look::default_for(tool), None, at, 4.0).start;
 
-        let reopened = Some(Start::Type(TextOrigin::Existing {
+        let reopened = TextOrigin::Existing {
             id: bubble_id,
             block,
             style,
             frame: TextFrame::Bubble { tail },
-        }));
-        assert_eq!(press(Tool::Bubble, point(310.0, 305.0)), reopened);
-        assert_eq!(press(Tool::Text, point(310.0, 305.0)), reopened);
+        };
+        let Some(Start::Drag(clicked)) = press(Tool::Bubble, point(310.0, 305.0)) else {
+            panic!("a press on a bubble with the bubble tool picks it up");
+        };
+        assert_eq!(clicked.typed_on_click(Tool::Bubble), Some(reopened.clone()));
+        assert_eq!(
+            press(Tool::Text, point(310.0, 305.0)),
+            Some(Start::Type(reopened))
+        );
         let at = point(30.0, 20.0);
         assert_eq!(
             press(Tool::Bubble, at),
@@ -565,5 +608,76 @@ mod tests {
                 },
             }))
         );
+    }
+
+    #[test]
+    fn d118_a_tool_moves_and_resizes_its_own_shapes_and_draws_anywhere_else() {
+        let (document, box_id, line_id) = document();
+        let press = |tool, selected, at| {
+            Drag::press(&document, tool, Look::default_for(tool), selected, at, 4.0)
+        };
+        let on_line = press(Tool::Line, None, point(125.0, 100.0));
+        assert_eq!(on_line.selected, Some(line_id));
+        assert!(matches!(
+            on_line.start,
+            Some(Start::Drag(Drag::Move { .. }))
+        ));
+        let line_end = press(Tool::Line, Some(line_id), point(150.0, 100.0));
+        assert_eq!(line_end.selected, Some(line_id));
+        assert!(matches!(
+            line_end.start,
+            Some(Start::Drag(Drag::Resize {
+                handle: Handle::End,
+                ..
+            }))
+        ));
+        for (tool, selected, at) in [
+            (Tool::Line, Some(line_id), point(20.0, 20.0)),
+            (Tool::Rectangle, Some(line_id), point(150.0, 100.0)),
+            (Tool::Rectangle, Some(box_id), point(180.0, 180.0)),
+        ] {
+            let drawn = press(tool, selected, at);
+            assert_eq!(drawn.selected, None, "{tool:?} at {at:?}");
+            assert!(
+                matches!(drawn.start, Some(Start::Drag(Drag::Draw { .. }))),
+                "{tool:?} at {at:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn d118_the_bubble_tool_drags_a_bubbles_tail_and_a_moved_bubble_opens_no_text_box() {
+        let (document, _, _) = document();
+        let mut history = History::new(document);
+        let block = TextBlock::new(point(100.0, 150.0), "hi".into(), 20.0, 2.0).unwrap();
+        let tail = point(60.0, 190.0);
+        let style = Look::default_for(Tool::Bubble).style();
+        let shape = Shape::Bubble(Bubble::new(block.clone(), tail));
+        history.apply(Command::Add { shape, style }).unwrap();
+        let document = history.document();
+        let bubble_id = document.shapes().last().unwrap().id;
+        let look = Look::default_for(Tool::Bubble);
+        let Some(Start::Drag(mut tip)) =
+            Drag::press(document, Tool::Bubble, look, Some(bubble_id), tail, 4.0).start
+        else {
+            panic!("the bubble tool picks up the tail's tip");
+        };
+        tip.extend(point(20.0, 195.0));
+        assert_eq!(
+            tip.command(false),
+            Some(Command::Replace {
+                id: bubble_id,
+                shape: Shape::Bubble(Bubble::new(block, point(20.0, 195.0))),
+                style,
+            })
+        );
+        let Some(Start::Drag(mut held)) =
+            Drag::press(document, Tool::Bubble, look, None, point(110.0, 155.0), 4.0).start
+        else {
+            panic!("the bubble tool picks up the bubble");
+        };
+        held.extend(point(130.0, 160.0));
+        assert!(held.command(false).is_some());
+        assert_eq!(held.typed_on_click(Tool::Bubble), None);
     }
 }

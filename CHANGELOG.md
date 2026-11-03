@@ -17,6 +17,10 @@ section exists.
 - A colour picked on the property strip is now the colour every tool draws in next, not
   only the tool it was picked for. Stroke width, fill, redaction and text size are still
   kept for each tool.
+- Each drawing tool can now select, move and resize the shapes it draws without
+  switching to Select (F-30): for example, drag a speech bubble's tail with the bubble
+  tool. A press anywhere else still draws a new shape, and a click on a text or bubble
+  with its tool still opens it for typing.
 - Esc in the editor goes back to the Select tool and clears the selection, from any tool
   (F-30). With Select already picked and nothing selected it does nothing.
 
