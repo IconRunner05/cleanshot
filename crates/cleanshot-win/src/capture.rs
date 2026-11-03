@@ -197,8 +197,8 @@ pub enum Device {
 }
 
 /// P-01: the Direct3D device of each adapter that showed the desktop, kept from one copy to
-/// the next so a copy skips making one. A device holds no pixels between copies (C-22), and
-/// one whose copy failed is not kept, so the next copy makes it afresh.
+/// the next so a copy skips making one. A kept device holds no pixels between copies (C-21),
+/// and one whose copy failed is not kept, so the next copy makes it afresh.
 #[derive(Default)]
 pub struct Devices {
     kept: Vec<(LUID, ID3D11Device, ID3D11DeviceContext)>,
@@ -546,8 +546,19 @@ fn duplicate_adapter(
     for (output, report) in listed {
         duplicate_listed(&device, &context, &output, report, duplicates);
     }
+    destroy_released(&context);
     if duplicates.results[before..].iter().all(Result::is_ok) {
         devices.kept.push((luid, device, context));
+    }
+}
+
+/// C-21: Direct3D 11 defers destroying what is released, so the duplications and staging
+/// copies of a capture, which held its pixels, are destroyed here, before the device is kept.
+fn destroy_released(context: &ID3D11DeviceContext) {
+    // SAFETY: plain calls on the device's own immediate context; nothing of it is bound after.
+    unsafe {
+        context.ClearState();
+        context.Flush();
     }
 }
 
