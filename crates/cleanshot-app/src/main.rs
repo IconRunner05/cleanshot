@@ -322,7 +322,12 @@ impl Session {
                 return self.warn(Warning::Failed("Logging could not sample idle use", &error));
             }
         };
-        self.perf(|_| format!("P-04 working_set_bytes={}", end.working_set_bytes));
+        self.perf(|_| {
+            format!(
+                "P-04 working_set_bytes={} idle_private_bytes={}",
+                end.working_set_bytes, end.private_working_set_bytes
+            )
+        });
         self.perf(|_| {
             format!(
                 "P-05 cpu_ms={} over_ms={}",
