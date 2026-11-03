@@ -79,7 +79,7 @@ jobs:
           $info = (Get-Item target/x86_64-pc-windows-msvc/release/cleanshot.exe).VersionInfo
           $fixed = '{0}.{1}.{2}' -f $info.ProductMajorPart, $info.ProductMinorPart, $info.ProductBuildPart
           $found = "ProductName=$($info.ProductName) FileDescription=$($info.FileDescription) ProductVersion=$($info.ProductVersion) FileVersion=$($info.FileVersion) fixed=$fixed"
-          $wanted = "ProductName=Cleanshot FileDescription=Cleanshot ProductVersion=$expected FileVersion=$expected fixed=$expected"
+          $wanted = "ProductName=Cleanshot FileDescription=Cleanshot ProductVersion=$expected FileVersion=$expected fixed=$($expected -replace '[-+].*$', '')"
           if ($found -ne $wanted) {
             Write-Output "FAIL D-74: the exe says $found, expected $wanted"
             exit 1
