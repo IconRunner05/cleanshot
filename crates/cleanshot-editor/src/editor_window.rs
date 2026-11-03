@@ -18,9 +18,7 @@ use gpui::{
     WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
 
-use crate::canvas::{
-    OnPointer, Overlay, Pointer, RedactionPreviews, ShadowPreviews, document_canvas, render_image,
-};
+use crate::canvas::{OnPointer, Overlay, Pointer, Previews, document_canvas, render_image};
 use crate::placement::{MIN_WINDOW, Placement, opening_size};
 use crate::shape_menu::ShapeMenu;
 use crate::strip::property_strip;
@@ -79,8 +77,7 @@ struct EditorView {
     menu: Option<ShapeMenu>,
     /// How each tool draws, as the property strip sets it; not part of the document.
     looks: Looks,
-    redactions: Rc<RedactionPreviews>,
-    shadows: Rc<ShadowPreviews>,
+    previews: Rc<Previews>,
     log: Log,
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
@@ -128,8 +125,7 @@ impl EditorView {
             text_box: None,
             menu: None,
             looks: Looks::default(),
-            redactions: Rc::new(RedactionPreviews::new(Rc::clone(&log))),
-            shadows: Rc::new(ShadowPreviews::new(Rc::clone(&log))),
+            previews: Rc::new(Previews::new(Rc::clone(&log))),
             log,
             shift: false,
             placement: None,
@@ -530,14 +526,12 @@ impl Render for EditorView {
                 over: None,
             },
         };
-        Rc::make_mut(&mut self.redactions).update(&self.document);
-        Rc::make_mut(&mut self.shadows).update(&self.document);
+        Rc::make_mut(&mut self.previews).update(&self.document);
         let canvas = document_canvas(
             Rc::clone(&self.document),
             Arc::clone(&self.base),
             self.placement,
-            Rc::clone(&self.redactions),
-            Rc::clone(&self.shadows),
+            Rc::clone(&self.previews),
             overlay,
             on_pointer,
         );

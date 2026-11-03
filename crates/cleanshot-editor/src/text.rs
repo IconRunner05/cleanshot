@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use crate::Error;
+use crate::canvas::Unpainted;
 use crate::placement::Fit;
 
 /// The embedded Inter at the one weight F-34 draws text in, kerned (D-69).
@@ -129,13 +130,17 @@ fn shape(line: &str, font_size: Pixels, color: Rgba, window: &Window) -> ShapedL
 }
 
 /// Paints `label` in Inter and `color`, laid out as the export lays it out (F-34, F-41).
+///
+/// # Errors
+///
+/// [`Unpainted::Glyphs`] if a line could not be rasterised; the other lines are still painted.
 pub(crate) fn paint_label(
     label: &Label,
     color: Rgba,
     fit: &Fit,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> Result<(), Unpainted> {
     let lines = match label {
         Label::Block(block) => lay_out(block, color, fit.scale, |at| fit.point(at), window),
         Label::Centred {
@@ -160,12 +165,16 @@ pub(crate) fn paint_label(
             }]
         }
     };
+    let mut painted = Ok(());
     for line in lines {
-        // Fails only if a glyph cannot be rasterised; the document keeps the text.
-        let _ = line
+        let line = line
             .shaped
             .paint(line.origin, line.height, TextAlign::Left, None, window, cx);
+        if line.is_err() {
+            painted = Err(Unpainted::Glyphs);
+        }
     }
+    painted
 }
 
 /// F-34: core places each baseline. GPUI paints a line's baseline

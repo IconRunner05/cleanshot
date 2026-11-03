@@ -34,10 +34,35 @@ pub(crate) fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
     Arc::new(RenderImage::new(smallvec![image::Frame::new(buffer)]))
 }
 
+/// What the canvas shows as the export draws it, made once rather than every frame (D-58,
+/// D-114), and the log the canvas reports what it could not paint to (D-120).
+#[derive(Clone)]
+pub(crate) struct Previews {
+    redactions: RedactionPreviews,
+    shadows: ShadowPreviews,
+    log: Log,
+}
+
+impl Previews {
+    pub(crate) fn new(log: Log) -> Self {
+        Self {
+            redactions: RedactionPreviews::new(Rc::clone(&log)),
+            shadows: ShadowPreviews::new(Rc::clone(&log)),
+            log,
+        }
+    }
+
+    /// Brings the previews in step with `document`.
+    pub(crate) fn update(&mut self, document: &Document) {
+        self.redactions.update(document);
+        self.shadows.update(document);
+    }
+}
+
 /// What the canvas shows for each redaction: the pixels an export leaves there (F-36, D-58),
 /// made once for each rectangle and mode rather than every frame.
 #[derive(Clone)]
-pub(crate) struct RedactionPreviews {
+struct RedactionPreviews {
     previews: HashMap<RedactionKey, RedactionPreview>,
     log: Log,
 }
@@ -165,7 +190,7 @@ fn redaction_preview(
 /// What the canvas shows under each shadowed shape whose shadow GPUI cannot draw as a box: the
 /// shadow the export draws there (D-114), made once for each shape rather than every frame.
 #[derive(Clone)]
-pub(crate) struct ShadowPreviews {
+struct ShadowPreviews {
     previews: HashMap<ShapeId, ShadowPreview>,
     log: Log,
 }
@@ -281,9 +306,9 @@ fn paint_shadow(
     painting: &Painting,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> Result<(), Unpainted> {
     if !style.shadow() {
-        return;
+        return Ok(());
     }
     let fit = painting.fit;
     let offset = Style::SHADOW_OFFSET as f32;
@@ -299,7 +324,7 @@ fn paint_shadow(
                 inset: false,
             }],
         );
-        return;
+        return Ok(());
     }
     if let Shape::Text(block) = shape {
         let below = Fit {
@@ -312,12 +337,12 @@ fn paint_shadow(
             b: 0.0,
             a: Style::SHADOW_ALPHA,
         };
-        paint_label(&Label::Block(block), black, &below, window, cx);
-        return;
+        return paint_label(&Label::Block(block), black, &below, window, cx);
     }
     if let Some(id) = id {
         painting.shadows.paint(id, shape, style, fit, window);
     }
+    Ok(())
 }
 
 /// The pointer on the canvas, in image pixels, clamped to the image.
@@ -381,8 +406,7 @@ pub(crate) fn document_canvas(
     document: Rc<Document>,
     base: Arc<RenderImage>,
     placement: Option<Placement>,
-    redactions: Rc<RedactionPreviews>,
-    shadows: Rc<ShadowPreviews>,
+    previews: Rc<Previews>,
     overlay: Overlay,
     on_pointer: OnPointer,
 ) -> Canvas<Hitbox> {
@@ -401,8 +425,7 @@ pub(crate) fn document_canvas(
                 placement.unwrap_or_else(|| Placement::fitted(bounds.size, shown, scale_factor));
             let fit = Fit::new(bounds, image, placement, scale_factor);
             paint_frame(document.frame(), fit.image_bounds, fit.scale, window);
-            // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
-            let _ = window.paint_image(
+            let painted = window.paint_image(
                 fit.image_bounds,
                 fit.image_bounds,
                 0.0.into(),
@@ -410,6 +433,9 @@ pub(crate) fn document_canvas(
                 0,
                 false,
             );
+            if painted.is_err() {
+                (previews.log)("base_image not_painted");
+            }
             let (replaced, added) = match &overlay.preview {
                 Some(Command::Replace { id, shape, style }) => (Some((*id, shape, style)), None),
                 Some(Command::Add { shape, style }) => (None, Some((shape, style))),
@@ -438,13 +464,16 @@ pub(crate) fn document_canvas(
             for ((id, shape, style), number) in shown.into_iter().zip(numbers) {
                 let painting = Painting {
                     fit: &fit,
-                    redactions: &redactions,
-                    shadows: &shadows,
+                    redactions: &previews.redactions,
+                    shadows: &previews.shadows,
                     dimmed: &dimmed,
                     number,
                 };
-                paint_shadow(id, shape, *style, &painting, window, cx);
-                paint_shape(shape, *style, &painting, window, cx);
+                let shadow = paint_shadow(id, shape, *style, &painting, window, cx);
+                let painted = paint_shape(shape, *style, &painting, window, cx);
+                for unpainted in [shadow, painted].into_iter().filter_map(Result::err) {
+                    (previews.log)(unpainted.event());
+                }
                 if id.is_some() && overlay.selected == id {
                     selected_shape = Some(shape);
                 }
@@ -645,7 +674,7 @@ fn paint_shape(
     painting: &Painting,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> Result<(), Unpainted> {
     let Painting {
         fit,
         redactions,
@@ -665,7 +694,7 @@ fn paint_shape(
             color,
         ),
         Shape::Arrow { from, to } => {
-            paint_polygon(
+            let line = paint_polygon(
                 window,
                 PathBuilder::stroke(width),
                 &[fit.point(*from), fit.point(*to)],
@@ -673,24 +702,30 @@ fn paint_shape(
                 color,
             );
             let head = arrow_head(*from, *to, style.stroke_width).map(|p| fit.point(p));
-            paint_polygon(window, stroke, &head, false, color);
+            line.and(paint_polygon(window, stroke, &head, false, color))
         }
         Shape::Rect {
             rect,
             fill: Fill::Hollow,
-        } => window.paint_quad(quad(
-            fit.bounds(*rect),
-            px(0.0),
-            transparent_black(),
-            width,
-            color,
-            BorderStyle::Solid,
-        )),
+        } => {
+            window.paint_quad(quad(
+                fit.bounds(*rect),
+                px(0.0),
+                transparent_black(),
+                width,
+                color,
+                BorderStyle::Solid,
+            ));
+            Ok(())
+        }
         Shape::Rect {
             rect,
             fill: Fill::Solid,
         }
-        | Shape::Highlight(rect) => window.paint_quad(fill(fit.bounds(*rect), color)),
+        | Shape::Highlight(rect) => {
+            window.paint_quad(fill(fit.bounds(*rect), color));
+            Ok(())
+        }
         Shape::Ellipse {
             rect,
             fill: Fill::Hollow,
@@ -707,7 +742,7 @@ fn paint_shape(
         ),
         Shape::Pen(points) => {
             let points: Vec<_> = points.iter().map(|p| fit.point(*p)).collect();
-            paint_polygon(window, stroke, &points, false, color);
+            paint_polygon(window, stroke, &points, false, color)
         }
         Shape::Text(block) => paint_label(&Label::Block(block), color, fit, window, cx),
         Shape::Redact { rect, mode } => {
@@ -715,31 +750,38 @@ fn paint_shape(
             if let Some(painted) = redactions.paint(*rect, *mode, fit, window) {
                 paint_dim(dimmed, painted, fit, window);
             }
+            Ok(())
         }
         // F-43: the canvas dims around every spotlight before it paints any shape.
-        Shape::Spotlight(_) => {}
+        Shape::Spotlight(_) => Ok(()),
         Shape::Step(step) => {
-            paint_polygon(
+            let circle = paint_polygon(
                 window,
                 PathBuilder::fill(),
                 &ellipse(fit.bounds(step.circle())),
                 true,
                 color,
             );
-            paint_label(
+            circle.and(paint_label(
                 &step.label(number),
                 rgba(text_on(style.color)),
                 fit,
                 window,
                 cx,
-            );
+            ))
         }
         Shape::Bubble(bubble) => paint_bubble(bubble, style, fit, window, cx),
     }
 }
 
 /// F-42: the rounded box and tail in the style colour, the text on them in the colour that reads.
-fn paint_bubble(bubble: &Bubble, style: Style, fit: &Fit, window: &mut Window, cx: &mut App) {
+fn paint_bubble(
+    bubble: &Bubble,
+    style: Style,
+    fit: &Fit,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), Unpainted> {
     let color = rgba(style.color);
     window.paint_quad(quad(
         fit.bounds(bubble.outline()),
@@ -749,17 +791,18 @@ fn paint_bubble(bubble: &Bubble, style: Style, fit: &Fit, window: &mut Window, c
         transparent_black(),
         BorderStyle::Solid,
     ));
-    if let Some(tail) = bubble.tail_triangle() {
+    let tail = bubble.tail_triangle().map_or(Ok(()), |tail| {
         let tail = tail.map(|point| fit.point(point));
-        paint_polygon(window, PathBuilder::fill(), &tail, true, color);
-    }
-    paint_label(
+        paint_polygon(window, PathBuilder::fill(), &tail, true, color)
+    });
+    let text = paint_label(
         &Label::Block(bubble.block()),
         rgba(text_on(style.color)),
         fit,
         window,
         cx,
     );
+    tail.and(text)
 }
 
 /// Lays the spotlight dim over each of `areas`, cut to `within` (F-43, D-78).
@@ -772,18 +815,36 @@ fn paint_dim(areas: &[RectF], within: Bounds<Pixels>, fit: &Fit, window: &mut Wi
     }
 }
 
+/// What the canvas could not paint this frame (D-120). The document keeps the shape, so the
+/// export still has it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Unpainted {
+    /// lyon rejected the path: it has no length or too many vertices.
+    Path,
+    /// A line of text could not be rasterised.
+    Glyphs,
+}
+
+impl Unpainted {
+    fn event(self) -> &'static str {
+        match self {
+            Self::Path => "path not_painted",
+            Self::Glyphs => "glyphs not_painted",
+        }
+    }
+}
+
 fn paint_polygon(
     window: &mut Window,
     mut builder: PathBuilder,
     points: &[Point<Pixels>],
     closed: bool,
     color: Rgba,
-) {
+) -> Result<(), Unpainted> {
     builder.add_polygon(points, closed);
-    // lyon rejects a path with no length or too many vertices; the document keeps the shape.
-    if let Ok(path) = builder.build() {
-        window.paint_path(path, color);
-    }
+    let path = builder.build().map_err(|_| Unpainted::Path)?;
+    window.paint_path(path, color);
+    Ok(())
 }
 
 fn ellipse(bounds: Bounds<Pixels>) -> Vec<Point<Pixels>> {
