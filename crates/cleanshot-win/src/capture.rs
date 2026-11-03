@@ -553,9 +553,7 @@ fn duplicate_adapter(
         device: made,
     });
     let before = duplicates.results.len();
-    for (output, report) in listed {
-        duplicate_listed(&device, &context, &output, report, duplicates);
-    }
+    duplicate_listed(&device, &context, listed, duplicates);
     destroy_released(&context);
     if duplicates.results[before..].iter().all(Result::is_ok) {
         devices.kept.push((luid, device, context));
@@ -651,24 +649,42 @@ fn choose(duplicated: Vec<Result<MonitorImage, Error>>) -> Result<Vec<MonitorIma
     duplicated.into_iter().collect()
 }
 
+/// P-01: every attached output's frame is acquired before any is copied, so their waits for
+/// the next present overlap, and every copy is queued on the GPU before the first is read.
 fn duplicate_listed(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
-    output: &IDXGIOutput,
-    mut report: OutputReport,
+    listed: Vec<(IDXGIOutput, OutputReport)>,
     duplicates: &mut Duplicates,
 ) {
-    if !report.attached {
-        return duplicates.reports.push(report);
+    let acquired: Vec<_> = listed
+        .into_iter()
+        .map(|(output, mut report)| {
+            let acquired = report.attached.then(|| {
+                output
+                    .cast::<IDXGIOutput1>()
+                    .map_err(Error::Capture)
+                    .and_then(|output| acquire(device, &output, report.bounds, &mut report.frame))
+            });
+            (report, acquired)
+        })
+        .collect();
+    let staged: Vec<_> = acquired
+        .into_iter()
+        .map(|(report, acquired)| {
+            let staged = acquired
+                .map(|acquired| acquired.and_then(|acquired| stage(device, context, acquired)));
+            (report, staged)
+        })
+        .collect();
+    for (mut report, staged) in staged {
+        if let Some(staged) = staged {
+            duplicates
+                .results
+                .push(staged.and_then(|staged| read(context, staged, &mut report.frame)));
+        }
+        duplicates.reports.push(report);
     }
-    let image = output
-        .cast::<IDXGIOutput1>()
-        .map_err(Error::Capture)
-        .and_then(|output| {
-            duplicate_output(device, context, &output, report.bounds, &mut report.frame)
-        });
-    duplicates.reports.push(report);
-    duplicates.results.push(image);
 }
 
 /// The text of a NUL-terminated UTF-16 buffer.
@@ -680,13 +696,39 @@ fn wide(buffer: &[u16]) -> String {
     String::from_utf16_lossy(&buffer[..end])
 }
 
-fn duplicate_output(
+/// A duplicated frame still acquired. Dropping it releases it, so every frame acquired is
+/// released once, on every path, after its last use.
+struct HeldFrame {
+    duplication: IDXGIOutputDuplication,
+}
+
+impl Drop for HeldFrame {
+    fn drop(&mut self) {
+        // SAFETY: the duplication holds exactly this one acquired frame.
+        let released = unsafe { self.duplication.ReleaseFrame() };
+        debug_assert!(released.is_ok(), "an acquired frame releases");
+    }
+}
+
+struct Acquired {
+    held: HeldFrame,
+    texture: ID3D11Texture2D,
+    bounds: RECT,
+}
+
+struct Staged {
+    held: HeldFrame,
+    staging: ID3D11Texture2D,
+    bounds: RECT,
+    copying: Instant,
+}
+
+fn acquire(
     device: &ID3D11Device,
-    context: &ID3D11DeviceContext,
     output: &IDXGIOutput1,
     bounds: RECT,
     frame: &mut Option<FrameReport>,
-) -> Result<MonitorImage, Error> {
+) -> Result<Acquired, Error> {
     let (width, height) = size_of_rect(bounds)?;
     let duplicating = Instant::now();
     // SAFETY: `device` belongs to this output's adapter.
@@ -699,7 +741,8 @@ fn duplicate_output(
     let acquiring = Instant::now();
     let (frame_info, resource) = desktop_frame(&duplication)?;
     let acquire = acquiring.elapsed();
-    let report = frame.insert(FrameReport {
+    let held = HeldFrame { duplication };
+    frame.replace(FrameReport {
         format,
         pointer_only_frames: frame_info.pointer_only_frames,
         accumulated_frames: frame_info.info.AccumulatedFrames,
@@ -710,21 +753,15 @@ fn duplicate_output(
         acquire,
         copy: None,
     });
-    let copying = Instant::now();
-    let copied = resource
-        .cast::<ID3D11Texture2D>()
-        .map_err(Error::Capture)
-        .and_then(|frame| copy_to_cpu(device, context, &frame, width, height));
-    // SAFETY: the frame acquired above is released once, after its last use.
-    let released = unsafe { duplication.ReleaseFrame() };
-    debug_assert!(released.is_ok(), "an acquired frame releases");
-    let frame =
-        BgraFrame::new(width, height, copied?).expect("copy_to_cpu reads width x height pixels");
-    report.copy = Some(copying.elapsed());
-    Ok(MonitorImage { bounds, frame })
+    let texture = resource.cast::<ID3D11Texture2D>().map_err(Error::Capture)?;
+    Ok(Acquired {
+        held,
+        texture,
+        bounds,
+    })
 }
 
-/// D-28: `copy_to_cpu` reads upright 8-bit BGRA frames `width` x `height`; GDI copies the rest.
+/// D-28: `stage` copies upright 8-bit BGRA frames `width` x `height`; GDI copies the rest.
 fn copyable(description: &DXGI_OUTDUPL_DESC, width: u32, height: u32) -> Result<(), Error> {
     let mode = &description.ModeDesc;
     if (mode.Format, description.Rotation, mode.Width, mode.Height)
@@ -797,16 +834,17 @@ fn desktop_frame(
     }
 }
 
-fn copy_to_cpu(
+/// Queues a copy of `acquired`'s frame into a new staging texture the CPU can read.
+fn stage(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
-    frame: &ID3D11Texture2D,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, Error> {
+    acquired: Acquired,
+) -> Result<Staged, Error> {
+    let copying = Instant::now();
+    let (width, height) = size_of_rect(acquired.bounds)?;
     let mut description = D3D11_TEXTURE2D_DESC::default();
-    // SAFETY: `frame` is live and `description` writable.
-    unsafe { frame.GetDesc(&raw mut description) };
+    // SAFETY: the frame's texture is live and `description` writable.
+    unsafe { acquired.texture.GetDesc(&raw mut description) };
     // A frame can arrive at a new size mid mode change; reading it as `width` x `height`
     // would run past it.
     if (description.Width, description.Height) != (width, height)
@@ -828,13 +866,30 @@ fn copy_to_cpu(
     unsafe { device.CreateTexture2D(&raw const description, None, Some(&raw mut staging)) }
         .map_err(Error::Capture)?;
     let staging: ID3D11Texture2D = staging.expect("CreateTexture2D returned a texture on success");
+    // SAFETY: both textures share size and format, and the frame stays acquired until the
+    // copy has been read.
+    unsafe { context.CopyResource(&staging, &acquired.texture) };
+    Ok(Staged {
+        held: acquired.held,
+        staging,
+        bounds: acquired.bounds,
+        copying,
+    })
+}
+
+/// Reads `staged`'s copy into memory, then releases its frame.
+fn read(
+    context: &ID3D11DeviceContext,
+    staged: Staged,
+    frame: &mut Option<FrameReport>,
+) -> Result<MonitorImage, Error> {
+    let (width, height) = size_of_rect(staged.bounds)?;
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-    // SAFETY: both textures share size and format; the map is read only up to each row's
-    // width, by RowPitch, and unmapped before return.
-    unsafe {
-        context.CopyResource(&staging, frame);
+    // SAFETY: the map is read only up to each row's width, by RowPitch, and unmapped before
+    // the frame is released.
+    let pixels = unsafe {
         context
-            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped))
+            .Map(&staged.staging, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped))
             .map_err(Error::Capture)?;
         let row = width as usize * 4;
         let pitch = mapped.RowPitch as usize;
@@ -843,9 +898,18 @@ fn copy_to_cpu(
             let start = mapped.pData.cast::<u8>().add(y * pitch);
             pixels.extend_from_slice(std::slice::from_raw_parts(start, row));
         }
-        context.Unmap(&staging, 0);
-        Ok(pixels)
+        context.Unmap(&staged.staging, 0);
+        pixels
+    };
+    drop(staged.held);
+    if let Some(report) = frame {
+        report.copy = Some(staged.copying.elapsed());
     }
+    let frame = BgraFrame::new(width, height, pixels).expect("read takes width x height pixels");
+    Ok(MonitorImage {
+        bounds: staged.bounds,
+        frame,
+    })
 }
 
 #[cfg(test)]
