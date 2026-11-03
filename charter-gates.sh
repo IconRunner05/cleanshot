@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CHARTER 7 gates 3 and 4 on cleanshot.exe, the CHARTER 9 winget manifest, and the CHARTER 11
 # Decisions log (docs/decisions.md).
-#   ./charter-gates.sh                   Mac or Linux fold bar: builds a scan-only exe with
+#   ./charter-gates.sh                     Mac or Linux fold bar: builds a scan-only exe with
 #                                          cargo-xwin and scans its imports and headers.
 #   ./charter-gates.sh --release-exe PATH  CI on windows-latest: scans the shipped exe.
 # D-21: the scan-only exe is never shipped and cannot render.
