@@ -41,6 +41,12 @@ pub enum DeliveryError {
     OutsidePolicyFolder { folder: String },
 }
 
+impl From<SavingOff> for DeliveryError {
+    fn from(off: SavingOff) -> Self {
+        Self::SavingOff(off)
+    }
+}
+
 /// The sentence the user sees after a Copy, Save or Save As, from the overlay or the editor (D-48): what
 /// happened, naming the file, folder or name it is about.
 #[must_use]
@@ -70,16 +76,30 @@ pub fn delivery_notice(outcome: &Result<Delivered, DeliveryError>) -> String {
             "The text could not be drawn, so nothing was copied or saved".to_owned()
         }
         Err(DeliveryError::NoSaveDialog) => "The Save As dialog did not open".to_owned(),
-        Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly)) => {
-            "Your organisation allows copying only. Use Copy.".to_owned()
-        }
-        Err(DeliveryError::SavingOff(SavingOff::FolderNotValid)) => {
-            "Your organisation's save folder is not valid, so saving is off. Use Copy.".to_owned()
-        }
+        Err(DeliveryError::SavingOff(off)) => saving_off_notice(*off),
         Err(DeliveryError::OutsidePolicyFolder { folder }) => {
             format!("Your organisation saves screenshots only in {folder}. Choose a file there.")
         }
     }
+}
+
+/// Why the policy turned saving off (F-57), for a place that offers no Copy, such as the
+/// settings window.
+#[must_use]
+pub fn saving_off_reason(off: SavingOff) -> &'static str {
+    match off {
+        SavingOff::ClipboardOnly => "Your organisation allows copying only.",
+        SavingOff::FolderNotValid => {
+            "Your organisation's save folder is not valid, so saving is off."
+        }
+    }
+}
+
+/// The sentence shown where a refused save sits beside Copy (F-57): the overlay, the
+/// thumbnail and the toasts. Why saving is off, and what to do instead.
+#[must_use]
+pub fn saving_off_notice(off: SavingOff) -> String {
+    format!("{} Use Copy.", saving_off_reason(off))
 }
 
 /// F-22: the notice once the Save As dialog closes. `chosen` is the confirmed path, or why the
@@ -126,6 +146,18 @@ mod tests {
             height: 9,
         };
         assert!(notice(Err(large)).contains("70000x9"));
+    }
+
+    #[test]
+    fn f57_a_refused_save_reads_the_same_wherever_it_is_shown() {
+        for off in [SavingOff::ClipboardOnly, SavingOff::FolderNotValid] {
+            let refused: Result<Delivered, DeliveryError> = Err(off.into());
+            assert_eq!(delivery_notice(&refused), saving_off_notice(off));
+            assert!(
+                !saving_off_reason(off).contains("Copy"),
+                "the settings window offers no Copy"
+            );
+        }
     }
 
     #[test]

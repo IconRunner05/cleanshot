@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use cleanshot_core::{
-    AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, Policy, SaveFormat, Saving, SavingOff,
-    Settings, SettingsNotice, SettingsProblem, StartupEntryError, settings_notice,
+    AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, Policy, SaveFormat, Saving, Settings,
+    SettingsNotice, SettingsProblem, StartupEntryError, saving_off_reason, settings_notice,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -314,13 +314,7 @@ impl SettingsView {
         let section = section("Saving", theme);
         let (policy_folder, png_only) = match self.policy.saving() {
             Saving::Off(off) => {
-                let why = match off {
-                    SavingOff::ClipboardOnly => "Your organisation has turned saving off",
-                    SavingOff::FolderNotValid => {
-                        "The save folder your organisation set is not valid, so saving is off"
-                    }
-                };
-                return section.child(set_by_policy(why, theme));
+                return section.child(set_by_policy(saving_off_reason(*off), theme));
             }
             Saving::Allowed { folder, png_only } => (folder.clone(), *png_only),
         };

@@ -63,6 +63,20 @@ pub enum Saving {
     Off(SavingOff),
 }
 
+impl Saving {
+    /// Ok when a capture may be saved; otherwise why the policy turned saving off (F-57).
+    ///
+    /// # Errors
+    ///
+    /// The [`SavingOff`] reason when saving is off.
+    pub fn allowed(&self) -> Result<(), SavingOff> {
+        match self {
+            Self::Allowed { .. } => Ok(()),
+            Self::Off(off) => Err(*off),
+        }
+    }
+}
+
 /// Why a policy turned saving off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SavingOff {
@@ -246,6 +260,21 @@ mod tests {
             );
             assert_eq!(problems, vec![PolicyProblem(PolicySetting::SaveFolder)]);
         }
+    }
+
+    #[test]
+    fn f57_saving_is_allowed_or_refused_with_the_policy_reason() {
+        assert_eq!(Policy::default().saving().allowed(), Ok(()));
+        let (clipboard_only, _) = Policy::from_values(Missing, Number(1), Missing, Missing);
+        assert_eq!(
+            clipboard_only.saving().allowed(),
+            Err(SavingOff::ClipboardOnly)
+        );
+        let (bad_folder, _) = Policy::from_values(Unreadable, Missing, Missing, Missing);
+        assert_eq!(
+            bad_folder.saving().allowed(),
+            Err(SavingOff::FolderNotValid)
+        );
     }
 
     #[test]
