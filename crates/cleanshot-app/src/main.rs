@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use cleanshot_core::{
     CaptureMode, CapturePanel, Delivered, DeliveryError, Document, Hotkey, HotkeyAction,
-    MAX_SETTINGS_BYTES, Output, Policy, PolicyProblem, RgbaImage, Settings, SettingsProblem,
-    delivery_notice,
+    MAX_SETTINGS_BYTES, Output, Policy, PolicyProblem, RgbaImage, SavingOff, Settings,
+    SettingsProblem, delivery_notice,
 };
 use cleanshot_editor::{AsyncApp, ask_save_path};
 use cleanshot_win::capture::{Copied, MonitorImage, OutputReport, RECT, black_share};
@@ -438,18 +438,19 @@ fn failure_line(event: &str, error: &(dyn Error + 'static)) -> String {
     }
 }
 
-fn refused_kind(error: &DeliveryError) -> String {
+fn refused_kind(error: &DeliveryError) -> &'static str {
     match error {
-        DeliveryError::TooLarge { .. } => "TooLarge".to_owned(),
-        DeliveryError::ClipboardBusy => "ClipboardBusy".to_owned(),
-        DeliveryError::NoSaveFolder => "NoSaveFolder".to_owned(),
-        DeliveryError::SaveFolderNotFull { .. } => "SaveFolderNotFull".to_owned(),
-        DeliveryError::NoFreeName { .. } => "NoFreeName".to_owned(),
-        DeliveryError::NotWritten { .. } => "NotWritten".to_owned(),
-        DeliveryError::TextNotDrawn => "TextNotDrawn".to_owned(),
-        DeliveryError::NoSaveDialog => "NoSaveDialog".to_owned(),
-        DeliveryError::SavingOff(off) => format!("SavingOff {off:?}"),
-        DeliveryError::OutsidePolicyFolder { .. } => "OutsidePolicyFolder".to_owned(),
+        DeliveryError::TooLarge { .. } => "TooLarge",
+        DeliveryError::ClipboardBusy => "ClipboardBusy",
+        DeliveryError::NoSaveFolder => "NoSaveFolder",
+        DeliveryError::SaveFolderNotFull { .. } => "SaveFolderNotFull",
+        DeliveryError::NoFreeName { .. } => "NoFreeName",
+        DeliveryError::NotWritten { .. } => "NotWritten",
+        DeliveryError::TextNotDrawn => "TextNotDrawn",
+        DeliveryError::NoSaveDialog => "NoSaveDialog",
+        DeliveryError::SavingOff(SavingOff::ClipboardOnly) => "SavingOff ClipboardOnly",
+        DeliveryError::SavingOff(SavingOff::FolderNotValid) => "SavingOff FolderNotValid",
+        DeliveryError::OutsidePolicyFolder { .. } => "OutsidePolicyFolder",
     }
 }
 
