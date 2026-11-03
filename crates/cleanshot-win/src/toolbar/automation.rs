@@ -13,21 +13,23 @@ use windows::Win32::UI::Accessibility::{
     IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
     IRawElementProviderFragment_Impl, IRawElementProviderFragmentRoot,
     IRawElementProviderFragmentRoot_Impl, IRawElementProviderSimple,
-    IRawElementProviderSimple_Impl, NavigateDirection, NavigateDirection_FirstChild,
+    IRawElementProviderSimple_Impl, ISelectionItemProvider, ISelectionItemProvider_Impl,
+    IValueProvider, IValueProvider_Impl, NavigateDirection, NavigateDirection_FirstChild,
     NavigateDirection_LastChild, NavigateDirection_NextSibling, NavigateDirection_Parent,
     NavigateDirection_PreviousSibling, NotificationKind_Other, NotificationProcessing_MostRecent,
     ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ButtonControlTypeId,
     UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED,
-    UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId, UIA_InvokePatternId,
-    UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID,
-    UIA_PROPERTY_ID, UIA_TextControlTypeId, UIA_ToolBarControlTypeId, UiaAppendRuntimeId,
-    UiaHostProviderFromHwnd, UiaRaiseNotificationEvent, UiaRect, UiaReturnRawElementProvider,
-    UiaRootObjectId,
+    UIA_E_INVALIDOPERATION, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
+    UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
+    UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_RadioButtonControlTypeId,
+    UIA_SelectionItemPatternId, UIA_TextControlTypeId, UIA_ToolBarControlTypeId,
+    UIA_ValuePatternId, UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRaiseNotificationEvent,
+    UiaRect, UiaReturnRawElementProvider, UiaRootObjectId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
-use windows::core::{BSTR, Error, HRESULT, IUnknown, Interface, Result, implement};
+use windows::core::{BOOL, BSTR, Error, HRESULT, IUnknown, Interface, PCWSTR, Result, implement};
 
-use cleanshot_core::{Toolbar, ToolbarControl};
+use cleanshot_core::{CapturePanel, Timer, Toolbar, ToolbarControl};
 
 use super::{Layout, name};
 
@@ -45,6 +47,8 @@ pub(crate) enum Request {
 #[derive(Default)]
 struct State {
     shown: Option<(Layout, ToolbarControl)>,
+    /// F-11: the capture panel's mode and timer, which only the panel shows.
+    choices: Option<CapturePanel>,
     /// F-08: what a window capture would pick, as a screen reader says it, and its frame.
     pick: Option<(String, RECT)>,
     requests: Vec<Request>,
@@ -86,6 +90,15 @@ impl Mirror {
     /// Records where the toolbar is and which control has the focus, or that none shows.
     pub(crate) fn show(&self, shown: Option<(Layout, ToolbarControl)>) {
         self.lock().shown = shown;
+    }
+
+    /// Records the capture panel's mode and timer as it now shows them (F-11).
+    pub(crate) fn show_choices(&self, panel: CapturePanel) {
+        self.lock().choices = Some(panel);
+    }
+
+    fn choices(&self) -> Result<CapturePanel> {
+        self.lock().choices.ok_or_else(gone)
     }
 
     /// Records what a window capture would pick, or that none is being picked (F-08).
@@ -192,6 +205,19 @@ fn gone() -> Error {
     Error::from_hresult(HRESULT(UIA_E_ELEMENTNOTAVAILABLE as i32))
 }
 
+fn invalid_operation() -> Error {
+    #[expect(clippy::cast_possible_wrap, reason = "an HRESULT is the u32's bits")]
+    Error::from_hresult(HRESULT(UIA_E_INVALIDOPERATION as i32))
+}
+
+/// The timer's wait as a screen reader says it (F-11).
+fn timer_value(timer: Timer) -> String {
+    match timer {
+        Timer::Off => "Off".to_owned(),
+        Timer::Three | Timer::Five | Timer::Ten => format!("{} seconds", timer.seconds()),
+    }
+}
+
 fn not_enabled() -> Error {
     #[expect(clippy::cast_possible_wrap, reason = "an HRESULT is the u32's bits")]
     Error::from_hresult(HRESULT(UIA_E_ELEMENTNOTENABLED as i32))
@@ -254,19 +280,22 @@ fn on_screen(at: windows::Win32::Foundation::RECT) -> UiaRect {
 )]
 mod providers {
     use super::{
-        HWND, IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
+        BOOL, BSTR, HWND, IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
         IRawElementProviderFragment_Impl, IRawElementProviderFragmentRoot,
         IRawElementProviderFragmentRoot_Impl, IRawElementProviderSimple,
-        IRawElementProviderSimple_Impl, IUnknown, Interface, Mirror, NavigateDirection,
+        IRawElementProviderSimple_Impl, ISelectionItemProvider, ISelectionItemProvider_Impl,
+        IUnknown, IValueProvider, IValueProvider_Impl, Interface, Mirror, NavigateDirection,
         NavigateDirection_FirstChild, NavigateDirection_LastChild, NavigateDirection_NextSibling,
-        NavigateDirection_Parent, NavigateDirection_PreviousSibling, POINT, ProviderOptions,
-        ProviderOptions_ServerSideProvider, Request, Result, SAFEARRAY, SafeArrayCreateVector,
-        SafeArrayPutElement, TOOLBAR_NAME, ToolbarControl, UIA_ButtonControlTypeId,
-        UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
-        UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
-        UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_TextControlTypeId,
-        UIA_ToolBarControlTypeId, UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, VARIANT,
-        VT_I4, implement, name, none, not_enabled, number, on_screen, text, truth,
+        NavigateDirection_Parent, NavigateDirection_PreviousSibling, PCWSTR, POINT,
+        ProviderOptions, ProviderOptions_ServerSideProvider, Request, Result, SAFEARRAY,
+        SafeArrayCreateVector, SafeArrayPutElement, TOOLBAR_NAME, ToolbarControl,
+        UIA_ButtonControlTypeId, UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId,
+        UIA_HelpTextPropertyId, UIA_InvokePatternId, UIA_IsEnabledPropertyId,
+        UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
+        UIA_RadioButtonControlTypeId, UIA_SelectionItemPatternId, UIA_TextControlTypeId,
+        UIA_ToolBarControlTypeId, UIA_ValuePatternId, UiaAppendRuntimeId, UiaHostProviderFromHwnd,
+        UiaRect, VARIANT, VT_I4, implement, invalid_operation, name, none, not_enabled, number,
+        on_screen, text, timer_value, truth,
     };
 
     /// The toolbar, the root of the tree its window hands UI Automation.
@@ -280,11 +309,14 @@ mod providers {
         pub(super) mirror: Mirror,
     }
 
-    /// One of the toolbar's controls.
+    /// One of the toolbar's controls. A capture mode is a radio button whose selection is the
+    /// panel's mode, and the timer's value is its wait (F-11).
     #[implement(
         IRawElementProviderSimple,
         IRawElementProviderFragment,
-        IInvokeProvider
+        IInvokeProvider,
+        ISelectionItemProvider,
+        IValueProvider
     )]
     struct Button {
         window: HWND,
@@ -315,7 +347,7 @@ mod providers {
         button(window, mirror, mirror.last_control())
     }
 
-    fn button(
+    pub(super) fn button(
         window: HWND,
         mirror: &Mirror,
         control: ToolbarControl,
@@ -419,20 +451,32 @@ mod providers {
         }
 
         fn GetPatternProvider(&self, pattern: UIA_PATTERN_ID) -> Result<IUnknown> {
-            match pattern {
-                UIA_InvokePatternId => IInvokeProvider::from(Button {
-                    window: self.window,
-                    mirror: self.mirror.clone(),
-                    control: self.control,
-                })
-                .cast(),
+            let this = || Button {
+                window: self.window,
+                mirror: self.mirror.clone(),
+                control: self.control,
+            };
+            match (pattern, self.control) {
+                (UIA_InvokePatternId, _) => IInvokeProvider::from(this()).cast(),
+                (UIA_SelectionItemPatternId, ToolbarControl::Mode(_)) => {
+                    ISelectionItemProvider::from(this()).cast()
+                }
+                (UIA_ValuePatternId, ToolbarControl::Timer) => IValueProvider::from(this()).cast(),
                 _ => none(),
             }
         }
 
         fn GetPropertyValue(&self, property: UIA_PROPERTY_ID) -> Result<VARIANT> {
             Ok(match property {
-                UIA_ControlTypePropertyId => number(UIA_ButtonControlTypeId.0),
+                UIA_ControlTypePropertyId => match self.control {
+                    ToolbarControl::Mode(_) => number(UIA_RadioButtonControlTypeId.0),
+                    ToolbarControl::Timer
+                    | ToolbarControl::Capture
+                    | ToolbarControl::Copy
+                    | ToolbarControl::Save
+                    | ToolbarControl::Edit
+                    | ToolbarControl::Cancel => number(UIA_ButtonControlTypeId.0),
+                },
                 UIA_NamePropertyId => text(name(self.control)),
                 UIA_IsEnabledPropertyId | UIA_IsKeyboardFocusablePropertyId => {
                     truth(self.mirror.off(self.control).is_none())
@@ -579,6 +623,43 @@ mod providers {
         }
     }
 
+    impl ISelectionItemProvider_Impl for Button_Impl {
+        fn Select(&self) -> Result<()> {
+            self.mirror.ask(self.window, Request::Choose(self.control))
+        }
+
+        fn AddToSelection(&self) -> Result<()> {
+            self.Select()
+        }
+
+        fn RemoveFromSelection(&self) -> Result<()> {
+            Err(invalid_operation())
+        }
+
+        fn IsSelected(&self) -> Result<BOOL> {
+            let chosen = self.mirror.choices()?.mode();
+            Ok((self.control == ToolbarControl::Mode(chosen)).into())
+        }
+
+        fn SelectionContainer(&self) -> Result<IRawElementProviderSimple> {
+            Ok(toolbar(self.window, &self.mirror).into())
+        }
+    }
+
+    impl IValueProvider_Impl for Button_Impl {
+        fn SetValue(&self, _value: &PCWSTR) -> Result<()> {
+            Err(invalid_operation())
+        }
+
+        fn Value(&self) -> Result<BSTR> {
+            Ok(BSTR::from(timer_value(self.mirror.choices()?.timer())))
+        }
+
+        fn IsReadOnly(&self) -> Result<BOOL> {
+            Ok(true.into())
+        }
+    }
+
     impl IInvokeProvider_Impl for Button_Impl {
         fn Invoke(&self) -> Result<()> {
             if self.mirror.off(self.control).is_some() {
@@ -590,3 +671,69 @@ mod providers {
 }
 
 use providers::ToolbarProvider;
+
+#[cfg(test)]
+mod tests {
+    use cleanshot_core::CaptureMode;
+    use windows::Win32::Foundation::RECT;
+
+    use super::providers::button;
+    use super::*;
+
+    fn patterns(mirror: &Mirror, control: ToolbarControl) -> IRawElementProviderSimple {
+        button(HWND::default(), mirror, control)
+            .cast()
+            .expect("a button is a simple provider")
+    }
+
+    fn selected(mirror: &Mirror, control: ToolbarControl) -> Result<bool> {
+        // SAFETY: in-process calls on a provider this test owns.
+        unsafe {
+            let item: ISelectionItemProvider = patterns(mirror, control)
+                .GetPatternProvider(UIA_SelectionItemPatternId)?
+                .cast()?;
+            Ok(item.IsSelected()?.as_bool())
+        }
+    }
+
+    fn value(mirror: &Mirror) -> Result<String> {
+        // SAFETY: in-process calls on a provider this test owns.
+        unsafe {
+            let timer: IValueProvider = patterns(mirror, ToolbarControl::Timer)
+                .GetPatternProvider(UIA_ValuePatternId)?
+                .cast()?;
+            Ok(timer.Value()?.to_string())
+        }
+    }
+
+    #[test]
+    fn f11_a_screen_reader_hears_the_chosen_mode_as_selected_and_the_timer_as_its_wait() {
+        let mirror = Mirror::new(Toolbar::Panel, None);
+        let layout = super::super::layout(
+            Toolbar::Panel,
+            RECT {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            None,
+            1.0,
+        )
+        .expect("a 1080p monitor holds the panel");
+        mirror.show(Some((layout, ToolbarControl::Capture)));
+        let mut panel = CapturePanel::default();
+        panel.press(ToolbarControl::Mode(CaptureMode::Window));
+        panel.press(ToolbarControl::Timer);
+        panel.press(ToolbarControl::Timer);
+        mirror.show_choices(panel);
+        let modes = [
+            CaptureMode::Region,
+            CaptureMode::Window,
+            CaptureMode::FullScreen,
+        ]
+        .map(|mode| selected(&mirror, ToolbarControl::Mode(mode)).expect("a mode is selectable"));
+        assert_eq!(modes, [false, true, false]);
+        assert_eq!(value(&mirror).expect("the timer has a value"), "5 seconds");
+    }
+}

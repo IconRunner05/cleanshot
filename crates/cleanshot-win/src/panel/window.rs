@@ -70,6 +70,7 @@ impl Surface {
     fn changed(&self, window: HWND) {
         self.mirror
             .show(Some((self.layout.clone(), self.focus.get())));
+        self.mirror.show_choices(self.panel.get());
         // SAFETY: a repaint request for this thread's own window.
         let _ = unsafe { InvalidateRect(Some(window), None, false) };
     }
@@ -260,6 +261,7 @@ fn surface(
     let mirror = Mirror::new(Toolbar::Panel, None);
     let focus = ToolbarControl::Capture;
     mirror.show(Some((layout.clone(), focus)));
+    mirror.show_choices(panel);
     Ok(Surface {
         target,
         paint,
