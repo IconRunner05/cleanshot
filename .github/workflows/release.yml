@@ -1,7 +1,9 @@
 name: Release
 
-# A tag vX.Y.Z publishes that version as a GitHub pre-release (CHARTER 9). A manual run builds
-# and checks the same files without publishing them, and uploads them as an artifact.
+# A tag vX.Y.Z publishes that version on GitHub Releases (CHARTER 9): as a pre-release when the
+# version has a pre-release suffix (v1.0.0-rc.1) or the exe is unsigned, otherwise as a release.
+# A manual run builds and checks the same files without publishing them, and uploads them as an
+# artifact.
 on:
   push:
     tags: ["v*"]
@@ -85,21 +87,45 @@ jobs:
           grep -qxF "    InstallerSha256: \"$listed\"" Cleanshot.Cleanshot.installer.yaml ||
             { echo "FAIL: the winget manifest's InstallerSha256 is not the exe's line in SHA256SUMS"; exit 1; }
 
+      - name: A pre-release unless the version is plain and the exe is signed (CHARTER 9, D-102)
+        id: kind
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          signed=$(python3 -c 'import struct, sys
+          image = open(sys.argv[1], "rb").read()
+          header = struct.unpack_from("<I", image, 0x3C)[0] + 24
+          if struct.unpack_from("<H", image, header)[0] != 0x20B:
+              sys.exit("FAIL: the exe is not a 64-bit PE image")
+          # The certificate table is data directory 4 of a PE32+ optional header; a signature fills it.
+          print("true" if struct.unpack_from("<I", image, header + 148)[0] else "false")' "dist/cleanshot-$VERSION-x64.exe")
+          if [[ $VERSION == *-* ]]; then
+            prerelease=true why="v$VERSION is a pre-release version"
+          elif [[ $signed == false ]]; then
+            prerelease=true why="the exe is unsigned (CHARTER 9, D-74)"
+          else
+            prerelease=false why="v$VERSION is a plain version and the exe is signed"
+          fi
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "A tag publishes this as prerelease=$prerelease: $why"
+
       - name: Attest the exe's build provenance
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/cleanshot-${{ steps.version.outputs.version }}-x64.exe
 
-      - name: Publish the pre-release, unsigned until SignPath signing is in place (D-74)
+      - name: Publish the release, or the pre-release
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.kind.outputs.prerelease }}
         run: >
           gh release create "$GITHUB_REF_NAME" dist/*
-          --verify-tag --prerelease --title "Cleanshot $VERSION"
+          --verify-tag --prerelease="$PRERELEASE" --title "Cleanshot $VERSION"
           --notes-file "$RUNNER_TEMP/notes.md"
 
       - name: Upload the release files of a manual run
