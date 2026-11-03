@@ -34,9 +34,9 @@ pub(crate) fn deliver(
     let image = flattened(document, log)?;
     match output {
         Output::Copy => {
-            let bitmap =
-                encode(&image, Format::ClipboardBitmap).map_err(|error| from_render(&error))?;
-            let png = encode(&image, Format::Png).map_err(|error| from_render(&error))?;
+            let bitmap = encode(&image, Format::ClipboardBitmap)
+                .map_err(|error| from_render(&error, log))?;
+            let png = encode(&image, Format::Png).map_err(|error| from_render(&error, log))?;
             copy_image(&bitmap, &png).map_err(|cause| {
                 log("clipboard not_copied", &cause);
                 DeliveryError::ClipboardBusy
@@ -45,7 +45,7 @@ pub(crate) fn deliver(
         }
         Output::Save => {
             let (format, extension) = encoding(settings.save_format);
-            let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
+            let bytes = encode(&image, format).map_err(|error| from_render(&error, log))?;
             let folder = save::save_folder(settings.save_folder.as_deref())
                 .map_err(|error| from_folder(error, log))?;
             save::save(
@@ -69,8 +69,9 @@ pub(crate) fn dragged(image: &Arc<RgbaImage>, log: LogFailure) -> Result<Dragged
     let image = flattened(&Document::new(Arc::clone(image)), log)?;
     Ok(Dragged {
         name: offered_name("png"),
-        png: encode(&image, Format::Png).map_err(|error| from_render(&error))?,
-        bitmap: encode(&image, Format::ClipboardBitmap).map_err(|error| from_render(&error))?,
+        png: encode(&image, Format::Png).map_err(|error| from_render(&error, log))?,
+        bitmap: encode(&image, Format::ClipboardBitmap)
+            .map_err(|error| from_render(&error, log))?,
     })
 }
 
@@ -79,7 +80,7 @@ fn flattened(document: &Document, log: LogFailure) -> Result<Flattened, Delivery
         log("text not_drawn", &cause);
         DeliveryError::TextNotDrawn
     })?;
-    flatten(document, &masks).map_err(|error| from_render(&error))
+    flatten(document, &masks).map_err(|error| from_render(&error, log))
 }
 
 fn encoding(format: SaveFormat) -> (Format, &'static str) {
@@ -141,7 +142,7 @@ pub(crate) fn save_to(
         .and_then(|extension| extension.to_str())
         .and_then(SaveFormat::from_extension);
     let (format, _) = encoding(saving.format(typed, settings.save_format));
-    let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
+    let bytes = encode(&image, format).map_err(|error| from_render(&error, log))?;
     let folder = path.parent().unwrap_or(path);
     match save::replace(path, &bytes, log) {
         Ok(()) => Ok(Delivered::Saved(path.to_owned())),
@@ -160,16 +161,18 @@ pub(crate) fn save_to(
     }
 }
 
-fn from_render(error: &cleanshot_render::Error) -> DeliveryError {
+fn from_render(error: &cleanshot_render::Error, log: LogFailure) -> DeliveryError {
     match error {
         &cleanshot_render::Error::TooLarge { width, height } => {
             DeliveryError::TooLarge { width, height }
         }
         cleanshot_render::Error::MissingTextMask(_) => DeliveryError::TextNotDrawn,
-        cleanshot_render::Error::CropOutsideImage(_)
-        | cleanshot_render::Error::Output(_)
-        | cleanshot_render::Error::Encode(_) => {
-            panic!("a document from core flattens and encodes: {error}")
+        cleanshot_render::Error::Output(_) | cleanshot_render::Error::Encode(_) => {
+            log("image not_made", error);
+            DeliveryError::ImageNotMade
+        }
+        cleanshot_render::Error::CropOutsideImage(_) => {
+            panic!("core's SetCrop keeps the crop inside the image: {error}")
         }
     }
 }
@@ -211,6 +214,23 @@ mod tests {
     use cleanshot_core::SavingOff;
 
     use super::*;
+
+    #[test]
+    fn d120_an_image_render_cannot_make_is_a_failure_the_user_is_told_and_the_log_names() {
+        let pixels_short = RgbaImage::new(2, 2, vec![0; 3]).expect_err("3 bytes are not 2x2");
+        let logged = std::cell::RefCell::new(Vec::new());
+        let outcome = from_render(
+            &cleanshot_render::Error::Output(pixels_short),
+            &|kind, _| {
+                logged.borrow_mut().push(kind);
+            },
+        );
+        assert!(
+            matches!(outcome, DeliveryError::ImageNotMade),
+            "{outcome:?}"
+        );
+        assert_eq!(*logged.borrow(), ["image not_made"]);
+    }
 
     const NO_POLICY: Saving = Saving::Allowed {
         folder: None,
