@@ -306,19 +306,39 @@ pub enum PropertyError {
     NotPositive(f32),
 }
 
-/// The look each tool draws in, as the property strip last set it. It belongs to the editor,
-/// not to any document, so undo leaves it alone.
+/// The look each tool draws in, as the property strip last set it, with one colour for every
+/// tool once one is picked (D-112). It belongs to the editor, not to any document, so undo
+/// leaves it alone.
 #[derive(Clone, Debug, Default)]
-pub struct Looks(HashMap<Tool, Look>);
+pub struct Looks {
+    by_tool: HashMap<Tool, Look>,
+    color: Option<Color>,
+}
 
 impl Looks {
-    /// How `tool` draws its next shape: its default until the strip changes it.
+    /// How `tool` draws its next shape: its default until the strip changes it, in the colour
+    /// last picked for any tool.
     #[must_use]
     pub fn look(&self, tool: Tool) -> Look {
-        self.0
+        let look = self
+            .by_tool
             .get(&tool)
             .copied()
-            .unwrap_or_else(|| Look::default_for(tool))
+            .unwrap_or_else(|| Look::default_for(tool));
+        match self.color {
+            Some(color) => Self::colored(look, color),
+            None => look,
+        }
+    }
+
+    fn colored(look: Look, color: Color) -> Look {
+        Look {
+            style: Style {
+                color,
+                ..look.style
+            },
+            ..look
+        }
     }
 
     /// Sets `property` on `selected` if a shape is selected, otherwise on how `tool` draws its
@@ -350,7 +370,10 @@ impl Looks {
             }
             None => None,
         };
-        self.0.insert(tool, next);
+        if let Property::Color(color) = property {
+            self.color = Some(color);
+        }
+        self.by_tool.insert(tool, next);
         Ok(restyled)
     }
 
@@ -578,7 +601,13 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(style, Look::default_for(Tool::Ellipse).style());
+        assert_eq!(
+            style,
+            Style {
+                color: BLUE,
+                ..Look::default_for(Tool::Ellipse).style()
+            }
+        );
         set(&mut looks, Property::TextSize(36.0), Tool::Text);
         set(&mut looks, Property::Color(BLUE), Tool::Text);
         let image = RgbaImage::new(8, 8, vec![0; 8 * 8 * 4]).unwrap();
@@ -589,6 +618,24 @@ mod tests {
             panic!("a new text box");
         };
         assert_eq!((size, style.color), (36.0, BLUE));
+    }
+
+    #[test]
+    fn d112_a_colour_picked_for_one_tool_is_the_colour_every_tool_draws_in_next() {
+        let mut looks = Looks::default();
+        assert_eq!(
+            looks.look(Tool::Highlighter).style().color,
+            HIGHLIGHTER_YELLOW
+        );
+        looks
+            .set(Property::StrokeWidth(8.0), Tool::Rectangle, None)
+            .unwrap();
+        looks.set(Property::Color(BLUE), Tool::Arrow, None).unwrap();
+        for tool in [Tool::Arrow, Tool::Rectangle, Tool::Highlighter, Tool::Text] {
+            assert_eq!(looks.look(tool).style().color, BLUE, "{tool:?}");
+        }
+        assert_eq!(looks.look(Tool::Rectangle).style().stroke_width, 8.0);
+        assert_eq!(looks.look(Tool::Line).style().stroke_width, 3.0);
     }
 
     #[test]
@@ -615,7 +662,10 @@ mod tests {
         };
         assert_eq!(blue, Some(restyled));
         assert_eq!(looks.look(Tool::Rectangle).style().color, BLUE);
-        assert_eq!(looks.look(Tool::Select), Look::default_for(Tool::Select));
+        assert_eq!(
+            looks.look(Tool::Select),
+            Looks::colored(Look::default_for(Tool::Select), BLUE)
+        );
         let same = looks.set(Property::Fill(Fill::Solid), Tool::Select, Some(&solid));
         assert_eq!(same, Ok(None));
         let text = TextBlock::new(PointF { x: 1.0, y: 1.0 }, "Hi".into(), 24.0, 1.5).unwrap();

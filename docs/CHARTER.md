@@ -124,7 +124,7 @@ The capture UI follows macOS Sequoia's Screenshot tool: a dimmed freeze-frame, a
 
 ### Editor
 
-One left toolbar, one contextual property strip (colour, stroke, font size), the canvas. Shapes stay editable objects until export.
+One left toolbar, one contextual property strip (colour, stroke, font size), the canvas. A colour picked on the strip is the colour every tool draws in next (D-112). Shapes stay editable objects until export.
 
 | ID | Tool / feature | Key | Milestone | Acceptance criteria |
 | --- | --- | --- | --- | --- |
