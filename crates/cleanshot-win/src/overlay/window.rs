@@ -1,7 +1,8 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use cleanshot_core::box_handles;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, ID2D1Bitmap, ID2D1Factory,
@@ -27,9 +28,9 @@ use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
 use crate::struct_size;
 use crate::toolbar::automation::{self, Request};
-use cleanshot_core::ToolbarControl;
+use cleanshot_core::Toolbar;
 
-use crate::toolbar::{self, Look, Mark, OffTip, Paint};
+use crate::toolbar::{self, Look, Mark, Paint, Tips, toolbar_tips};
 use crate::window_state::{self, desktop_point};
 
 pub(crate) const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
@@ -44,8 +45,9 @@ struct Surface {
     handle: ID2D1SolidColorBrush,
     /// Only the toolbar's monitor paints it.
     toolbar: Option<Paint>,
-    /// Why Save is off, on the toolbar's monitor while it is (F-57).
-    off_tip: Option<OffTip>,
+    /// D-117: the toolbar's tooltips, made on the first move over its monitor, so they cost
+    /// the first frame nothing (P-01).
+    tips: RefCell<Option<Tips>>,
     pill: size_pill::Paint,
     loupe: loupe::Paint,
     origin: POINT,
@@ -162,6 +164,9 @@ impl Surface {
     }
 
     fn moved(&self, window: HWND, now: POINT) {
+        if self.toolbar.is_some() && self.tips.borrow().is_none() {
+            self.make_tips(window);
+        }
         if let Mode::Window { .. } = self.shared.mode.get() {
             return self.shared.hover(self.shared.picked_at(now));
         }
@@ -191,28 +196,41 @@ impl Surface {
     }
 
     fn draw_toolbar(&self) -> windows::core::Result<()> {
-        match (&self.toolbar, self.shared.toolbar()) {
-            (Some(paint), Some(placed)) => {
-                if let Some(tip) = &self.off_tip {
-                    let at = placed.area(ToolbarControl::Save);
-                    tip.place(RECT {
-                        left: at.left - self.origin.x,
-                        top: at.top - self.origin.y,
-                        right: at.right - self.origin.x,
-                        bottom: at.bottom - self.origin.y,
-                    });
-                }
-                paint.draw(&placed, self.origin, self.shared.focus.get(), |control| {
-                    Look {
-                        label: toolbar::label(control).into(),
-                        mark: match self.shared.mirror.off(control) {
-                            Some(_) => Mark::Off,
-                            None => Mark::Plain,
-                        },
-                    }
-                })
+        let placed = self.shared.toolbar();
+        if let Some(tips) = &*self.tips.borrow() {
+            tips.place(
+                placed
+                    .iter()
+                    .flat_map(|placed| placed.client_areas(self.origin)),
+            );
+        }
+        let (Some(paint), Some(placed)) = (&self.toolbar, placed) else {
+            return Ok(());
+        };
+        paint.draw(&placed, self.origin, self.shared.focus.get(), |control| {
+            Look {
+                label: toolbar::label(control).into(),
+                mark: match self.shared.mirror.off(control) {
+                    Some(_) => Mark::Off,
+                    None => Mark::Plain,
+                },
             }
-            (Some(_) | None, _) => Ok(()),
+        })
+    }
+
+    fn make_tips(&self, window: HWND) {
+        let mirror = &self.shared.mirror;
+        let texts = toolbar_tips(Toolbar::Overlay, |control| {
+            mirror.off(control).map(str::to_owned)
+        });
+        match Tips::new(window, &texts) {
+            Ok(tips) => {
+                if let Some(placed) = self.shared.toolbar() {
+                    tips.place(placed.client_areas(self.origin));
+                }
+                *self.tips.borrow_mut() = Some(tips);
+            }
+            Err(error) => self.shared.send(OverlayEvent::DrawFailed(error)),
         }
     }
 }
@@ -354,16 +372,12 @@ fn surface(
             }
             (true | false, _) => None,
         };
-        let off_tip = match (&toolbar, shared.mirror.off(ToolbarControl::Save)) {
-            (Some(_), Some(reason)) => Some(OffTip::new(window, reason)?),
-            (Some(_) | None, _) => None,
-        };
         let scale = dpi_scale(capture.bounds)?;
         let pill = size_pill::Paint::new(&target, capture.bounds, scale, &palette)?;
         let loupe = loupe::Paint::new(&target, bgra, capture.bounds, scale, &palette)?;
         stages.mark("paints");
         Ok(Surface {
-            off_tip,
+            tips: RefCell::new(None),
             pill,
             loupe,
             toolbar,

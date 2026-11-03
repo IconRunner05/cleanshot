@@ -462,7 +462,8 @@ pub(crate) mod tests {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, EnumThreadWindows, IsWindow, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
-        SendMessageW, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        SPI_GETMOUSEHOVERTIME, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW,
+        SystemParametersInfoW, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
     use windows::core::BOOL;
 
@@ -835,6 +836,56 @@ pub(crate) mod tests {
         unsafe { PostMessageW(Some(window), WM_HOTKEY, WPARAM(index), LPARAM(0)) }
             .expect("the overlay window takes the message");
         pump(Duration::from_millis(50));
+    }
+
+    #[test]
+    fn d117_the_toolbar_tips_come_with_the_first_move_and_say_each_name_shortcut_or_why_off() {
+        let _screen = screen();
+        let overlay = Overlay::show(
+            &[monitor()],
+            Opening {
+                selected: Some(monitor().bounds),
+                saving_off: Some(SavingOff::ClipboardOnly),
+                ..Opening::default()
+            },
+            Vec::new,
+            |_| {},
+        )
+        .expect("the overlay opens");
+        let window = overlay.windows[0];
+        pump(Duration::from_millis(50));
+        let before = toolbar::reading::tips_of(window);
+        // SAFETY: posting copies no memory, and the window belongs to this thread.
+        unsafe { PostMessageW(Some(window), WM_MOUSEMOVE, WPARAM(0), LPARAM(0)) }
+            .expect("the overlay window takes the message");
+        pump(Duration::from_millis(50));
+        let after = toolbar::reading::tips_of(window);
+        drop(overlay);
+        assert!(before.is_none(), "P-01: no tooltip before the first move");
+        let (tools, delay) = after.expect("the first move makes the tooltips");
+        let texts: Vec<_> = tools.into_iter().map(|(text, _)| text).collect();
+        assert_eq!(
+            texts,
+            [
+                "Options",
+                "Copy (Enter)",
+                "Your organisation allows copying only. Use Copy.",
+                "Edit (E)",
+                "Cancel (Esc)",
+            ]
+        );
+        let mut hover = 0_u32;
+        // SAFETY: SPI_GETMOUSEHOVERTIME writes one u32 to `hover`.
+        unsafe {
+            SystemParametersInfoW(
+                SPI_GETMOUSEHOVERTIME,
+                0,
+                Some((&raw mut hover).cast()),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+        }
+        .expect("the hover time reads");
+        assert_eq!(delay, isize::try_from(hover).expect("ms fit"));
     }
 
     #[test]

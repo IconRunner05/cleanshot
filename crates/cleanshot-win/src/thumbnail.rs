@@ -369,6 +369,29 @@ mod tests {
     }
 
     #[test]
+    fn d117_the_thumbnail_tips_name_each_button_or_say_why_save_is_off_over_it() {
+        let _screen = crate::overlay::tests::screen();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let thumbnail = shown(&events, Export::Off(SavingOff::ClipboardOnly));
+        let (tools, _) =
+            crate::toolbar::reading::tips_of(thumbnail.window).expect("the thumbnail has tips");
+        drop(thumbnail);
+        let scale = crate::capture::dpi_scale(RECT::default()).expect("the primary monitor's dpi");
+        let (width, height) = window_size(120, 80, scale);
+        let areas = buttons(width, height, scale).map(|(_, at)| crate::capture::win32_rect(at));
+        assert_eq!(
+            tools,
+            [
+                (
+                    "Your organisation allows copying only. Use Copy.".to_owned(),
+                    areas[0]
+                ),
+                ("Dismiss".to_owned(), areas[1]),
+            ]
+        );
+    }
+
+    #[test]
     fn f09_the_thumbnail_times_out_after_five_seconds_with_the_pointer_off_it() {
         let events = Rc::new(RefCell::new(Vec::new()));
         let thumbnail = shown(&events, no_drag());

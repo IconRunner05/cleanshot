@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -32,7 +33,7 @@ use crate::palette::Palette;
 use crate::render_target::{bgra, target_and_bitmap};
 use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
-use crate::toolbar::OffTip;
+use crate::toolbar::Tips;
 use crate::window_state::{self, client_point};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotThumbnail");
@@ -52,8 +53,8 @@ struct Surface {
     hairline: ID2D1SolidColorBrush,
     label: ID2D1SolidColorBrush,
     label_off: ID2D1SolidColorBrush,
-    /// Under a policy that turns saving off, the tooltip saying why over the greyed Save.
-    save_off: Option<OffTip>,
+    /// Under a policy that turns saving off, Save is greyed and its tooltip says why (F-57).
+    save_off: bool,
     text: TextStyle,
     buttons: [(ThumbnailButton, Rect); 2],
     rest: RECT,
@@ -124,8 +125,8 @@ impl Surface {
                         HAIRLINE,
                         None,
                     );
-                    let brush = match (button, &self.save_off) {
-                        (ThumbnailButton::Save, Some(_)) => &self.label_off,
+                    let brush = match (button, self.save_off) {
+                        (ThumbnailButton::Save, true) => &self.label_off,
                         (ThumbnailButton::Save | ThumbnailButton::Dismiss, _) => &self.label,
                     };
                     self.text
@@ -333,13 +334,14 @@ fn surface(
     let buttons = buttons(client.0, client.1, scale);
     let (drag, save_off) = match export {
         Export::Allowed { drag } => (Some(drag), None),
-        Export::Off(off) => {
-            let tip = OffTip::new(window, &saving_off_notice(off))?;
-            let [(_, save), _] = buttons;
-            tip.place(win32_rect(save));
-            (None, Some(tip))
-        }
+        Export::Off(off) => (None, Some(saving_off_notice(off))),
     };
+    let texts = buttons.map(|(button, _)| match (button, &save_off) {
+        (ThumbnailButton::Save, Some(reason)) => Cow::Owned(reason.clone()),
+        (ThumbnailButton::Save | ThumbnailButton::Dismiss, _) => Cow::Borrowed(button.label()),
+    });
+    // D-117: the tooltips live as long as the window, which destroys them.
+    Tips::new(window, &texts)?.place(buttons.map(|(_, at)| win32_rect(at)));
     let now = Instant::now();
     Ok(Surface {
         text: Fonts::inter()?.text_style(TEXT_SIZE * scale)?.centred()?,
@@ -351,7 +353,7 @@ fn surface(
         hairline,
         label,
         label_off,
-        save_off,
+        save_off: save_off.is_some(),
         rest,
         distance,
         radius: RADIUS * scale,
@@ -429,7 +431,7 @@ unsafe extern "system" fn window_procedure(
             }
             surface.send(
                 match button_at(&surface.buttons, screen_point(client_point(lparam))) {
-                    Some(ThumbnailButton::Save) if surface.save_off.is_some() => return LRESULT(0),
+                    Some(ThumbnailButton::Save) if surface.save_off => return LRESULT(0),
                     Some(ThumbnailButton::Save) => ThumbnailEvent::Save,
                     Some(ThumbnailButton::Dismiss) => ThumbnailEvent::Dismiss,
                     None => ThumbnailEvent::Open,

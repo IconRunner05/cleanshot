@@ -29,7 +29,7 @@ use crate::palette::Palette;
 use crate::render_target::target;
 use crate::struct_size;
 use crate::toolbar::automation::{self, Change, Mirror, Request};
-use crate::toolbar::{self, Layout, Look, Mark, Paint, options};
+use crate::toolbar::{self, Layout, Look, Mark, Paint, Tips, options, toolbar_tips};
 use crate::window_state::{self, desktop_point};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotCapturePanel");
@@ -308,6 +308,11 @@ fn surface(
     let focus = toolbar::primary(Toolbar::Panel);
     mirror.show(Some((layout.clone(), focus)));
     mirror.show_choices(panel);
+    // D-117: the tooltips live as long as the window, which destroys them.
+    Tips::new(window, &toolbar_tips(Toolbar::Panel, |_| None))?.place(layout.client_areas(POINT {
+        x: pill.left,
+        y: pill.top,
+    }));
     Ok(Surface {
         target,
         paint,

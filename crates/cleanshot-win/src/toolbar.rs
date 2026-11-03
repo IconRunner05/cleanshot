@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use cleanshot_core::{CaptureMode, Toolbar, ToolbarControl};
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1Crop, CLSID_D2D1GaussianBlur, D2D1_CROP_PROP_RECT, D2D1_EXTEND_MODE_CLAMP,
@@ -11,11 +11,13 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1SolidColorBrush,
 };
 use windows::Win32::UI::Controls::{
-    ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, TOOLTIPS_CLASSW, TTF_SUBCLASS,
-    TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
+    ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, TOOLTIPS_CLASSW, TTDT_INITIAL,
+    TTF_SUBCLASS, TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTM_SETDELAYTIME, TTS_ALWAYSTIP, TTS_NOPREFIX,
+    TTTOOLINFOW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, SendMessageW, WINDOW_STYLE, WS_EX_TOPMOST, WS_POPUP,
+    CW_USEDEFAULT, CreateWindowExW, SPI_GETMOUSEHOVERTIME, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SendMessageW, SystemParametersInfoW, WINDOW_STYLE, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{HSTRING, Interface, PCWSTR, PWSTR};
 
@@ -69,6 +71,14 @@ pub(crate) fn shortcut(toolbar: Toolbar, control: ToolbarControl) -> Option<&'st
             | ToolbarControl::Options
             | ToolbarControl::Capture,
         ) => None,
+    }
+}
+
+/// D-117: the tooltip over `control` on `toolbar`: its name, and its shortcut when it has one.
+pub(crate) fn tip(toolbar: Toolbar, control: ToolbarControl) -> Cow<'static, str> {
+    match shortcut(toolbar, control) {
+        Some(key) => Cow::Owned(format!("{} ({key})", name(control))),
+        None => Cow::Borrowed(name(control)),
     }
 }
 
@@ -231,14 +241,15 @@ impl Layout {
     }
 }
 
-/// The tooltip over a button that is off, saying why (F-57). It belongs to the window that
-/// shows the button, which destroys it with itself.
-pub(crate) struct OffTip {
+/// D-117: tooltips over a window's buttons, one per button, each shown after the system's
+/// hover time. They belong to the window that shows the buttons, which destroys them with
+/// itself.
+pub(crate) struct Tips {
     window: HWND,
     owner: HWND,
+    count: usize,
 }
 
-const TIP_ID: usize = 1;
 // The size before lpReserved, which comctl32 v5 accepts as well as v6: a binary without the
 // v6 manifest, such as this crate's tests, loads v5 and refuses the whole struct.
 #[expect(
@@ -247,9 +258,9 @@ const TIP_ID: usize = 1;
 )]
 const TOOL_SIZE: u32 = std::mem::offset_of!(TTTOOLINFOW, lpReserved) as u32;
 
-impl OffTip {
-    /// A tooltip on `owner`, the window that shows the button, saying `reason`.
-    pub(crate) fn new(owner: HWND, reason: &str) -> windows::core::Result<Self> {
+impl Tips {
+    /// A tooltip saying each of `texts` on `owner`, over nothing until [`Tips::place`].
+    pub(crate) fn new(owner: HWND, texts: &[Cow<'_, str>]) -> windows::core::Result<Self> {
         let classes = INITCOMMONCONTROLSEX {
             dwSize: struct_size::<INITCOMMONCONTROLSEX>(),
             dwICC: ICC_TAB_CLASSES,
@@ -274,48 +285,98 @@ impl OffTip {
                 None,
             )
         }?;
-        let text = HSTRING::from(reason);
-        let tool = TTTOOLINFOW {
-            cbSize: TOOL_SIZE,
-            uFlags: TTF_SUBCLASS,
-            hwnd: owner,
-            uId: TIP_ID,
-            lpszText: PWSTR(text.as_ptr().cast_mut()),
-            ..Default::default()
+        let tips = Self {
+            window,
+            owner,
+            count: texts.len(),
         };
-        // SAFETY: the tooltip copies `tool` and its text during the call.
-        let added = unsafe {
-            SendMessageW(
-                window,
-                TTM_ADDTOOLW,
-                None,
-                Some(LPARAM(std::ptr::from_ref(&tool) as isize)),
-            )
-        };
-        if added.0 == 0 {
-            return Err(windows::core::Error::from_thread());
+        for (id, text) in texts.iter().enumerate() {
+            let text = HSTRING::from(text.as_ref());
+            let tool = TTTOOLINFOW {
+                cbSize: TOOL_SIZE,
+                uFlags: TTF_SUBCLASS,
+                hwnd: owner,
+                uId: id,
+                lpszText: PWSTR(text.as_ptr().cast_mut()),
+                ..Default::default()
+            };
+            // SAFETY: the tooltip copies `tool` and its text during the call.
+            if tips.send(TTM_ADDTOOLW, 0, std::ptr::from_ref(&tool) as isize) == 0 {
+                return Err(windows::core::Error::from_thread());
+            }
         }
-        Ok(Self { window, owner })
+        let mut hover = 0_u32;
+        // SAFETY: SPI_GETMOUSEHOVERTIME writes one u32 to `hover`.
+        unsafe {
+            SystemParametersInfoW(
+                SPI_GETMOUSEHOVERTIME,
+                0,
+                Some((&raw mut hover).cast()),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+        }?;
+        let hover = isize::try_from(hover).expect("a hover time in ms fits an isize");
+        tips.send(TTM_SETDELAYTIME, TTDT_INITIAL as usize, hover);
+        Ok(tips)
     }
 
-    /// Moves the tooltip's hover area onto `at`, in the owner's client pixels.
-    pub(crate) fn place(&self, at: RECT) {
-        let tool = TTTOOLINFOW {
-            cbSize: TOOL_SIZE,
-            hwnd: self.owner,
-            uId: TIP_ID,
-            rect: at,
-            ..Default::default()
-        };
-        // SAFETY: the tooltip reads `tool` during the call.
+    /// Moves the tooltips' hover areas onto `areas`, in the owner's client pixels, in the order
+    /// of their texts; a tooltip with no area left hovers over nothing.
+    pub(crate) fn place(&self, areas: impl IntoIterator<Item = RECT>) {
+        let mut areas = areas.into_iter();
+        for id in 0..self.count {
+            let tool = TTTOOLINFOW {
+                cbSize: TOOL_SIZE,
+                hwnd: self.owner,
+                uId: id,
+                rect: areas.next().unwrap_or_default(),
+                ..Default::default()
+            };
+            self.send(TTM_NEWTOOLRECTW, 0, std::ptr::from_ref(&tool) as isize);
+        }
+    }
+
+    fn send(&self, message: u32, wparam: usize, lparam: isize) -> isize {
+        // SAFETY: every message sent here carries a TTTOOLINFOW that outlives the call, or
+        // plain numbers.
         unsafe {
             SendMessageW(
                 self.window,
-                TTM_NEWTOOLRECTW,
-                None,
-                Some(LPARAM(std::ptr::from_ref(&tool) as isize)),
+                message,
+                Some(WPARAM(wparam)),
+                Some(LPARAM(lparam)),
             )
-        };
+        }
+        .0
+    }
+}
+
+/// D-117: the tooltips for `toolbar`'s buttons, in its order: each one's name and shortcut, or
+/// `off`'s reason for a button that is off (F-57).
+pub(crate) fn toolbar_tips(
+    toolbar: Toolbar,
+    off: impl Fn(ToolbarControl) -> Option<String>,
+) -> Vec<Cow<'static, str>> {
+    toolbar
+        .controls()
+        .iter()
+        .map(|&control| off(control).map_or_else(|| tip(toolbar, control), Cow::Owned))
+        .collect()
+}
+
+impl Layout {
+    /// Where each of the toolbar's buttons sits in the client pixels of a window whose client
+    /// area starts at `origin` on the desktop, in the toolbar's order.
+    pub(crate) fn client_areas(&self, origin: POINT) -> impl Iterator<Item = RECT> + '_ {
+        self.toolbar.controls().iter().map(move |&control| {
+            let at = self.area(control);
+            RECT {
+                left: at.left - origin.x,
+                top: at.top - origin.y,
+                right: at.right - origin.x,
+                bottom: at.bottom - origin.y,
+            }
+        })
     }
 }
 
@@ -493,6 +554,85 @@ fn blurred(
     }
 }
 
+/// Test seam: what the tooltips on a window say and where, read back from the control.
+#[cfg(test)]
+pub(crate) mod reading {
+    use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::Controls::{
+        TTDT_INITIAL, TTM_ENUMTOOLSW, TTM_GETDELAYTIME, TTM_GETTOOLCOUNT, TTTOOLINFOW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumThreadWindows, GW_OWNER, GetClassNameW, GetWindow, SendMessageW,
+    };
+    use windows::core::{BOOL, PWSTR};
+
+    use super::TOOL_SIZE;
+
+    /// The tooltips `owner` shows, each tool's text and hover area in order, and the hover
+    /// delay in ms; None while it has no tooltip control.
+    pub(crate) fn tips_of(owner: HWND) -> Option<(Vec<(String, RECT)>, isize)> {
+        unsafe extern "system" fn owned(window: HWND, found: LPARAM) -> BOOL {
+            // SAFETY: `found` is the (owner, tooltip) pair tips_of lends for this enumeration.
+            // EnumThreadWindows calls this only during that call, with our own LPARAM; no window
+            // message carries it, so no other process can supply it.
+            // ast-grep-ignore: pointer-from-handle-value
+            let found = unsafe { &mut *(found.0 as *mut (HWND, Option<HWND>)) };
+            let mut class = [0_u16; 32];
+            // SAFETY: `class` is writable for its length; both calls only read `window`.
+            let (length, owner) = unsafe {
+                (
+                    GetClassNameW(window, &mut class),
+                    GetWindow(window, GW_OWNER),
+                )
+            };
+            let is_tip = String::from_utf16_lossy(&class[..length.unsigned_abs() as usize])
+                == "tooltips_class32";
+            if is_tip && owner == Ok(found.0) {
+                found.1 = Some(window);
+            }
+            BOOL::from(found.1.is_none())
+        }
+        let mut found = (owner, None);
+        // SAFETY: `found` outlives the enumeration, which runs on this thread.
+        let _ = unsafe {
+            EnumThreadWindows(
+                GetCurrentThreadId(),
+                Some(owned),
+                LPARAM(std::ptr::from_mut(&mut found) as isize),
+            )
+        };
+        let tip = found.1?;
+        // SAFETY: each message sent carries plain numbers, or a TTTOOLINFOW whose 512-unit
+        // text buffer outlives the call.
+        let send = |message, wparam: usize, lparam: isize| unsafe {
+            SendMessageW(tip, message, Some(WPARAM(wparam)), Some(LPARAM(lparam))).0
+        };
+        let tools = (0..send(TTM_GETTOOLCOUNT, 0, 0).unsigned_abs())
+            .map(|index| {
+                let mut text = [0_u16; 512];
+                let mut tool = TTTOOLINFOW {
+                    cbSize: TOOL_SIZE,
+                    lpszText: PWSTR(text.as_mut_ptr()),
+                    ..Default::default()
+                };
+                // TTM_ENUMTOOLSW writes the tool and copies its text into `text`, which holds
+                // any tip this crate sets.
+                send(
+                    TTM_ENUMTOOLSW,
+                    index,
+                    std::ptr::from_mut(&mut tool) as isize,
+                );
+                let length = text
+                    .iter()
+                    .position(|&unit| unit == 0)
+                    .unwrap_or(text.len());
+                (String::from_utf16_lossy(&text[..length]), tool.rect)
+            })
+            .collect();
+        Some((tools, send(TTM_GETDELAYTIME, TTDT_INITIAL as usize, 0)))
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

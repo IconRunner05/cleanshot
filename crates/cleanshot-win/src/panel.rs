@@ -235,6 +235,34 @@ mod tests {
     }
 
     #[test]
+    fn d117_each_panel_button_has_a_tip_with_its_name_and_any_shortcut_over_it() {
+        let _screen = screen();
+        let (panel, _closed) = shown(CapturePanel::default());
+        let (tools, _) =
+            crate::toolbar::reading::tips_of(panel.window).expect("the panel has tips");
+        drop(panel);
+        let texts: Vec<_> = tools.iter().map(|(text, _)| text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Region",
+                "Window",
+                "Screen",
+                "Timer",
+                "Options",
+                "Capture (Enter)",
+                "Cancel (Esc)"
+            ]
+        );
+        assert!(
+            tools
+                .windows(2)
+                .all(|pair| pair[0].1.right <= pair[1].1.left && pair[0].1.left < pair[0].1.right),
+            "each tip lies over its own button, left to right: {tools:?}"
+        );
+    }
+
+    #[test]
     fn f11_esc_cancels_once_and_keeps_the_choices() {
         let _screen = screen();
         let mut start = CapturePanel::default();
