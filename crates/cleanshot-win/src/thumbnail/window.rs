@@ -17,10 +17,10 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, KillTimer,
-    MA_NOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY,
-    WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, KillTimer, MA_NOACTIVATE, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowPos, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, PCWSTR, w};
 
@@ -35,6 +35,7 @@ use crate::palette::Palette;
 use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
 use crate::toolbar::OffTip;
+use crate::window_state;
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotThumbnail");
 const SLIDE_TIMER: usize = 1;
@@ -265,14 +266,11 @@ pub(super) fn open_window(
     let made =
         surface(window, preview, rest, distance, scale, saving, listener).and_then(|surface| {
             round_corners(window, client_width, client_height, px(RADIUS))?;
-            // SAFETY: `window` exists, so WM_NCDESTROY will give up this count once. The timers
+            // SAFETY: `window` was created above with nothing stored on it, and
+            // window_procedure takes every message's Surface through window_state. The timers
             // die with the window.
             unsafe {
-                SetWindowLongPtrW(
-                    window,
-                    GWLP_USERDATA,
-                    Rc::into_raw(Rc::new(surface)) as isize,
-                );
+                window_state::attach(window, Rc::new(surface));
                 if distance > 0 {
                     SetTimer(Some(window), SLIDE_TIMER, FRAME, None);
                 }
@@ -385,28 +383,12 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // SAFETY: GWLP_USERDATA is 0 until open_window stores the Surface pointer, and
-    // WM_NCDESTROY clears it.
-    let surface = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *const Surface;
-    if surface.is_null() {
+    // SAFETY: open_window stores a Surface on every window of this class. The count this
+    // message holds keeps a Thumbnail dropped while it runs (from an event, or during a drag's
+    // modal loop) from freeing the Surface until the message returns.
+    let Some(surface) = (unsafe { window_state::for_message::<Surface>(window, message) }) else {
         // SAFETY: forwarding an unhandled message to the default procedure.
         return unsafe { DefWindowProcW(window, message, wparam, lparam) };
-    }
-    if message == WM_NCDESTROY {
-        // SAFETY: this is the window's last message; the window's count is given up once and
-        // the pointer cleared. A message still running below holds its own count.
-        unsafe {
-            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            drop(Rc::from_raw(surface));
-            return DefWindowProcW(window, message, wparam, lparam);
-        }
-    }
-    // SAFETY: a non-null pointer carries the window's count until WM_NCDESTROY. This message
-    // takes a count of its own, so a Thumbnail dropped while it runs (from an event, or during
-    // a drag's modal loop) frees the Surface only once the message returns.
-    let surface = unsafe {
-        Rc::increment_strong_count(surface);
-        Rc::from_raw(surface)
     };
     match message {
         WM_PAINT => {

@@ -15,18 +15,18 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    FindWindowW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, MB_ICONWARNING, MB_OK,
-    MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING, MessageBoxW, PostMessageW, RegisterWindowMessageW,
-    SetForegroundWindow, SetWindowLongPtrW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
-    WM_CLOSE, WM_CONTEXTMENU, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDBLCLK,
-    WM_NCDESTROY, WM_NULL, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_POPUP,
+    FindWindowW, GetCursorPos, MB_ICONWARNING, MB_OK, MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING,
+    MessageBoxW, PostMessageW, RegisterWindowMessageW, SetForegroundWindow, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::Error;
 use crate::struct_size;
 use crate::tray_icon::{TaskbarShade, TrayIcon};
+use crate::window_state;
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotTray");
 // C-14: the only message a second launch sends. Its parameters are always zero and never read.
@@ -150,9 +150,9 @@ impl Tray {
             last_capture: Cell::new(LastCaptureItems::Hidden),
             icon: RefCell::new(None),
         });
-        // SAFETY: `window` exists, so it will get WM_NCDESTROY, where the window procedure
-        // gives up this count once.
-        unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, Rc::into_raw(state) as isize) };
+        // SAFETY: `window` was created above with nothing stored on it, and window_procedure
+        // takes every message's State through window_state.
+        unsafe { window_state::attach(window, state) };
 
         let hotkeys = hotkeys
             .iter()
@@ -267,7 +267,7 @@ impl Tray {
     fn state(&self) -> &State {
         // SAFETY: Tray::create stored the State before returning, and WM_NCDESTROY gives up
         // the window's count only when Drop destroys the window, so it lives as long as `self`.
-        unsafe { &*(GetWindowLongPtrW(self.window, GWLP_USERDATA) as *const State) }
+        unsafe { window_state::attached(self.window) }
     }
 }
 
@@ -549,30 +549,12 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // SAFETY: GWLP_USERDATA is 0 until Tray::create stores the State pointer, and WM_NCDESTROY
-    // clears it.
-    let state = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *const State;
-    if state.is_null() {
+    // SAFETY: Tray::create stores a State on the one window of this class. The count this
+    // message holds keeps a Tray dropped while it runs (from its on_request, on Exit) from
+    // freeing the State until the message returns.
+    let Some(held) = (unsafe { window_state::for_message::<State>(window, message) }) else {
         // SAFETY: forwarding an unhandled message to the default procedure.
         return unsafe { DefWindowProcW(window, message, wparam, lparam) };
-    }
-    if message == WM_NCDESTROY {
-        // SAFETY: this is the window's last message; the window's count is given up once and
-        // the pointer cleared, so nothing reads it again. A message still running below holds
-        // its own count.
-        unsafe {
-            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            drop(Rc::from_raw(state));
-        }
-        // SAFETY: forwarding to the default procedure.
-        return unsafe { DefWindowProcW(window, message, wparam, lparam) };
-    }
-    // SAFETY: a non-null pointer carries the window's count until WM_NCDESTROY, handled above.
-    // This message takes a count of its own, so a Tray dropped while it runs (from its
-    // on_request, on Exit) frees the State only once the message returns.
-    let held = unsafe {
-        Rc::increment_strong_count(state);
-        Rc::from_raw(state)
     };
     let state: &State = &held;
 

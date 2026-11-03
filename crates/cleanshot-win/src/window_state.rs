@@ -1,0 +1,58 @@
+use std::rc::Rc;
+
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GWLP_USERDATA, GetWindowLongPtrW, SetWindowLongPtrW, WM_NCDESTROY,
+};
+
+/// Stores `state` on `window`, holding one count of it until the window's `WM_NCDESTROY`.
+///
+/// # Safety
+///
+/// `window` exists, nothing is stored on it yet, and its window procedure passes every message
+/// to [`for_message`] with this same `T`.
+pub(crate) unsafe fn attach<T>(window: HWND, state: Rc<T>) {
+    // SAFETY: the caller's window exists; the pointer is read back only as an Rc<T>.
+    unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, Rc::into_raw(state) as isize) };
+}
+
+/// The state [`attach`] stored on `window`, with a count of its own for `message`, so a drop of
+/// the window's owner while the message runs frees the state only once the message returns.
+/// `None` before [`attach`], and for `WM_NCDESTROY`, which gives up the window's count.
+///
+/// # Safety
+///
+/// `T` is the type [`attach`] stored on `window`.
+pub(crate) unsafe fn for_message<T>(window: HWND, message: u32) -> Option<Rc<T>> {
+    // SAFETY: GWLP_USERDATA is 0 until attach stores the pointer, and WM_NCDESTROY clears it.
+    let state = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *const T;
+    if state.is_null() {
+        return None;
+    }
+    if message == WM_NCDESTROY {
+        // SAFETY: this is the window's last message; the window's count is given up once and
+        // the pointer cleared, so nothing reads it again. A message still running holds its
+        // own count.
+        unsafe {
+            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            drop(Rc::from_raw(state));
+        }
+        return None;
+    }
+    // SAFETY: a non-null pointer carries the window's count until WM_NCDESTROY, handled above.
+    unsafe {
+        Rc::increment_strong_count(state);
+        Some(Rc::from_raw(state))
+    }
+}
+
+/// The state [`attach`] stored on `window`, borrowed with no count of its own.
+///
+/// # Safety
+///
+/// `T` is the type [`attach`] stored on `window`, and the window is not destroyed while the
+/// borrow lives.
+pub(crate) unsafe fn attached<'window, T>(window: HWND) -> &'window T {
+    // SAFETY: the caller keeps the window, and so the window's count, alive for 'window.
+    unsafe { &*(GetWindowLongPtrW(window, GWLP_USERDATA) as *const T) }
+}

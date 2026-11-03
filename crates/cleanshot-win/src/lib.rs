@@ -22,6 +22,7 @@ pub mod thumbnail;
 mod toolbar;
 pub mod tray;
 mod tray_icon;
+mod window_state;
 
 use windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS;
 use windows::Win32::System::LibraryLoader::{
