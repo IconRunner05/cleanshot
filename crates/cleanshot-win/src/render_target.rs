@@ -11,21 +11,19 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
 use crate::capture::DESKTOP_DPI;
 
-/// A render target for `window`, `target` physical pixels, and a bitmap on it `width` x
-/// `height` of `bgra`, rows of premultiplied BGRA `width` pixels long.
-pub(crate) fn target_and_bitmap(
+const FORMAT: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT {
+    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+};
+
+/// A render target for `window`, `target` physical pixels.
+pub(crate) fn target(
     factory: &ID2D1Factory,
     window: HWND,
     target: D2D_SIZE_U,
-    (width, height): (u32, u32),
-    bgra: &[u8],
-) -> windows::core::Result<(ID2D1HwndRenderTarget, ID2D1Bitmap)> {
-    let format = D2D1_PIXEL_FORMAT {
-        format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-    };
+) -> windows::core::Result<ID2D1HwndRenderTarget> {
     let target_properties = D2D1_RENDER_TARGET_PROPERTIES {
-        pixelFormat: format,
+        pixelFormat: FORMAT,
         dpiX: DESKTOP_DPI,
         dpiY: DESKTOP_DPI,
         ..Default::default()
@@ -35,8 +33,23 @@ pub(crate) fn target_and_bitmap(
         pixelSize: target,
         ..Default::default()
     };
+    // SAFETY: both descriptions are fully initialised.
+    unsafe {
+        factory.CreateHwndRenderTarget(&raw const target_properties, &raw const window_properties)
+    }
+}
+
+/// A render target for `window`, `target` physical pixels, and a bitmap on it `width` x
+/// `height` of `bgra`, rows of premultiplied BGRA `width` pixels long.
+pub(crate) fn target_and_bitmap(
+    factory: &ID2D1Factory,
+    window: HWND,
+    size: D2D_SIZE_U,
+    (width, height): (u32, u32),
+    bgra: &[u8],
+) -> windows::core::Result<(ID2D1HwndRenderTarget, ID2D1Bitmap)> {
     let bitmap_properties = D2D1_BITMAP_PROPERTIES {
-        pixelFormat: format,
+        pixelFormat: FORMAT,
         dpiX: DESKTOP_DPI,
         dpiY: DESKTOP_DPI,
     };
@@ -45,11 +58,10 @@ pub(crate) fn target_and_bitmap(
         width as usize * height as usize * 4,
         "bgra is width x height pixels"
     );
-    // SAFETY: every description is fully initialised; `bgra` holds width * height * 4 bytes
+    let target = target(factory, window, size)?;
+    // SAFETY: the description is fully initialised; `bgra` holds width * height * 4 bytes
     // with a pitch of width * 4, and Direct2D copies it during CreateBitmap.
     unsafe {
-        let target = factory
-            .CreateHwndRenderTarget(&raw const target_properties, &raw const window_properties)?;
         let frozen = target.CreateBitmap(
             D2D_SIZE_U { width, height },
             Some(bgra.as_ptr().cast()),

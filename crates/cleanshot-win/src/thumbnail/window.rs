@@ -9,10 +9,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ROUNDED_RECT,
     D2D1CreateFactory, ID2D1Bitmap, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
 };
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateRoundRectRgn, DeleteObject, EndPaint, InvalidateRect, PAINTSTRUCT,
-    SetWindowRgn,
-};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
@@ -265,7 +262,7 @@ pub(super) fn open_window(
     .map_err(Error::Window)?;
     let made =
         surface(window, preview, rest, distance, scale, saving, listener).and_then(|surface| {
-            round_corners(window, client_width, client_height, px(RADIUS))?;
+            crate::round_window(window, client_width, client_height, px(RADIUS))?;
             // SAFETY: `window` was created above with nothing stored on it, and
             // window_procedure takes every message's Surface through window_state. The timers
             // die with the window.
@@ -364,19 +361,6 @@ fn surface(
 }
 
 /// Clips `window` to a rectangle `width` x `height` with corners of `radius` pixels.
-fn round_corners(window: HWND, width: i32, height: i32, radius: i32) -> windows::core::Result<()> {
-    // SAFETY: the region is new; on success the window owns it, so it is deleted only on
-    // failure.
-    unsafe {
-        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 2 * radius, 2 * radius);
-        if SetWindowRgn(window, Some(region), false) == 0 {
-            let _ = DeleteObject(region.into());
-            return Err(windows::core::Error::from_thread());
-        }
-    }
-    Ok(())
-}
-
 unsafe extern "system" fn window_procedure(
     window: HWND,
     message: u32,

@@ -29,7 +29,7 @@ use crate::struct_size;
 use crate::toolbar::automation::{self, Request};
 use cleanshot_core::ToolbarControl;
 
-use crate::toolbar::{OffTip, Paint};
+use crate::toolbar::{self, Look, Mark, OffTip, Paint};
 use crate::window_state::{self, client_point};
 
 pub(crate) const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
@@ -203,7 +203,13 @@ impl Surface {
                     });
                 }
                 paint.draw(&placed, self.origin, self.shared.focus.get(), |control| {
-                    self.shared.mirror.off(control).is_some()
+                    Look {
+                        label: toolbar::label(control).into(),
+                        mark: match self.shared.mirror.off(control) {
+                            Some(_) => Mark::Off,
+                            None => Mark::Plain,
+                        },
+                    }
                 })
             }
             (Some(_) | None, _) => Ok(()),
@@ -306,7 +312,9 @@ pub(super) fn prewarm(factory: &ID2D1Factory, palette: &Palette) -> windows::cor
         (1, 1),
         &[0; 4],
     )
-    .and_then(|(target, frozen)| Paint::new(&target.cast()?, &frozen, 1.0, palette).map(drop));
+    .and_then(|(target, frozen)| {
+        Paint::new(&target.cast()?, Some(&frozen), 1.0, palette).map(drop)
+    });
     // SAFETY: the window was created above and holds no state.
     let destroyed = unsafe { DestroyWindow(window) };
     debug_assert!(destroyed.is_ok(), "a window made here is destroyed once");
@@ -338,7 +346,7 @@ fn surface(
         let handle = target.CreateSolidColorBrush(&raw const palette.handle, None)?;
         let toolbar = match (hosts_toolbar, shared.toolbar) {
             (true, Some((_, scale))) => {
-                Some(Paint::new(&target.cast()?, &frozen, scale, &palette)?)
+                Some(Paint::new(&target.cast()?, Some(&frozen), scale, &palette)?)
             }
             (true | false, _) => None,
         };

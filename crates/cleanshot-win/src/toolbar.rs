@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use cleanshot_core::{CaptureMode, Toolbar, ToolbarControl};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
@@ -38,7 +40,8 @@ pub(crate) fn name(control: ToolbarControl) -> &'static str {
     }
 }
 
-fn label(control: ToolbarControl) -> &'static str {
+/// The text drawn on a control whose label does not change.
+pub(crate) fn label(control: ToolbarControl) -> &'static str {
     match control {
         ToolbarControl::Mode(_)
         | ToolbarControl::Timer
@@ -62,6 +65,30 @@ fn button_width(control: ToolbarControl) -> f32 {
     }
 }
 
+/// The control filled with the accent: the one Enter presses when the toolbar opens.
+fn primary(toolbar: Toolbar) -> ToolbarControl {
+    match toolbar {
+        Toolbar::Panel => ToolbarControl::Capture,
+        Toolbar::Overlay => ToolbarControl::Copy,
+    }
+}
+
+/// How a control is drawn besides its place: its text, and its state (F-11, F-57).
+pub(crate) struct Look {
+    pub(crate) label: Cow<'static, str>,
+    pub(crate) mark: Mark,
+}
+
+/// A control's state as drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mark {
+    Plain,
+    /// Cannot be chosen, so its label is greyed (F-57).
+    Off,
+    /// The capture panel's chosen mode (F-11).
+    Chosen,
+}
+
 // CHARTER 4 tokens, in device-independent pixels.
 const PILL_HEIGHT: f32 = 44.0;
 const BUTTON_HEIGHT: f32 = 32.0;
@@ -78,6 +105,7 @@ const FOCUS_RING: f32 = 2.0;
 /// Where the toolbar and each control sit, in physical virtual-desktop pixels.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Layout {
+    pub(crate) toolbar: Toolbar,
     pub(crate) pill: RECT,
     pub(crate) controls: Vec<(ToolbarControl, RECT)>,
 }
@@ -142,7 +170,11 @@ pub(crate) fn layout(
             (control, placed)
         })
         .collect();
-    Some(Layout { pill, controls })
+    Some(Layout {
+        toolbar,
+        pill,
+        controls,
+    })
 }
 
 fn overlaps(a: RECT, b: RECT) -> bool {
@@ -257,12 +289,13 @@ impl OffTip {
     }
 }
 
-/// What one monitor's surface keeps to paint the toolbar: the frozen capture blurred through
-/// a crop to the pill, so each paint blurs only what the pill shows (CHARTER 4, "Live blur").
+/// What a surface keeps to paint the toolbar. Over a frozen capture, the backdrop is that
+/// capture blurred through a crop to the pill, so each paint blurs only what the pill shows;
+/// a window over the live desktop has the material alone (CHARTER 4, "Live blur").
 pub(crate) struct Paint {
     context: ID2D1DeviceContext,
-    crop: ID2D1Effect,
-    backdrop: ID2D1ImageBrush,
+    backdrop: Option<(ID2D1Effect, ID2D1ImageBrush)>,
+    chosen: ID2D1SolidColorBrush,
     material: ID2D1SolidColorBrush,
     hairline: ID2D1SolidColorBrush,
     label: ID2D1SolidColorBrush,
@@ -274,44 +307,25 @@ pub(crate) struct Paint {
 }
 
 impl Paint {
-    /// The toolbar's paint for a surface drawn by `context`, whose image is `frozen`, in
-    /// `palette`.
+    /// The toolbar's paint for a surface drawn by `context`, over `frozen` when the surface
+    /// shows a frozen capture, in `palette`.
     pub(crate) fn new(
         context: &ID2D1DeviceContext,
-        frozen: &ID2D1Bitmap,
+        frozen: Option<&ID2D1Bitmap>,
         scale: f32,
         palette: &Palette,
     ) -> windows::core::Result<Self> {
-        // SAFETY: reading a bitmap's size touches no memory of ours.
-        let size = unsafe { frozen.GetSize() };
         let text = Fonts::inter()?.text_style(LABEL_SIZE * scale)?.centred()?;
+        let backdrop = frozen
+            .map(|frozen| blurred(context, frozen, scale))
+            .transpose()?;
         // SAFETY: every call takes owned or borrowed COM objects that outlive it.
         unsafe {
-            let crop = context.CreateEffect(&CLSID_D2D1Crop)?;
-            crop.SetInput(0, Some(&frozen.cast::<ID2D1Image>()?), true);
-            let blur = context.CreateEffect(&CLSID_D2D1GaussianBlur)?;
-            blur.SetInput(0, Some(&crop.GetOutput()?), true);
-            blur.SetValue(
-                D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
-                D2D1_PROPERTY_TYPE_FLOAT,
-                &(BLUR_DEVIATION * scale).to_ne_bytes(),
-            )?;
             let brush =
                 |colour: D2D1_COLOR_F| context.CreateSolidColorBrush(&raw const colour, None);
-            let whole = D2D1_IMAGE_BRUSH_PROPERTIES {
-                sourceRectangle: D2D_RECT_F {
-                    left: 0.0,
-                    top: 0.0,
-                    right: size.width,
-                    bottom: size.height,
-                },
-                extendModeX: D2D1_EXTEND_MODE_CLAMP,
-                extendModeY: D2D1_EXTEND_MODE_CLAMP,
-                interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
-            };
-            let backdrop = context.CreateImageBrush(&blur.GetOutput()?, &raw const whole, None)?;
             Ok(Self {
                 backdrop,
+                chosen: brush(palette.hairline)?,
                 material: brush(palette.material)?,
                 hairline: brush(palette.hairline)?,
                 label: brush(palette.label)?,
@@ -319,7 +333,6 @@ impl Paint {
                 accent: brush(palette.accent)?,
                 on_accent: brush(palette.on_accent)?,
                 context: context.clone(),
-                crop,
                 text,
                 scale,
             })
@@ -327,15 +340,14 @@ impl Paint {
     }
 
     /// Draws the toolbar at `layout`, shifted by `origin` into this surface's pixels, with a
-    /// ring round `focus` (CHARTER 4: visible keyboard focus) and the label of a control that
-    /// is `off` greyed (F-57).
+    /// ring round `focus` (CHARTER 4: visible keyboard focus) and each control as `look` says.
     #[expect(clippy::cast_precision_loss, reason = "screen coordinates fit in f32")]
     pub(crate) fn draw(
         &self,
         layout: &Layout,
         origin: POINT,
         focus: ToolbarControl,
-        off: impl Fn(ToolbarControl) -> bool,
+        look: impl Fn(ToolbarControl) -> Look,
     ) -> windows::core::Result<()> {
         let local = |at: RECT| D2D_RECT_F {
             left: (at.left - origin.x) as f32,
@@ -356,15 +368,18 @@ impl Paint {
             pill.right + reach,
             pill.bottom + reach,
         ];
+        let primary = primary(layout.toolbar);
         // SAFETY: the context, effect and brushes live with `self` for this call.
         unsafe {
-            self.crop.SetValue(
-                D2D1_CROP_PROP_RECT.0 as u32,
-                D2D1_PROPERTY_TYPE_VECTOR4,
-                &cropped.map(f32::to_ne_bytes).concat(),
-            )?;
-            self.context
-                .FillRoundedRectangle(&raw const pill_round, &self.backdrop);
+            if let Some((crop, backdrop)) = &self.backdrop {
+                crop.SetValue(
+                    D2D1_CROP_PROP_RECT.0 as u32,
+                    D2D1_PROPERTY_TYPE_VECTOR4,
+                    &cropped.map(f32::to_ne_bytes).concat(),
+                )?;
+                self.context
+                    .FillRoundedRectangle(&raw const pill_round, backdrop);
+            }
             self.context
                 .FillRoundedRectangle(&raw const pill_round, &self.material);
             self.context
@@ -375,9 +390,13 @@ impl Paint {
                     radiusX: BUTTON_RADIUS * self.scale,
                     radiusY: BUTTON_RADIUS * self.scale,
                 };
-                if control == ToolbarControl::Copy {
+                let Look { label, mark } = look(control);
+                if control == primary {
                     self.context
                         .FillRoundedRectangle(&raw const button, &self.accent);
+                } else if mark == Mark::Chosen {
+                    self.context
+                        .FillRoundedRectangle(&raw const button, &self.chosen);
                 }
                 if control == focus {
                     let ring = D2D1_ROUNDED_RECT {
@@ -397,18 +416,50 @@ impl Paint {
                         None,
                     );
                 }
-                let brush = if control == ToolbarControl::Copy {
-                    &self.on_accent
-                } else if off(control) {
-                    &self.label_off
-                } else {
-                    &self.label
+                let brush = match (control == primary, mark) {
+                    (true, _) => &self.on_accent,
+                    (false, Mark::Off) => &self.label_off,
+                    (false, Mark::Plain | Mark::Chosen) => &self.label,
                 };
-                self.text
-                    .draw(&self.context, label(control), &button.rect, brush);
+                self.text.draw(&self.context, &label, &button.rect, brush);
             }
         }
         Ok(())
+    }
+}
+
+/// `frozen` cropped and blurred, and a brush that paints the result in the surface's pixels.
+fn blurred(
+    context: &ID2D1DeviceContext,
+    frozen: &ID2D1Bitmap,
+    scale: f32,
+) -> windows::core::Result<(ID2D1Effect, ID2D1ImageBrush)> {
+    // SAFETY: reading a bitmap's size touches no memory of ours.
+    let size = unsafe { frozen.GetSize() };
+    // SAFETY: every call takes owned or borrowed COM objects that outlive it.
+    unsafe {
+        let crop = context.CreateEffect(&CLSID_D2D1Crop)?;
+        crop.SetInput(0, Some(&frozen.cast::<ID2D1Image>()?), true);
+        let blur = context.CreateEffect(&CLSID_D2D1GaussianBlur)?;
+        blur.SetInput(0, Some(&crop.GetOutput()?), true);
+        blur.SetValue(
+            D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+            D2D1_PROPERTY_TYPE_FLOAT,
+            &(BLUR_DEVIATION * scale).to_ne_bytes(),
+        )?;
+        let whole = D2D1_IMAGE_BRUSH_PROPERTIES {
+            sourceRectangle: D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: size.width,
+                bottom: size.height,
+            },
+            extendModeX: D2D1_EXTEND_MODE_CLAMP,
+            extendModeY: D2D1_EXTEND_MODE_CLAMP,
+            interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
+        };
+        let backdrop = context.CreateImageBrush(&blur.GetOutput()?, &raw const whole, None)?;
+        Ok((crop, backdrop))
     }
 }
 

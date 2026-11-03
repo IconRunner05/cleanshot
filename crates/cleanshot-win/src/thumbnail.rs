@@ -409,6 +409,7 @@ mod tests {
 
     #[test]
     fn f09_the_thumbnail_never_takes_the_focus_opens_on_a_click_and_leaves_no_window() {
+        let _screen = crate::overlay::tests::screen();
         let events = Rc::new(RefCell::new(Vec::new()));
         // SAFETY: reads which window is in the foreground.
         let before = unsafe { GetForegroundWindow() };

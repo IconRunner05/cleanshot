@@ -362,7 +362,7 @@ fn toolbar_monitor(captures: &[MonitorImage]) -> windows::core::Result<Option<&M
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{Mutex, MutexGuard, PoisonError};
     use std::time::{Duration, Instant};
 
@@ -385,13 +385,14 @@ mod tests {
 
     use super::*;
 
-    /// An overlay registers its keys as system-wide hotkeys and covers the same corner of the
-    /// screen, so one test's overlay is up at a time.
+    /// An overlay, the capture panel and the countdown register system-wide hotkeys, take or
+    /// test the foreground, and cover the same part of the screen, so one such test runs at a
+    /// time.
     static SCREEN: Mutex<()> = Mutex::new(());
 
-    /// The screen, once no other overlay test holds it. A test that failed holding it leaves
+    /// The screen, once no other such test holds it. A test that failed holding it leaves
     /// nothing behind once its overlay is dropped, so the next test takes it as it is.
-    pub(super) fn screen() -> MutexGuard<'static, ()> {
+    pub(crate) fn screen() -> MutexGuard<'static, ()> {
         SCREEN.lock().unwrap_or_else(PoisonError::into_inner)
     }
 

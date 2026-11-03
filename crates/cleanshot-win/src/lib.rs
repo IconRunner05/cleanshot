@@ -10,6 +10,7 @@ pub mod log;
 mod loupe;
 pub mod overlay;
 mod palette;
+pub mod panel;
 pub mod policy;
 mod registry;
 mod render_target;
@@ -25,7 +26,8 @@ pub mod tray;
 mod tray_icon;
 mod window_state;
 
-use windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS;
+use windows::Win32::Foundation::{ERROR_CLASS_ALREADY_EXISTS, HWND};
+use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories,
 };
@@ -56,6 +58,25 @@ pub(crate) fn register_window_class(class: &WNDCLASSEXW) -> Result<(), Error> {
     Err(Error::Window(error))
 }
 
+/// Rounds `window`, `width` x `height` physical pixels, to corners of `radius` pixels.
+pub(crate) fn round_window(
+    window: HWND,
+    width: i32,
+    height: i32,
+    radius: i32,
+) -> windows::core::Result<()> {
+    // SAFETY: the region is new; on success the window owns it, so it is deleted only on
+    // failure.
+    unsafe {
+        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 2 * radius, 2 * radius);
+        if SetWindowRgn(window, Some(region), false) == 0 {
+            let _ = DeleteObject(region.into());
+            return Err(windows::core::Error::from_thread());
+        }
+    }
+    Ok(())
+}
+
 /// The size of the Win32 struct `T`, as its `cbSize` field takes it.
 pub(crate) fn struct_size<T>() -> u32 {
     u32::try_from(size_of::<T>()).expect("a Win32 struct is smaller than 4 GiB")
@@ -72,6 +93,8 @@ pub enum Error {
     PreviewTooLarge { width: u32, height: u32 },
     #[error("the overlay was given no monitor to show")]
     NoCaptures,
+    #[error("the monitor is too small for the capture panel")]
+    MonitorTooSmall,
     #[error("another program has taken the hotkey")]
     HotkeyTaken(#[source] windows::core::Error),
     #[error("Windows refused to copy the screen")]
