@@ -322,7 +322,14 @@ pub(super) fn prewarm(factory: &ID2D1Factory, palette: &Palette) -> windows::cor
         &[0; 4],
     )
     .and_then(|(target, frozen)| {
-        Paint::new(&target.cast()?, Some(&frozen), 1.0, palette).map(drop)
+        Paint::new(&target.cast()?, Some(&frozen), 1.0, palette)?;
+        // P-01: Direct2D makes a target'"'"'s device at its first draw, not when the target is made.
+        // SAFETY: BeginDraw and EndDraw bracket one draw on a target this thread made.
+        unsafe {
+            target.BeginDraw();
+            target.Clear(None);
+            target.EndDraw(None, None)
+        }
     });
     // SAFETY: the window was created above and holds no state.
     let destroyed = unsafe { DestroyWindow(window) };
