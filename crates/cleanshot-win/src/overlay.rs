@@ -241,8 +241,9 @@ impl Overlay {
     ///
     /// # Errors
     ///
-    /// [`Error::Window`] if a window or its Direct2D surface cannot be made, or the pointer's
-    /// position or its monitor's DPI cannot be read;
+    /// [`Error::Window`] if a window or its Direct2D surface cannot be made;
+    /// [`Error::Monitor`] if the pointer's position or its monitor's DPI cannot be read;
+    /// [`Error::NoCaptures`] if `captures` is empty;
     /// [`Error::HotkeyTaken`] if another program holds one of its keys as a hotkey.
     pub fn show(
         captures: &[MonitorImage],
@@ -256,11 +257,11 @@ impl Overlay {
         let factory: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
                 .map_err(Error::Window)?;
-        let host = toolbar_monitor(captures).map_err(Error::Window)?;
+        let host = toolbar_monitor(captures).map_err(Error::Monitor)?;
         let toolbar = match host {
             Some(capture) => Some((
                 capture.bounds,
-                dpi_scale(capture.bounds).map_err(Error::Window)?,
+                dpi_scale(capture.bounds).map_err(Error::Monitor)?,
             )),
             None => None,
         };
@@ -292,10 +293,7 @@ impl Overlay {
             overlay.windows.push(window);
             shared.windows.borrow_mut().push(window);
         }
-        let first = *overlay
-            .windows
-            .first()
-            .ok_or(Error::Window(windows::core::Error::empty()))?;
+        let first = *overlay.windows.first().ok_or(Error::NoCaptures)?;
         for (id, (modifiers, key, _)) in (0..).zip(KEYS) {
             // SAFETY: `first` was created above on this thread.
             unsafe { RegisterHotKey(Some(first), id, modifiers, u32::from(key.0)) }
@@ -782,6 +780,13 @@ mod tests {
         assert!(freed.get(), "freed once the message returned");
         // SAFETY: IsWindow only reads whether the handle still names a window.
         assert!(!unsafe { IsWindow(Some(window)) }.as_bool());
+    }
+
+    #[test]
+    fn f01_an_overlay_given_no_monitor_says_so_and_opens_nothing() {
+        let _screen = screen();
+        let shown = Overlay::show(&[], None, Vec::new(), None, |_| {});
+        assert!(matches!(shown, Err(Error::NoCaptures)), "{:?}", shown.err());
     }
 
     #[test]

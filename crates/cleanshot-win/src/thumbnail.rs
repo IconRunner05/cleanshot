@@ -97,8 +97,9 @@ impl Thumbnail {
     ///
     /// # Errors
     ///
-    /// [`Error::Window`] if the window or its Direct2D surface cannot be made, or the
-    /// monitor's work area or DPI cannot be read.
+    /// [`Error::Window`] if the window or its Direct2D surface cannot be made;
+    /// [`Error::Monitor`] if the monitor's work area or DPI cannot be read;
+    /// [`Error::PreviewTooLarge`] if `preview` is wider or taller than a window can be.
     pub fn show(
         preview: &RgbaImage,
         monitor: RECT,
@@ -106,8 +107,8 @@ impl Thumbnail {
         on_event: impl FnMut(ThumbnailEvent) + 'static,
     ) -> Result<Self, Error> {
         window::register_class()?;
-        let work = work_area(monitor).map_err(Error::Window)?;
-        let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Window)?;
+        let work = work_area(monitor).map_err(Error::Monitor)?;
+        let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Monitor)?;
         let slide = fade::animations_on().map_err(Error::Window)?;
         let window = window::open_window(preview, work, scale, slide, saving, Box::new(on_event))?;
         // SAFETY: `window` was created above on this thread; D-96 shows it without activation.
@@ -125,9 +126,9 @@ impl Thumbnail {
     ///
     /// # Errors
     ///
-    /// [`Error::Window`] if the monitor's DPI cannot be read.
+    /// [`Error::Monitor`] if the monitor's DPI cannot be read.
     pub fn largest_preview(monitor: RECT) -> Result<(u32, u32), Error> {
-        let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Window)?;
+        let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Monitor)?;
         let px = |dips: f32| {
             // F-09: a few hundred pixels at any scale Windows offers.
             #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

@@ -62,8 +62,14 @@ pub(crate) fn struct_size<T>() -> u32 {
 /// What went wrong in a call to Windows.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Windows refused to create the tray window")]
+    #[error("Windows could not open a window")]
     Window(#[source] windows::core::Error),
+    #[error("Windows could not read the monitor layout")]
+    Monitor(#[source] windows::core::Error),
+    #[error("a {width} x {height} preview is too large for a window")]
+    PreviewTooLarge { width: u32, height: u32 },
+    #[error("the overlay was given no monitor to show")]
+    NoCaptures,
     #[error("another program has taken the hotkey")]
     HotkeyTaken(#[source] windows::core::Error),
     #[error("Windows refused to copy the screen")]

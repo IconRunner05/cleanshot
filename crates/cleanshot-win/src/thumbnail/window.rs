@@ -234,7 +234,10 @@ pub(super) fn open_window(
         i32::try_from(preview.width()),
         i32::try_from(preview.height()),
     ) else {
-        return Err(Error::Window(windows::core::Error::empty()));
+        return Err(Error::PreviewTooLarge {
+            width: preview.width(),
+            height: preview.height(),
+        });
     };
     let (client_width, client_height) = window_size(width, height, scale);
     let px = |dips: f32| (dips * scale).round() as i32;

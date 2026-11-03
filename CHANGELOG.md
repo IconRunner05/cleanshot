@@ -35,6 +35,12 @@ section exists.
   Cleanshot. Copy the `.admx` to `PolicyDefinitions` and the `.adml` to
   `PolicyDefinitions\en-US`.
 
+### Fixed
+
+- When a window, the overlay or the thumbnail could not open, the warning said Windows had
+  refused to create "the tray window", whichever window it was. It now says a window could
+  not open, or that the monitor layout could not be read, or that the preview is too large.
+
 ## [0.1.2] - 2026-11-02
 
 A settings window, the spotlight and border tools, fixes for black or garbled captures on
