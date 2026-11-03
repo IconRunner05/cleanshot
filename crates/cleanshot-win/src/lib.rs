@@ -12,6 +12,7 @@ pub mod overlay;
 mod palette;
 pub mod policy;
 mod registry;
+mod render_target;
 pub mod save;
 mod selection;
 pub mod settings_file;

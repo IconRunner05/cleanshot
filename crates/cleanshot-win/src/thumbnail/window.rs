@@ -30,8 +30,8 @@ use super::{
     place, slid, window_size,
 };
 use crate::Error;
-use crate::overlay::{bgra, target_and_bitmap};
 use crate::palette::Palette;
+use crate::render_target::{bgra, target_and_bitmap};
 use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
 use crate::toolbar::OffTip;

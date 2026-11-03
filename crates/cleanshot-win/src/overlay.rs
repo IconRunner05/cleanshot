@@ -30,7 +30,6 @@ mod window;
 use picking::Mode;
 #[cfg(feature = "field-test")]
 pub(crate) use window::WINDOW_CLASS;
-pub(crate) use window::{bgra, target_and_bitmap};
 use window::{open_window, register_class};
 
 const SHIFT_NUDGE: i32 = 10;
