@@ -34,10 +34,28 @@ type Deliver = Box<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>
 type SaveTo = Box<dyn Fn(&Path, &Document) -> Result<Delivered, DeliveryError>>;
 
 /// Where Copy, Save and Save As send the edited screenshot (F-20 to F-22, F-40), from the app.
-pub(crate) struct Outputs {
+pub struct Outputs {
     deliver: Deliver,
     save_as_start: Box<dyn Fn() -> Result<(PathBuf, String), DeliveryError>>,
     save_to: SaveTo,
+}
+
+impl Outputs {
+    /// Ctrl+C and Ctrl+S hand the document to `deliver` and show what it reports (F-40, D-48).
+    /// Ctrl+Shift+S opens the save dialog on the folder and file name `save_as_start` gives at
+    /// that moment, or shows why it cannot, and hands the document and the confirmed path to
+    /// `save_to` (F-22).
+    pub fn new(
+        deliver: impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static,
+        save_as_start: impl Fn() -> Result<(PathBuf, String), DeliveryError> + 'static,
+        save_to: impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static,
+    ) -> Self {
+        Self {
+            deliver: Box::new(deliver),
+            save_as_start: Box::new(save_as_start),
+            save_to: Box::new(save_to),
+        }
+    }
 }
 
 /// A Space-drag in progress: where it started and where the image was then.
@@ -530,37 +548,23 @@ pub fn ask_save_path<L: Fn(&'static str) + 'static>(
 pub struct EditorWindow(WindowHandle<EditorView>);
 
 /// Opens an editor window on `capture`, with no shapes yet (F-23), sized round it and centred
-/// on `monitor`, the one it came from, or on the primary display for `None` (D-110). Ctrl+C
-/// and Ctrl+S hand the document to `deliver` and show what it reports (F-40, D-48).
-/// Ctrl+Shift+S opens the save dialog on the folder and file name `save_as_start` gives at
-/// that moment, or shows why it cannot, and hands the document and the confirmed path to
-/// `save_to` (F-22). `on_first_frame` gets the moment the frame after the window's first draw
-/// begins (P-07), as the bench times it.
+/// on `monitor`, the one it came from, or on the primary display for `None` (D-110). Copy, Save
+/// and Save As go to `outputs`. `on_first_frame` gets the moment the frame after the window's
+/// first draw begins (P-07), as the bench times it.
 /// What fails out of sight, such as a redaction preview, goes to `log`.
 ///
 /// # Errors
 ///
 /// [`Error::WindowOpen`] if the platform cannot create the window.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each is a separate hook the app wires; a struct of them would only be unpacked here"
-)]
 pub fn open(
     cx: &mut App,
     capture: RgbaImage,
     monitor: Option<Monitor>,
-    deliver: impl Fn(Output, &Document) -> Result<Delivered, DeliveryError> + 'static,
-    save_as_start: impl Fn() -> Result<(PathBuf, String), DeliveryError> + 'static,
-    save_to: impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static,
+    outputs: Outputs,
     on_first_frame: impl FnOnce(Instant) + 'static,
     log: impl Fn(&'static str) + 'static,
 ) -> Result<EditorWindow, Error> {
     let document = Document::new(Arc::new(capture));
-    let outputs = Outputs {
-        deliver: Box::new(deliver),
-        save_as_start: Box::new(save_as_start),
-        save_to: Box::new(save_to),
-    };
     open_with(
         cx,
         document,

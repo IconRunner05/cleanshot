@@ -481,9 +481,11 @@ fn open_editor(cx: &mut cleanshot_editor::App, image: RgbaImage, session: &Rc<Se
         cx,
         image,
         None,
-        editor_deliver(session),
-        editor_save_as_start(session),
-        editor_save_to(session),
+        cleanshot_editor::Outputs::new(
+            editor_deliver(session),
+            editor_save_as_start(session),
+            editor_save_to(session),
+        ),
         editor_first_frame(session),
         {
             let logging = Rc::clone(session);

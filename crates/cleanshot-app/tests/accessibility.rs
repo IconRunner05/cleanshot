@@ -79,9 +79,11 @@ fn main() {
             cx,
             capture,
             None,
-            |_, _| Err(DeliveryError::ClipboardBusy),
-            || Ok((PathBuf::new(), String::new())),
-            |_, _| Err(DeliveryError::ClipboardBusy),
+            cleanshot_editor::Outputs::new(
+                |_, _| Err(DeliveryError::ClipboardBusy),
+                || Ok((PathBuf::new(), String::new())),
+                |_, _| Err(DeliveryError::ClipboardBusy),
+            ),
             move |at| {
                 // Each walk waits for the first frame on the same channel.
                 for _ in WALKS {
