@@ -17,7 +17,7 @@ use cleanshot_core::{
 };
 use cleanshot_editor::{AsyncApp, ask_save_path};
 use cleanshot_win::capture::{
-    AdapterReport, Copied, MonitorImage, OutputReport, RECT, black_share,
+    AdapterReport, Copied, MonitorImage, OutputReport, RECT, black_share, monitor_of,
 };
 use cleanshot_win::instance::Launch;
 use cleanshot_win::log::{Log, Usage, os_code, since_start, usage};
@@ -121,7 +121,7 @@ fn on_tray_request(app: &AsyncApp, session: Rc<Session>, request: Request) {
         let session = Rc::clone(&editing);
         opener
             .spawn(async move |cx| match to {
-                Handoff::Editor => cx.update(|cx| open_editor(cx, image, &session)),
+                Handoff::Editor { from } => cx.update(|cx| open_editor(cx, image, from, &session)),
                 Handoff::SaveAs => save_as(&session, image, cx).await,
             })
             .detach();
@@ -500,12 +500,21 @@ fn region_hotkey(configured: Hotkey) -> (Hotkey, Option<String>) {
     }
 }
 
-/// F-05: opens `image` in the editor, or says in the tray why it could not.
-fn open_editor(cx: &mut cleanshot_editor::App, image: RgbaImage, session: &Rc<Session>) {
+/// F-05: opens `image`, captured from `from`, in the editor on that monitor (D-110), or says in
+/// the tray why it could not. A monitor Windows cannot describe leaves the primary display.
+fn open_editor(
+    cx: &mut cleanshot_editor::App,
+    image: RgbaImage,
+    from: RECT,
+    session: &Rc<Session>,
+) {
+    let monitor = monitor_of(from)
+        .inspect_err(|error| session.log_failure("editor", "monitor_unread", error))
+        .ok();
     if let Err(error) = cleanshot_editor::open(
         cx,
         image,
-        None,
+        monitor,
         cleanshot_editor::Outputs::new(
             editor_deliver(session),
             editor_save_as_start(session),

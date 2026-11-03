@@ -25,7 +25,10 @@ pub(super) type PassOn = dyn Fn(RgbaImage, Handoff);
 /// once the overlay has closed (F-22).
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Handoff {
-    Editor,
+    /// D-110: the editor opens on the monitor holding `from`, where the image was captured.
+    Editor {
+        from: RECT,
+    },
     SaveAs,
 }
 
@@ -343,7 +346,7 @@ fn on_overlay_event(
             }
         }
         OverlayEvent::Edit(selected) => match region(frozen, selected) {
-            Ok(image) => pass_on(image, Handoff::Editor),
+            Ok(image) => pass_on(image, Handoff::Editor { from: selected }),
             Err(error) => session.warn(Warning::Failed("The capture could not be edited", &error)),
         },
         OverlayEvent::DrawFailed(error) => {

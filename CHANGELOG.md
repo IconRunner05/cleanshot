@@ -24,6 +24,8 @@ section exists.
 - The editor opens sized round the capture at 100%, with the toolbar above it, instead of
   at 80% of the primary display (F-23). A capture too large for the screen opens fitted to
   it. The capture, fitted or not, now sits below the toolbar instead of under it.
+- The editor opens on the screen the capture was taken on, not always on the primary
+  display (D-110).
 - A colour picked on the property strip is now the colour every tool draws in next, not
   only the tool it was picked for. Stroke width, fill, redaction and text size are still
   kept for each tool.

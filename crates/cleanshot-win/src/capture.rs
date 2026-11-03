@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use cleanshot_core::{Point, Rect, RgbaImage, first_holding};
+use cleanshot_core::{Monitor, Point, Rect, RgbaImage, first_holding};
 pub use windows::Win32::Foundation::RECT;
 use windows::Win32::Foundation::{HMODULE, LPARAM, POINT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
@@ -117,18 +117,42 @@ pub(crate) fn screen_point(point: POINT) -> Point {
 }
 
 /// Physical pixels per DIP on the monitor holding `bounds`.
-#[expect(clippy::cast_precision_loss, reason = "a DPI is a few hundred")]
 pub(crate) fn dpi_scale(bounds: RECT) -> windows::core::Result<f32> {
+    monitor_scale(nearest_monitor(bounds))
+}
+
+/// D-110: the monitor holding most of `bounds`, a capture's rectangle on the virtual desktop,
+/// as its work area and scale.
+///
+/// # Errors
+///
+/// [`Error::Monitor`] if Windows cannot describe that monitor.
+pub fn monitor_of(bounds: RECT) -> Result<Monitor, Error> {
+    let monitor = nearest_monitor(bounds);
+    let mut info = MONITORINFO {
+        cbSize: struct_size::<MONITORINFO>(),
+        ..Default::default()
+    };
+    // SAFETY: `info` has its size set, as GetMonitorInfoW requires.
+    if !unsafe { GetMonitorInfoW(monitor, &raw mut info) }.as_bool() {
+        return Err(Error::Monitor(windows::core::Error::from_thread()));
+    }
+    Ok(Monitor {
+        work_area: screen_rect(info.rcWork),
+        scale: monitor_scale(monitor).map_err(Error::Monitor)?,
+    })
+}
+
+fn nearest_monitor(bounds: RECT) -> HMONITOR {
+    // SAFETY: a read of a local; MONITOR_DEFAULTTONEAREST always returns a monitor.
+    unsafe { MonitorFromRect(&raw const bounds, MONITOR_DEFAULTTONEAREST) }
+}
+
+#[expect(clippy::cast_precision_loss, reason = "a DPI is a few hundred")]
+fn monitor_scale(monitor: HMONITOR) -> windows::core::Result<f32> {
     let (mut x, mut y) = (0, 0);
-    // SAFETY: both outputs are writable locals; MonitorFromRect always returns a monitor here.
-    unsafe {
-        GetDpiForMonitor(
-            MonitorFromRect(&raw const bounds, MONITOR_DEFAULTTONEAREST),
-            MDT_EFFECTIVE_DPI,
-            &raw mut x,
-            &raw mut y,
-        )
-    }?;
+    // SAFETY: both outputs are writable locals.
+    unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &raw mut x, &raw mut y) }?;
     Ok(x as f32 / DESKTOP_DPI)
 }
 
@@ -991,6 +1015,30 @@ mod tests {
                 showing.contains(&adapter.index),
                 "{adapter:?}"
             );
+        }
+    }
+
+    #[test]
+    fn d110_a_capture_names_the_work_area_of_the_monitor_holding_it() {
+        for bounds in monitor_bounds().expect("the monitors are listed") {
+            let inside = rect(
+                bounds.left + 1,
+                bounds.top + 1,
+                bounds.left + 2,
+                bounds.top + 2,
+            );
+            let monitor = monitor_of(inside).expect("the monitor is described");
+            let work = monitor.work_area;
+            assert!(
+                work.right > work.left && work.bottom > work.top,
+                "{monitor:?}"
+            );
+            assert_eq!(
+                screen_rect(bounds).overlap(work),
+                Some(work),
+                "the work area lies on {bounds:?}"
+            );
+            assert!(monitor.scale > 0.0, "{monitor:?}");
         }
     }
 

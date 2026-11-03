@@ -16,6 +16,8 @@ use crate::{Session, Warning};
 pub(super) struct Shown {
     thumbnail: Thumbnail,
     image: Arc<RgbaImage>,
+    /// Where the capture was taken, so the editor opens there (D-110).
+    selected: RECT,
     /// Which thumbnail this is, so an event from one already replaced does nothing.
     count: u64,
 }
@@ -71,6 +73,7 @@ pub(super) fn show(
             *session.thumbnail.borrow_mut() = Some(Shown {
                 thumbnail,
                 image,
+                selected,
                 count,
             });
             let items = LastCaptureItems::Shown { saving_off };
@@ -87,10 +90,16 @@ pub(super) fn close_now(session: &Session) {
 
 /// D-96: the tray's Edit last capture, which does what a click on the thumbnail does.
 pub(super) fn edit_last(session: &Session, pass_on: &PassOn) {
-    let Some(Shown { image, .. }) = taken(session) else {
+    let Some(Shown {
+        image, selected, ..
+    }) = taken(session)
+    else {
         return;
     };
-    pass_on(Arc::unwrap_or_clone(image), Handoff::Editor);
+    pass_on(
+        Arc::unwrap_or_clone(image),
+        Handoff::Editor { from: selected },
+    );
 }
 
 /// D-96: the tray's Save last capture, which does what the thumbnail's Save does.
