@@ -323,7 +323,7 @@ fn report_windows(report: &mut String) {
     report.push_str("\n## Windows\n\n");
     match windows_version() {
         Ok(version) => {
-            line(report, "Product", version.product_name);
+            line(report, "Product", version.name());
             line(report, "Display version", version.display_version);
             line(
                 report,

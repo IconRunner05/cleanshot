@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, HMODULE, LPARAM, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_INVALID_DATA, HMODULE, LPARAM, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
 };
@@ -52,9 +54,8 @@ pub mod dpi;
 /// The Windows release, read from the registry.
 #[derive(Debug)]
 pub struct WindowsVersion {
-    pub product_name: String,
     pub display_version: String,
-    pub build: String,
+    pub build: u32,
     pub revision: u32,
     pub edition: String,
     pub installation_type: String,
@@ -131,14 +132,30 @@ pub fn rendering_params() -> Result<RenderingParams, windows::core::Error> {
 /// The Windows error of the first value that cannot be read.
 pub fn windows_version() -> Result<WindowsVersion, windows::core::Error> {
     Ok(WindowsVersion {
-        product_name: registry_string(w!("ProductName"))?,
         display_version: registry_string(w!("DisplayVersion"))?,
-        build: registry_string(w!("CurrentBuildNumber"))?,
+        build: registry_string(w!("CurrentBuildNumber"))?
+            .parse()
+            .map_err(|_| windows::core::Error::from(ERROR_INVALID_DATA))?,
         revision: registry_number(w!("UBR"))?,
         edition: registry_string(w!("EditionID"))?,
         installation_type: registry_string(w!("InstallationType"))?,
     })
 }
+
+impl WindowsVersion {
+    /// The release's name, from its build: the registry's `ProductName` says Windows 10 on
+    /// Windows 11 too, so it is not read.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        if self.build >= FIRST_WINDOWS_11_BUILD {
+            "Windows 11"
+        } else {
+            "Windows 10"
+        }
+    }
+}
+
+const FIRST_WINDOWS_11_BUILD: u32 = 22000;
 
 const CURRENT_VERSION: PCWSTR = w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
 
@@ -531,4 +548,27 @@ fn read_clipboard() -> Result<String, windows::core::Error> {
         .take_while(|&unit| unit != 0)
         .collect();
     Ok(String::from_utf16_lossy(&text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_probe_names_windows_11_from_build_22000_whatever_the_registry_product_name_says() {
+        let named = |build| {
+            WindowsVersion {
+                display_version: String::from("25H2"),
+                build,
+                revision: 0,
+                edition: String::from("Enterprise"),
+                installation_type: String::from("Client"),
+            }
+            .name()
+        };
+        assert_eq!(
+            [19045, 21999, 22000, 26200].map(named),
+            ["Windows 10", "Windows 10", "Windows 11", "Windows 11"]
+        );
+    }
 }
