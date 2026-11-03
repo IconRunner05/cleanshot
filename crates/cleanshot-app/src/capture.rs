@@ -10,7 +10,7 @@ use cleanshot_win::capture::{
     Desktop, MonitorImage, RECT, capture_desktop, draw_pointer, monitor_under_cursor,
     pickable_windows, region, screen_rect,
 };
-use cleanshot_win::overlay::{Opening, Overlay, OverlayEvent};
+use cleanshot_win::overlay::{Opening, Overlay, OverlayEvent, Stages};
 
 use crate::delivery::deliver;
 use crate::{Session, Warning};
@@ -197,13 +197,25 @@ pub(super) fn capture(
             if picking {
                 shown.pick_window();
             }
+            let opened = opening_line(shown.stages());
             *session.overlay.borrow_mut() = Some(shown);
             stage("overlay_visible");
+            session.log_line("capture", |_| opened);
         }
         Err(error) => session.warn(Warning::Failed("The overlay could not open", &error)),
     }
     // P-01: the black-share pass runs after the overlay is visible.
     session.log_capture(&copied, &adapters, &outputs, &captures);
+}
+
+/// P-01: each step of opening the overlay and when it ended, in ms from the start of opening.
+fn opening_line(stages: &Stages) -> String {
+    let marks: Vec<String> = stages
+        .marks()
+        .iter()
+        .map(|(stage, at)| format!("{stage}={:.1}", at.as_secs_f64() * 1000.0))
+        .collect();
+    format!("overlay opened_ms {}", marks.join(" "))
 }
 
 /// What the overlay's events do: an Options pick applies and leaves it open (F-12); every

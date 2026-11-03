@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-
 use std::path::PathBuf;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use cleanshot_core::{
     OptionsEntry, OptionsItem, Pickable, Rect, SavingOff, Toolbar, ToolbarControl,
@@ -52,6 +52,32 @@ pub enum OverlayEvent {
     Options(OptionsItem),
     /// The Options menu could not show, or the overlay could not take its keys back after it.
     OptionsFailed(Error),
+}
+
+/// How long each step of [`Overlay::show`] had taken since it began, in order, for `--log`.
+#[derive(Debug)]
+pub struct Stages {
+    started: Instant,
+    marks: Vec<(&'static str, Duration)>,
+}
+
+impl Stages {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            marks: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, stage: &'static str) {
+        self.marks.push((stage, self.started.elapsed()));
+    }
+
+    /// Each step and the time since [`Overlay::show`] began when it ended.
+    #[must_use]
+    pub fn marks(&self) -> &[(&'static str, Duration)] {
+        &self.marks
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -230,6 +256,7 @@ pub struct Opening {
 pub struct Overlay {
     windows: Vec<HWND>,
     shared: Rc<Shared>,
+    stages: Stages,
 }
 
 impl Overlay {
@@ -269,11 +296,13 @@ impl Overlay {
         options: impl Fn() -> Vec<OptionsEntry> + 'static,
         on_event: impl FnMut(OverlayEvent) + 'static,
     ) -> Result<Self, Error> {
+        let mut stages = Stages::new();
         register_class()?;
         // SAFETY: D2D1CreateFactory has no preconditions.
         let factory: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
                 .map_err(Error::Window)?;
+        stages.mark("factory");
         let host = toolbar_monitor(captures).map_err(Error::Monitor)?;
         let toolbar = match host {
             Some(capture) => Some((
@@ -301,13 +330,21 @@ impl Overlay {
             options: Box::new(options),
         });
         shared.changed();
+        stages.mark("shared");
         let mut overlay = Self {
             windows: Vec::with_capacity(captures.len()),
             shared: Rc::clone(&shared),
+            stages,
         };
         for capture in captures {
             let hosts_toolbar = host.is_some_and(|host| std::ptr::eq(host, capture));
-            let window = open_window(&factory, capture, &shared, hosts_toolbar)?;
+            let window = open_window(
+                &factory,
+                capture,
+                &shared,
+                hosts_toolbar,
+                &mut overlay.stages,
+            )?;
             if hosts_toolbar {
                 shared.toolbar_window.set(Some(window));
             }
@@ -316,6 +353,7 @@ impl Overlay {
         }
         let first = *overlay.windows.first().ok_or(Error::NoCaptures)?;
         take_keys(first)?;
+        overlay.stages.mark("keys");
         for &window in &overlay.windows {
             // SAFETY: `window` was created above; showing it without activation is F-02's rule.
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
@@ -324,8 +362,15 @@ impl Overlay {
             unsafe { UpdateWindow(window) }
                 .ok()
                 .map_err(Error::Window)?;
+            overlay.stages.mark("window_shown");
         }
         Ok(overlay)
+    }
+
+    /// How long each step of opening took (P-01).
+    #[must_use]
+    pub fn stages(&self) -> &Stages {
+        &self.stages
     }
 
     /// Starts picking a window, as W does (F-08): the window capture hotkey opens the overlay

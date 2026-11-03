@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, PCWSTR, w};
 
-use super::{Gesture, KEYS, Mode, OverlayEvent, Shared};
+use super::{Gesture, KEYS, Mode, OverlayEvent, Shared, Stages};
 use crate::Error;
 use crate::capture::{MonitorImage, dpi_scale};
 use crate::loupe;
@@ -235,6 +235,7 @@ pub(super) fn open_window(
     capture: &MonitorImage,
     shared: &Rc<Shared>,
     hosts_toolbar: bool,
+    stages: &mut Stages,
 ) -> Result<HWND, Error> {
     let bounds = capture.bounds;
     let (width, height) = (capture.image.width(), capture.image.height());
@@ -257,14 +258,15 @@ pub(super) fn open_window(
         )
     }
     .map_err(Error::Window)?;
+    stages.mark("window_created");
     match surface(
         factory,
         window,
         capture,
-        width,
-        height,
+        (width, height),
         shared,
         hosts_toolbar,
+        stages,
     ) {
         Ok(surface) => {
             // SAFETY: `window` was created above with nothing stored on it, and
@@ -325,12 +327,13 @@ fn surface(
     factory: &ID2D1Factory,
     window: HWND,
     capture: &MonitorImage,
-    width: u32,
-    height: u32,
+    (width, height): (u32, u32),
     shared: &Rc<Shared>,
     hosts_toolbar: bool,
+    stages: &mut Stages,
 ) -> windows::core::Result<Surface> {
     let bgra = bgra(&capture.image);
+    stages.mark("bgra");
     let (target, frozen) = target_and_bitmap(
         factory,
         window,
@@ -338,6 +341,7 @@ fn surface(
         (width, height),
         &bgra,
     )?;
+    stages.mark("target_and_bitmap");
     // SAFETY: every call takes owned or borrowed COM objects that outlive it.
     unsafe {
         let palette = shared.palette;
@@ -355,10 +359,13 @@ fn surface(
             (Some(_) | None, _) => None,
         };
         let scale = dpi_scale(capture.bounds)?;
+        let pill = size_pill::Paint::new(&target, capture.bounds, scale, &palette)?;
+        let loupe = loupe::Paint::new(&target, bgra, capture.bounds, scale, &palette)?;
+        stages.mark("paints");
         Ok(Surface {
             off_tip,
-            pill: size_pill::Paint::new(&target, capture.bounds, scale, &palette)?,
-            loupe: loupe::Paint::new(&target, bgra, capture.bounds, scale, &palette)?,
+            pill,
+            loupe,
             toolbar,
             target,
             frozen,
