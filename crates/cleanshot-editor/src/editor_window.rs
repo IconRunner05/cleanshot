@@ -218,7 +218,10 @@ impl EditorView {
                     self.apply(Command::Remove(id));
                 }
             }
-            KeyAction::ClearSelection => self.selected = None,
+            KeyAction::BackToSelect => {
+                self.selected = None;
+                self.tool = Tool::Select;
+            }
             KeyAction::PickTool(tool) => self.tool = tool,
             KeyAction::FitView => self.placement = None,
             KeyAction::HoldToPan => self.space_held = true,

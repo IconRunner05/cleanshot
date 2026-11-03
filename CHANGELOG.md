@@ -9,6 +9,11 @@ section exists.
 
 ## [Unreleased]
 
+### Changed
+
+- Esc in the editor goes back to the Select tool and clears the selection, from any tool
+  (F-30). With Select already picked and nothing selected it does nothing.
+
 ### Fixed
 
 - Closing the settings window or the editor when no other Cleanshot window was open quit

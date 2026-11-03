@@ -6,7 +6,8 @@ pub enum KeyAction {
     Undo,
     Redo,
     RemoveSelected,
-    ClearSelection,
+    /// Esc: the Select tool, with nothing selected (D-111).
+    BackToSelect,
     PickTool(Tool),
     /// Back to the view that fits the image in the window (F-39).
     FitView,
@@ -127,7 +128,7 @@ fn idle_action(key: &str, modifiers: Modifiers) -> Option<KeyAction> {
     }
     match key {
         "delete" => Some(KeyAction::RemoveSelected),
-        "escape" => Some(KeyAction::ClearSelection),
+        "escape" => Some(KeyAction::BackToSelect),
         "space" => Some(KeyAction::HoldToPan),
         "tab" if modifiers.shift => Some(KeyAction::FocusPrevious),
         "tab" => Some(KeyAction::FocusNext),
@@ -174,14 +175,14 @@ mod tests {
     }
 
     #[test]
-    fn f30_delete_removes_the_selection_and_escape_clears_it() {
+    fn f30_delete_removes_the_selection_and_escape_goes_back_to_select() {
         assert_eq!(
             action_for_key("delete", NONE, Activity::Idle),
             Some(KeyAction::RemoveSelected)
         );
         assert_eq!(
             action_for_key("escape", NONE, Activity::Idle),
-            Some(KeyAction::ClearSelection)
+            Some(KeyAction::BackToSelect)
         );
     }
 

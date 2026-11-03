@@ -35,7 +35,7 @@ Start from a release candidate exe downloaded from its GitHub pre-release, with 
 ## Editor
 
 - [ ] F-23: Capture and press E. The overlay closes and the editor opens with the capture.
-- [ ] F-30 to F-35: Draw an arrow (A), a line (L), a rectangle (R), an ellipse (O), a pen stroke (P), text (T, typed with an input method too) and a highlight (H). Click a shape to select it, drag a handle, and press Del.
+- [ ] F-30 to F-35: Draw an arrow (A), a line (L), a rectangle (R), an ellipse (O), a pen stroke (P), text (T, typed with an input method too) and a highlight (H). Click a shape to select it, drag a handle, and press Del. Select a shape, press A for the arrow tool, then press Esc: the Select tool is picked and nothing is selected. Press Esc again: the editor stays open.
 - [ ] F-41: Add three numbered steps (N): they read 1, 2, 3. Delete the second: the last becomes 2.
 - [ ] F-42: Add a speech bubble (B), type in it, and drag its tail's tip. The tail follows and the box stays.
 - [ ] F-43: Add a spotlight (S). Everything outside it dims.
