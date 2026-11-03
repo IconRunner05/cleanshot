@@ -83,6 +83,9 @@ pub fn delivery_notice(outcome: &Result<Delivered, DeliveryError>) -> String {
     }
 }
 
+/// Why a setting is greyed out where the organisation's policy decides it (F-57).
+pub const SET_BY_ORGANISATION: &str = "Set by your organisation";
+
 /// Why the policy turned saving off (F-57), for a place that offers no Copy, such as the
 /// settings window.
 #[must_use]

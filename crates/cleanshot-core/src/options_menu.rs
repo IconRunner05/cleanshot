@@ -1,4 +1,4 @@
-use crate::delivery::saving_off_reason;
+use crate::delivery::{SET_BY_ORGANISATION, saving_off_reason};
 use crate::policy::{Policy, Saving};
 use crate::settings::{SaveFormat, Settings};
 
@@ -30,19 +30,15 @@ pub enum Picked {
     ChooseFolder,
 }
 
-const SET_BY_POLICY: &str = "Set by your organisation";
-
 impl OptionsItem {
     /// The item's name, as the menu shows it and UI Automation reads it.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::SaveFolder => "Save folder...",
-            Self::Format(SaveFormat::Png) => "PNG",
-            Self::Format(SaveFormat::Jpg) => "JPG",
-            Self::Format(SaveFormat::Bmp) => "BMP",
+            Self::Format(format) => format.name(),
             Self::ShowPointer => "Show pointer",
-            Self::ShowThumbnail => "Show thumbnail",
+            Self::ShowThumbnail => "Show a thumbnail",
             Self::RememberLastSelection => "Remember last selection",
         }
     }
@@ -75,8 +71,8 @@ pub fn options_menu(settings: &Settings, policy: &Policy) -> Vec<OptionsEntry> {
             (why, why, settings.save_format)
         }
         Saving::Allowed { folder, png_only } => (
-            folder.as_ref().map(|_| SET_BY_POLICY),
-            png_only.then_some(SET_BY_POLICY),
+            folder.as_ref().map(|_| SET_BY_ORGANISATION),
+            png_only.then_some(SET_BY_ORGANISATION),
             if *png_only {
                 SaveFormat::Png
             } else {
@@ -217,7 +213,7 @@ mod tests {
             save_format: SaveFormat::Jpg,
             ..Settings::default()
         };
-        let by_policy = Some(SET_BY_POLICY);
+        let by_policy = Some(SET_BY_ORGANISATION);
         let (folder, _) =
             Policy::from_values(Text(r"D:\Shots".to_owned()), Missing, Missing, Missing);
         assert_eq!(

@@ -33,6 +33,18 @@ pub enum SaveFormat {
     Bmp,
 }
 
+impl SaveFormat {
+    /// The format's name, as the Options menu and the settings window show it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Jpg => "JPG",
+            Self::Bmp => "BMP",
+        }
+    }
+}
+
 /// What happens once a region is selected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AfterCapture {

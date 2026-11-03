@@ -30,8 +30,8 @@ pub use bubble::{BUBBLE_PADDING, Bubble};
 pub use capture_mode::CaptureMode;
 pub use capture_panel::{CapturePanel, PanelOutcome};
 pub use delivery::{
-    Delivered, DeliveryError, Output, delivery_notice, save_as_notice, saving_off_notice,
-    saving_off_reason,
+    Delivered, DeliveryError, Output, SET_BY_ORGANISATION, delivery_notice, save_as_notice,
+    saving_off_notice, saving_off_reason,
 };
 pub use document::{
     Color, Document, Fill, Frame, ImageError, PointF, RectF, RedactMode, RgbaImage, SPOTLIGHT_DIM,

@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use cleanshot_core::{
-    AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, Policy, SaveFormat, Saving, Settings,
-    SettingsNotice, SettingsProblem, StartupEntryError, saving_off_reason, settings_notice,
+    AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, OptionsItem, Policy,
+    SET_BY_ORGANISATION, SaveFormat, Saving, Settings, SettingsNotice, SettingsProblem,
+    StartupEntryError, saving_off_reason, settings_notice,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -322,7 +323,7 @@ impl SettingsView {
         let folder_row = match policy_folder {
             Some(folder) => folder_row
                 .child(shown_value(folder, theme))
-                .child(set_by_policy("Set by your organisation", theme)),
+                .child(set_by_policy(SET_BY_ORGANISATION, theme)),
             None => folder_row
                 .child(shown_value(
                     self.settings
@@ -348,16 +349,16 @@ impl SettingsView {
         let format_row = if png_only {
             row()
                 .child(label("Format", theme))
-                .child(shown_value("PNG".to_owned(), theme))
-                .child(set_by_policy("Set by your organisation", theme))
+                .child(shown_value(SaveFormat::Png.name().to_owned(), theme))
+                .child(set_by_policy(SET_BY_ORGANISATION, theme))
                 .into_any_element()
         } else {
             radio_group(
                 "Format",
                 [
-                    (SaveFormat::Png, "PNG"),
-                    (SaveFormat::Jpg, "JPG"),
-                    (SaveFormat::Bmp, "BMP"),
+                    (SaveFormat::Png, SaveFormat::Png.name()),
+                    (SaveFormat::Jpg, SaveFormat::Jpg.name()),
+                    (SaveFormat::Bmp, SaveFormat::Bmp.name()),
                 ],
                 self.settings.save_format,
                 theme,
@@ -419,13 +420,19 @@ impl SettingsView {
 
 fn show_thumbnail_row(on: bool, theme: Theme, cx: &mut Context<SettingsView>) -> impl IntoElement {
     row().child(label("Thumbnail", theme)).child(
-        control("Thumbnail", "Show a thumbnail", Role::CheckBox, on, theme)
-            .aria_toggled(if on { Toggled::True } else { Toggled::False })
-            .on_click(cx.listener(move |view, _, _, cx| {
-                view.edit(|settings| settings.show_thumbnail = !on);
-                cx.notify();
-            }))
-            .child("Show a thumbnail after Copy or Save"),
+        control(
+            "Thumbnail",
+            OptionsItem::ShowThumbnail.label(),
+            Role::CheckBox,
+            on,
+            theme,
+        )
+        .aria_toggled(if on { Toggled::True } else { Toggled::False })
+        .on_click(cx.listener(move |view, _, _, cx| {
+            view.edit(|settings| settings.show_thumbnail = !on);
+            cx.notify();
+        }))
+        .child("Show a thumbnail after Copy or Save"),
     )
 }
 
