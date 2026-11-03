@@ -51,6 +51,7 @@ pub(super) fn to_rgba(bgra: &[u8], rgba: &mut [u8]) {
         .iter()
         .zip(rgba.as_chunks_mut::<4>().0)
     {
-        *to = [from[2], from[1], from[0], u8::MAX];
+        let pixel = u32::from_le_bytes(*from);
+        *to = (pixel.swap_bytes().rotate_right(8) | 0xff00_0000).to_le_bytes();
     }
 }
