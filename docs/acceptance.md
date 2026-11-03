@@ -48,6 +48,7 @@ Start from a release candidate exe downloaded from its GitHub pre-release, with 
 - [ ] F-38, F-39: Ctrl+Z and Ctrl+Y undo and redo each step. Ctrl+wheel zooms, Space-drag pans, Ctrl+0 fits.
 - [ ] F-40, F-24: Ctrl+C and Ctrl+S in the editor copy and save the marked-up image.
 - [ ] F-58: Switch Windows between light and dark: the editor follows. Every editor control can be reached with Tab.
+- [ ] D-117: In the editor, rest the pointer on the highlighter button: after a moment "Highlighter (H)" shows below it, and goes when the pointer leaves or clicks. Rest it on a colour on the property strip: its name shows, such as "Red". Open a fresh capture and rest it on the greyed Undo: "Nothing to undo". In Settings, rest it on a hotkey's Reset: "Reset Capture region hotkey".
 
 ## Settings and policy
 

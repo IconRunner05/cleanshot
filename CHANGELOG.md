@@ -11,6 +11,8 @@ section exists.
 
 ### Added
 
+- Resting the pointer on a button in the editor's toolbar or property strip, or on a
+  control in Settings, shows its name and its shortcut, such as "Highlighter (H)" (D-117).
 - Ctrl+] and Ctrl+[ move the selected shape in front of or behind its neighbour, and
   Ctrl+Shift+] and Ctrl+Shift+[ move it to the front or back. Each move can be undone
   (F-38). Right-clicking a shape opens a menu with the same four moves.

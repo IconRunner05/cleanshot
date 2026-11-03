@@ -26,6 +26,7 @@ use crate::text::{line_width, register_inter};
 use crate::text_box::TextBox;
 use crate::theme::Theme;
 use crate::toolbar::{Replay, toolbar};
+use crate::tooltip::hover_time;
 use crate::{Error, Log};
 use text_input::paint_text_box;
 
@@ -482,7 +483,7 @@ impl EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::for_appearance(window.appearance());
+        let theme = Theme::for_appearance(window.appearance(), hover_time(cx));
         let view = cx.entity().downgrade();
         let picker = view.clone();
         let restacker = view.clone();

@@ -8,6 +8,7 @@ use gpui::{
 use crate::canvas::rgba;
 use crate::theme::{ACCENT, Theme};
 use crate::toolbar::panel;
+use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// The property strip under the toolbar (CHARTER 4, D-55): a radio group for each of
 /// `settings`, with `look`'s values checked, then the document's frame toggles (F-44). `on_set`
@@ -109,6 +110,7 @@ fn group(name: &'static str, role: Role, after: bool, theme: Theme) -> Stateful<
         .id(name)
         .role(role)
         .aria_label(name)
+        .map(|element| with_tooltip(element, tooltip_text(name, None), theme))
         .flex()
         .items_center()
         .gap(px(2.0))

@@ -3,12 +3,12 @@ use std::borrow::Cow;
 use cleanshot_core::{Change, CommandError, History, Tool};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyView, App, AppContext, AssetSource, BoxShadow, Context, Div, ElementId, InteractiveElement,
-    IntoElement, ParentElement, Render, Rgba, Role, SharedString, StatefulInteractiveElement,
-    Styled, Toggled, Window, div, hsla, point, px, svg,
+    AssetSource, BoxShadow, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Rgba,
+    Role, SharedString, StatefulInteractiveElement, Styled, Toggled, div, hsla, point, px, svg,
 };
 
 use crate::theme::{ACCENT, ON_ACCENT, Theme};
+use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// The Lucide icons the editor draws, embedded in the exe under their Lucide names.
 pub(crate) struct Icons;
@@ -112,6 +112,11 @@ const REPLAYS: [(&str, &str, &str, NextChange, Replay); 2] = [
     ("redo-2", "Redo", "Ctrl+Y", History::to_redo, History::redo),
 ];
 
+/// Why the button for `verb` is off (D-117), as in "Nothing to undo".
+fn nothing_to(verb: &str) -> SharedString {
+    format!("Nothing to {}", verb.to_lowercase()).into()
+}
+
 /// The step's name: its verb and what it would change, as in "Undo arrow" (D-116).
 fn step_name(verb: &str, change: Change) -> String {
     let changed = match change {
@@ -144,22 +149,23 @@ pub(crate) fn toolbar(
             .justify_center()
             .rounded(px(7.0));
         let Some(step) = step else {
-            return button.child(icon_of(
-                icon,
-                Rgba {
-                    a: 0.4,
-                    ..theme.text
-                },
-            ));
+            return button
+                .map(|element| with_tooltip(element, nothing_to(verb), theme))
+                .child(icon_of(
+                    icon,
+                    Rgba {
+                        a: 0.4,
+                        ..theme.text
+                    },
+                ));
         };
         let on_replay = on_replay.clone();
-        let tip = SharedString::from(format!("{step} ({keys})"));
         button
             .focusable()
             .tab_stop(true)
             .focus_visible(|button| button.border_2().border_color(ACCENT))
             .hover(move |button| button.bg(theme.hover))
-            .tooltip(move |_, cx| Tooltip::view(tip.clone(), theme, cx))
+            .map(|element| with_tooltip(element, tooltip_text(&step, Some(keys)), theme))
             .on_click(move |_, window, cx| on_replay(replay, window, cx))
             .child(icon_of(icon, theme.text))
     });
@@ -174,6 +180,7 @@ pub(crate) fn toolbar(
             .role(Role::RadioButton)
             .aria_label(name)
             .aria_keyshortcuts(key.to_string())
+            .map(|element| with_tooltip(element, tooltip_text(name, Some(&key.to_string())), theme))
             .aria_toggled(if picked {
                 Toggled::True
             } else {
@@ -207,33 +214,6 @@ fn icon_of(icon: &str, color: Rgba) -> impl IntoElement {
         .path(format!("icons/{icon}.svg"))
         .size(px(16.0))
         .text_color(color)
-}
-
-/// The text shown while the pointer rests on a toolbar button.
-struct Tooltip {
-    text: SharedString,
-    theme: Theme,
-}
-
-impl Tooltip {
-    fn view(text: SharedString, theme: Theme, cx: &mut App) -> AnyView {
-        cx.new(|_| Self { text, theme }).into()
-    }
-}
-
-impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(px(8.0))
-            .py(px(4.0))
-            .rounded(px(7.0))
-            .bg(self.theme.material)
-            .border_1()
-            .border_color(self.theme.hairline)
-            .text_color(self.theme.text)
-            .text_size(px(12.0))
-            .child(self.text.clone())
-    }
 }
 
 /// A floating panel (CHARTER 4): dark material, hairline border, soft shadow, 12 px corners,
@@ -301,6 +281,12 @@ mod tests {
                 "{verb}"
             );
         }
+    }
+
+    #[test]
+    fn d117_undo_and_redo_say_why_they_are_off() {
+        let off = REPLAYS.map(|(_, verb, ..)| nothing_to(verb));
+        assert_eq!(off, ["Nothing to undo", "Nothing to redo"]);
     }
 
     #[test]

@@ -162,6 +162,11 @@ fn started(
     earlier: [Option<String>; 4],
     marks: [(&str, Result<Duration, LogError>); 3],
 ) {
+    // D-117: read once; unread, tooltips keep GPUI's delay.
+    match cleanshot_win::hover_time() {
+        Ok(hover) => cleanshot_editor::follow_hover_time(cx, hover),
+        Err(error) => session.log_failure("editor", "hover_time not_read", &error),
+    }
     for problem in policy_problems {
         session.log_line("policy", |_| format!("problem {problem}"));
     }

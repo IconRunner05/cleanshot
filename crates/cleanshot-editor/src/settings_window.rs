@@ -16,6 +16,7 @@ use gpui::{
 
 use crate::text::register_inter;
 use crate::theme::{ACCENT, Theme};
+use crate::tooltip::{hover_time, tooltip_text, with_tooltip};
 use crate::{Error, Log};
 
 type Apply = Rc<dyn Fn(Settings) -> Applied>;
@@ -255,7 +256,7 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::for_appearance(window.appearance());
+        let theme = Theme::for_appearance(window.appearance(), hover_time(cx));
         let settings = (self.current)();
         let capture = section("Capture", theme)
             .child(radio_group(
@@ -529,6 +530,7 @@ fn control(id: &str, name: &str, role: Role, pressed: bool, theme: Theme) -> Sta
         .tab_stop(true)
         .role(role)
         .aria_label(SharedString::from(name.to_owned()))
+        .map(|element| with_tooltip(element, tooltip_text(name, None), theme))
         .focus_visible(|control| control.border_2().border_color(ACCENT))
         .h(px(28.0))
         .px(px(10.0))
