@@ -1,20 +1,24 @@
-/// A control on the capture toolbar (F-05).
+use crate::CaptureMode;
+
+/// A control on the capture toolbar (F-05) or the capture panel (F-11).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolbarControl {
+    Mode(CaptureMode),
+    Timer,
+    Capture,
     Copy,
     Save,
     Edit,
     Cancel,
 }
 
-/// The toolbar's controls in the order it shows them, Tab visits them and UI Automation lists
-/// them.
-pub const TOOLBAR_CONTROLS: [ToolbarControl; 4] = [
-    ToolbarControl::Copy,
-    ToolbarControl::Save,
-    ToolbarControl::Edit,
-    ToolbarControl::Cancel,
-];
+/// Where the toolbar is shown: on the capture panel before a selection (F-11), or on the
+/// frozen screen after one (F-05).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toolbar {
+    Panel,
+    Overlay,
+}
 
 /// Which way Tab moves the toolbar's focus: Tab forward, Shift+Tab back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,26 +27,59 @@ pub enum TabDirection {
     Back,
 }
 
-impl ToolbarControl {
-    /// The control Tab moves to from this one in `direction`, wrapping at either end and
-    /// passing over a control that is `off` (F-57). `off` is never asked about Cancel, so a
-    /// step always ends, on Cancel at the latest.
+const PANEL: [ToolbarControl; 6] = [
+    ToolbarControl::Mode(CaptureMode::Region),
+    ToolbarControl::Mode(CaptureMode::Window),
+    ToolbarControl::Mode(CaptureMode::FullScreen),
+    ToolbarControl::Timer,
+    ToolbarControl::Capture,
+    ToolbarControl::Cancel,
+];
+
+const OVERLAY: [ToolbarControl; 4] = [
+    ToolbarControl::Copy,
+    ToolbarControl::Save,
+    ToolbarControl::Edit,
+    ToolbarControl::Cancel,
+];
+
+impl Toolbar {
+    /// The controls in the order the toolbar shows them, Tab visits them and UI Automation
+    /// lists them. Cancel is in every list.
     #[must_use]
-    pub fn step(self, direction: TabDirection, off: impl Fn(Self) -> bool) -> Self {
-        let mut next = self.moved(direction);
-        while next != Self::Cancel && off(next) {
-            next = next.moved(direction);
+    pub fn controls(self) -> &'static [ToolbarControl] {
+        match self {
+            Self::Panel => &PANEL,
+            Self::Overlay => &OVERLAY,
         }
-        next
     }
 
-    fn moved(self, direction: TabDirection) -> Self {
-        let count = TOOLBAR_CONTROLS.len();
-        let at = self as usize;
-        TOOLBAR_CONTROLS[match direction {
-            TabDirection::Forward => at + 1,
-            TabDirection::Back => at + count - 1,
-        } % count]
+    /// The control Tab moves to from `from` in `direction`, wrapping at either end and
+    /// passing over a control that is `off` (F-57). From a control this toolbar does not
+    /// show, Tab enters at its first control, Shift+Tab at its last. `off` is never asked
+    /// about Cancel, so a step always ends, on Cancel at the latest.
+    #[must_use]
+    pub fn step(
+        self,
+        from: ToolbarControl,
+        direction: TabDirection,
+        off: impl Fn(ToolbarControl) -> bool,
+    ) -> ToolbarControl {
+        let controls = self.controls();
+        let count = controls.len();
+        let moved = |at: usize| match direction {
+            TabDirection::Forward => (at + 1) % count,
+            TabDirection::Back => (at + count - 1) % count,
+        };
+        let mut at = match (controls.iter().position(|&shown| shown == from), direction) {
+            (Some(at), _) => moved(at),
+            (None, TabDirection::Forward) => 0,
+            (None, TabDirection::Back) => count - 1,
+        };
+        while controls[at] != ToolbarControl::Cancel && off(controls[at]) {
+            at = moved(at);
+        }
+        controls[at]
     }
 }
 
@@ -50,22 +87,54 @@ impl ToolbarControl {
 mod tests {
     use super::*;
 
+    const EVERY_TOOLBAR: [Toolbar; 2] = [Toolbar::Panel, Toolbar::Overlay];
+    const NONE_OFF: fn(ToolbarControl) -> bool = |_| false;
+
     #[test]
-    fn f05_the_toolbar_lists_each_control_once_in_the_order_it_is_declared() {
-        for (at, control) in TOOLBAR_CONTROLS.into_iter().enumerate() {
-            assert_eq!(control as usize, at);
+    fn f05_f11_each_toolbar_lists_each_control_once_and_cancel_last() {
+        for toolbar in EVERY_TOOLBAR {
+            let controls = toolbar.controls();
+            for (at, control) in controls.iter().enumerate() {
+                assert!(!controls[..at].contains(control), "{control:?} twice");
+            }
+            assert_eq!(controls.last(), Some(&ToolbarControl::Cancel));
         }
     }
 
     #[test]
-    fn f05_tab_wraps_at_either_end() {
-        let on = |_| false;
+    fn f11_the_panel_shows_the_three_modes_then_timer_capture_and_cancel() {
         assert_eq!(
-            ToolbarControl::Cancel.step(TabDirection::Forward, on),
-            ToolbarControl::Copy
+            Toolbar::Panel.controls(),
+            [
+                ToolbarControl::Mode(CaptureMode::Region),
+                ToolbarControl::Mode(CaptureMode::Window),
+                ToolbarControl::Mode(CaptureMode::FullScreen),
+                ToolbarControl::Timer,
+                ToolbarControl::Capture,
+                ToolbarControl::Cancel,
+            ]
+        );
+    }
+
+    #[test]
+    fn f05_tab_wraps_at_either_end_of_each_toolbar() {
+        for toolbar in EVERY_TOOLBAR {
+            let controls = toolbar.controls();
+            let (first, last) = (controls[0], controls[controls.len() - 1]);
+            assert_eq!(toolbar.step(last, TabDirection::Forward, NONE_OFF), first);
+            assert_eq!(toolbar.step(first, TabDirection::Back, NONE_OFF), last);
+        }
+    }
+
+    #[test]
+    fn f11_tab_from_a_control_the_toolbar_does_not_show_enters_at_either_end() {
+        let elsewhere = ToolbarControl::Copy;
+        assert_eq!(
+            Toolbar::Panel.step(elsewhere, TabDirection::Forward, NONE_OFF),
+            ToolbarControl::Mode(CaptureMode::Region)
         );
         assert_eq!(
-            ToolbarControl::Copy.step(TabDirection::Back, on),
+            Toolbar::Panel.step(elsewhere, TabDirection::Back, NONE_OFF),
             ToolbarControl::Cancel
         );
     }
@@ -76,27 +145,28 @@ mod tests {
             assert_ne!(control, ToolbarControl::Cancel, "Cancel is never off");
             true
         };
-        for control in TOOLBAR_CONTROLS {
-            assert_eq!(
-                control.step(TabDirection::Forward, off),
-                ToolbarControl::Cancel
-            );
-            assert_eq!(
-                control.step(TabDirection::Back, off),
-                ToolbarControl::Cancel
-            );
+        for toolbar in EVERY_TOOLBAR {
+            for &control in toolbar.controls() {
+                for direction in [TabDirection::Forward, TabDirection::Back] {
+                    assert_eq!(
+                        toolbar.step(control, direction, off),
+                        ToolbarControl::Cancel
+                    );
+                }
+            }
         }
     }
 
     #[test]
     fn f57_tab_passes_over_save_while_saving_is_off() {
         let off = |control| control == ToolbarControl::Save;
+        let overlay = Toolbar::Overlay;
         assert_eq!(
-            ToolbarControl::Copy.step(TabDirection::Forward, off),
+            overlay.step(ToolbarControl::Copy, TabDirection::Forward, off),
             ToolbarControl::Edit
         );
         assert_eq!(
-            ToolbarControl::Edit.step(TabDirection::Back, off),
+            overlay.step(ToolbarControl::Edit, TabDirection::Back, off),
             ToolbarControl::Copy
         );
     }

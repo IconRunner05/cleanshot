@@ -60,4 +60,4 @@ pub use text_edit::{
 };
 pub use timer::Timer;
 pub use tool::Tool;
-pub use toolbar::{TOOLBAR_CONTROLS, TabDirection, ToolbarControl};
+pub use toolbar::{TabDirection, Toolbar, ToolbarControl};
