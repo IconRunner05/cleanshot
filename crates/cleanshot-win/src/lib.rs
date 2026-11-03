@@ -28,7 +28,10 @@ mod tray_icon;
 mod window_state;
 
 pub use render_target::release_factory;
+use std::ffi::c_void;
+use std::num::NonZeroIsize;
 pub use toolbar::hover_time;
+
 use windows::Win32::Foundation::{ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -36,7 +39,7 @@ use windows::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    IDC_ARROW, LoadCursorW, RegisterClassExW, WNDCLASSEXW,
+    IDC_ARROW, LoadCursorW, RegisterClassExW, SetForegroundWindow, WNDCLASSEXW,
 };
 use windows::core::PCWSTR;
 
@@ -104,6 +107,21 @@ pub(crate) fn round_window(
     Ok(())
 }
 
+/// D-124: brings `window`, shown by this process after the user's own click or hotkey, to the
+/// foreground and gives it the keyboard.
+///
+/// # Errors
+///
+/// [`Error::ForegroundRefused`] if Windows keeps another window in front, as it does when the
+/// user has gone on working elsewhere.
+pub fn bring_to_front(window: NonZeroIsize) -> Result<(), Error> {
+    // SAFETY: a handle to no window is refused, not dereferenced.
+    if unsafe { SetForegroundWindow(HWND(window.get() as *mut c_void)) }.as_bool() {
+        return Ok(());
+    }
+    Err(Error::ForegroundRefused)
+}
+
 /// The size of the Win32 struct `T`, as its `cbSize` field takes it.
 pub(crate) fn struct_size<T>() -> u32 {
     u32::try_from(size_of::<T>()).expect("a Win32 struct is smaller than 4 GiB")
@@ -142,6 +160,9 @@ pub enum Error {
     WarningNotShown,
     #[error("the shell had no tray icon to remove")]
     IconNotRemoved,
+    /// Windows documents no error code for refusing a window the foreground.
+    #[error("Windows kept another window in front")]
+    ForegroundRefused,
     #[cfg(feature = "ui-automation-test")]
     #[error("UI Automation could not read this process's windows")]
     Accessibility(#[source] windows::core::Error),
@@ -166,4 +187,18 @@ pub enum Error {
     Text(#[source] windows::core::Error),
     #[error("a glyph mask has an impossible size")]
     TextMaskShape(#[from] cleanshot_core::GlyphMaskError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn d124_windows_refuses_to_bring_a_handle_to_no_window_to_the_front() {
+        let no_window = NonZeroIsize::new(0x7FFF_0001).expect("not zero");
+        assert!(matches!(
+            bring_to_front(no_window),
+            Err(Error::ForegroundRefused)
+        ));
+    }
 }
