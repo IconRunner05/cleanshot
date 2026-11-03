@@ -6,9 +6,7 @@ use cleanshot_core::{
 };
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U;
-use windows::Win32::Graphics::Direct2D::{
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
-};
+use windows::Win32::Graphics::Direct2D::ID2D1HwndRenderTarget;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_SPACE, VK_TAB,
@@ -279,9 +277,7 @@ fn surface(
     options: Options,
     listener: Listener,
 ) -> windows::core::Result<Surface> {
-    // SAFETY: D2D1CreateFactory has no preconditions.
-    let factory: ID2D1Factory =
-        unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }?;
+    let factory = crate::render_target::factory()?;
     let pill = layout.pill;
     let target = target(
         &factory,

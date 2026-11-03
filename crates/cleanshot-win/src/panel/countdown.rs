@@ -6,8 +6,7 @@ use cleanshot_core::{Timer, Toolbar};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ROUNDED_RECT, D2D1CreateFactory, ID2D1Factory,
-    ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
+    D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -261,9 +260,7 @@ fn surface(
     timer: Timer,
     listener: Listener,
 ) -> windows::core::Result<Surface> {
-    // SAFETY: D2D1CreateFactory has no preconditions.
-    let factory: ID2D1Factory =
-        unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }?;
+    let factory = crate::render_target::factory()?;
     let target = target(
         &factory,
         window,

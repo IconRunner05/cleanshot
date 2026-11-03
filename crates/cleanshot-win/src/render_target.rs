@@ -1,11 +1,14 @@
+use std::cell::OnceCell;
+
 use cleanshot_core::RgbaImage;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_PROPERTIES, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    ID2D1Bitmap, ID2D1Factory, ID2D1HwndRenderTarget,
+    D2D1_BITMAP_PROPERTIES, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1CreateFactory, ID2D1Bitmap, ID2D1Factory,
+    ID2D1HwndRenderTarget,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
@@ -15,6 +18,24 @@ const FORMAT: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT {
     format: DXGI_FORMAT_B8G8R8A8_UNORM,
     alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
 };
+
+thread_local! {
+    static FACTORY: OnceCell<ID2D1Factory> = const { OnceCell::new() };
+}
+
+/// P-01: this thread's Direct2D factory, made on first use and kept, so every window's render
+/// target shares the device Direct2D made for the first one instead of making its own.
+pub(crate) fn factory() -> windows::core::Result<ID2D1Factory> {
+    FACTORY.with(|kept| {
+        if let Some(factory) = kept.get() {
+            return Ok(factory.clone());
+        }
+        // SAFETY: D2D1CreateFactory has no preconditions.
+        let factory: ID2D1Factory =
+            unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }?;
+        Ok(kept.get_or_init(|| factory).clone())
+    })
+}
 
 /// A render target for `window`, `target` physical pixels.
 pub(crate) fn target(
@@ -80,4 +101,18 @@ pub(crate) fn bgra(image: &RgbaImage) -> Vec<u8> {
         pixel.swap(0, 2);
     }
     bgra
+}
+
+#[cfg(test)]
+mod tests {
+    use windows::core::Interface;
+
+    use super::*;
+
+    #[test]
+    fn p01_every_window_on_a_thread_draws_through_one_direct2d_factory() {
+        let first = factory().expect("Direct2D starts");
+        let second = factory().expect("Direct2D starts");
+        assert_eq!(first.as_raw(), second.as_raw());
+    }
 }

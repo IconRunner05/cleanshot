@@ -7,9 +7,6 @@ use cleanshot_core::{
     OptionsEntry, OptionsItem, Pickable, Rect, SavingOff, Toolbar, ToolbarControl,
 };
 use windows::Win32::Foundation::{HWND, POINT, RECT};
-use windows::Win32::Graphics::Direct2D::{
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory,
-};
 use windows::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, GetCursorPos, SW_SHOWNOACTIVATE, ShowWindow,
@@ -269,10 +266,7 @@ impl Overlay {
     /// overlay then most likely cannot open either.
     pub fn prewarm() -> Result<(), Error> {
         register_class()?;
-        // SAFETY: D2D1CreateFactory has no preconditions.
-        let factory: ID2D1Factory =
-            unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
-                .map_err(Error::Window)?;
+        let factory = crate::render_target::factory().map_err(Error::Window)?;
         let palette = Palette::current().map_err(Error::Window)?;
         window::prewarm(&factory, &palette).map_err(Error::Window)
     }
@@ -298,10 +292,7 @@ impl Overlay {
     ) -> Result<Self, Error> {
         let mut stages = Stages::new();
         register_class()?;
-        // SAFETY: D2D1CreateFactory has no preconditions.
-        let factory: ID2D1Factory =
-            unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
-                .map_err(Error::Window)?;
+        let factory = crate::render_target::factory().map_err(Error::Window)?;
         stages.mark("factory");
         let host = toolbar_monitor(captures).map_err(Error::Monitor)?;
         let toolbar = match host {
