@@ -16,7 +16,9 @@ use cleanshot_core::{
     SettingsProblem, delivery_notice,
 };
 use cleanshot_editor::{AsyncApp, ask_save_path};
-use cleanshot_win::capture::{Copied, MonitorImage, OutputReport, RECT, black_share};
+use cleanshot_win::capture::{
+    AdapterReport, Copied, MonitorImage, OutputReport, RECT, black_share,
+};
 use cleanshot_win::instance::Launch;
 use cleanshot_win::log::{Log, Usage, os_code, since_start, usage};
 use cleanshot_win::overlay::Overlay;
@@ -353,9 +355,15 @@ impl Session {
         self.log_line("perf", line);
     }
 
-    /// Under `--log`, how the desktop was copied, what DXGI said of each output, and how much
-    /// of each monitor came out black.
-    fn log_capture(&self, copied: &Copied, outputs: &[OutputReport], monitors: &[MonitorImage]) {
+    /// Under `--log`, how the desktop was copied, what DXGI said of each adapter and output, and
+    /// how much of each monitor came out black.
+    fn log_capture(
+        &self,
+        copied: &Copied,
+        adapters: &[AdapterReport],
+        outputs: &[OutputReport],
+        monitors: &[MonitorImage],
+    ) {
         if self.log.borrow().is_none() {
             return;
         }
@@ -363,6 +371,9 @@ impl Session {
             Copied::Duplication => String::from("copied=duplication"),
             Copied::Gdi { because } => format!("copied=gdi because={because:?}"),
         });
+        for adapter in adapters {
+            self.log_line("capture", |_| format!("adapter {adapter:?}"));
+        }
         for output in outputs {
             self.log_line("capture", |_| format!("output {output:?}"));
         }

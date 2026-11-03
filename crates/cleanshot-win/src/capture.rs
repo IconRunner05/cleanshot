@@ -132,12 +132,23 @@ pub(crate) fn dpi_scale(bounds: RECT) -> windows::core::Result<f32> {
     Ok(x as f32 / DESKTOP_DPI)
 }
 
-/// What the hotkey path copied (D-28), and what each output's duplication did, for `--log`.
+/// What the hotkey path copied (D-28), and what each adapter and output's duplication did,
+/// for `--log`.
 #[derive(Debug)]
 pub struct Desktop {
     pub monitors: Vec<MonitorImage>,
     pub copied: Copied,
+    pub adapters: Vec<AdapterReport>,
     pub outputs: Vec<OutputReport>,
+}
+
+/// One adapter as DXGI listed it, and how long its Direct3D device took to make; None when
+/// no device was made.
+#[derive(Debug)]
+pub struct AdapterReport {
+    pub adapter: String,
+    pub vendor: u32,
+    pub device: Option<Duration>,
 }
 
 /// How [`Desktop::monitors`] were copied.
@@ -173,6 +184,12 @@ pub struct FrameReport {
     pub desktop_updated: bool,
     pub pointer_updated: bool,
     pub protected_content_masked: bool,
+    /// How long `DuplicateOutput` took.
+    pub duplicate: Duration,
+    /// How long the wait for this frame took.
+    pub acquire: Duration,
+    /// How long the frame took to reach memory as RGBA; None when it did not.
+    pub copy: Option<Duration>,
 }
 
 /// Copies every monitor with Desktop Duplication, or with GDI `BitBlt` when any output
@@ -183,6 +200,7 @@ pub struct FrameReport {
 /// The GDI copy's error when duplication was refused and GDI failed too.
 pub fn capture_desktop() -> Result<Desktop, Error> {
     let Duplicates {
+        adapters,
         reports: outputs,
         results,
     } = duplicate_all();
@@ -190,11 +208,13 @@ pub fn capture_desktop() -> Result<Desktop, Error> {
         Ok(monitors) => Ok(Desktop {
             monitors,
             copied: Copied::Duplication,
+            adapters,
             outputs,
         }),
         Err(because) => Ok(Desktop {
             monitors: capture_all(Method::GdiBitBlt)?,
             copied: Copied::Gdi { because },
+            adapters,
             outputs,
         }),
     }
@@ -358,10 +378,11 @@ fn bitblt(bounds: RECT) -> Result<MonitorImage, Error> {
     }
 }
 
-/// Every listed output's report, and one result per output, or one error for a factory,
-/// adapter or output that fails before it can be duplicated.
+/// Every listed adapter's and output's report, and one result per output, or one error for a
+/// factory, adapter or output that fails before it can be duplicated.
 #[derive(Default)]
 struct Duplicates {
+    adapters: Vec<AdapterReport>,
     reports: Vec<OutputReport>,
     results: Vec<Result<MonitorImage, Error>>,
 }
@@ -398,6 +419,7 @@ fn duplicate_adapter(adapter: &IDXGIAdapter1, duplicates: &mut Duplicates) {
     };
     let mut device = None;
     let mut context = None;
+    let making = Instant::now();
     // SAFETY: the device is created on `adapter`, as DuplicateOutput requires; outputs are
     // written only on success.
     let created = unsafe {
@@ -413,6 +435,11 @@ fn duplicate_adapter(adapter: &IDXGIAdapter1, duplicates: &mut Duplicates) {
             Some(&raw mut context),
         )
     };
+    duplicates.adapters.push(AdapterReport {
+        adapter: name.clone(),
+        vendor,
+        device: created.is_ok().then(|| making.elapsed()),
+    });
     if let Err(error) = created {
         return duplicates.results.push(Err(Error::Capture(error)));
     }
@@ -494,21 +521,29 @@ fn duplicate_output(
     frame: &mut Option<FrameReport>,
 ) -> Result<MonitorImage, Error> {
     let (width, height) = size_of_rect(bounds)?;
+    let duplicating = Instant::now();
     // SAFETY: `device` belongs to this output's adapter.
     let duplication = unsafe { output.DuplicateOutput(device) }.map_err(Error::Capture)?;
+    let duplicate = duplicating.elapsed();
     // SAFETY: a read of the duplication's own description.
     let description = unsafe { duplication.GetDesc() };
     copyable(&description, width, height)?;
     let format = description.ModeDesc.Format.0;
+    let acquiring = Instant::now();
     let (frame_info, resource) = desktop_frame(&duplication)?;
-    *frame = Some(FrameReport {
+    let acquire = acquiring.elapsed();
+    let report = frame.insert(FrameReport {
         format,
         pointer_only_frames: frame_info.pointer_only_frames,
         accumulated_frames: frame_info.info.AccumulatedFrames,
         desktop_updated: frame_info.info.LastPresentTime != 0,
         pointer_updated: frame_info.info.LastMouseUpdateTime != 0,
         protected_content_masked: frame_info.info.ProtectedContentMaskedOut.as_bool(),
+        duplicate,
+        acquire,
+        copy: None,
     });
+    let copying = Instant::now();
     let copied = resource
         .cast::<ID3D11Texture2D>()
         .map_err(Error::Capture)
@@ -518,10 +553,9 @@ fn duplicate_output(
     debug_assert!(released.is_ok(), "an acquired frame releases");
     let mut pixels = copied?;
     bgra_to_rgba(&mut pixels);
-    Ok(MonitorImage {
-        bounds,
-        image: RgbaImage::new(width, height, pixels)?,
-    })
+    let image = RgbaImage::new(width, height, pixels)?;
+    report.copy = Some(copying.elapsed());
+    Ok(MonitorImage { bounds, image })
 }
 
 /// D-28: `copy_to_cpu` reads upright 8-bit BGRA frames `width` x `height`; GDI copies the rest.
@@ -878,7 +912,19 @@ mod tests {
             );
             let frame = output.frame.expect("a duplicated output names its frame");
             assert_eq!(frame.format, DXGI_FORMAT_B8G8R8A8_UNORM.0, "{output:?}");
+            assert!(
+                frame.copy.is_some(),
+                "a copied frame says how long: {output:?}"
+            );
         }
+        assert!(
+            desktop
+                .adapters
+                .iter()
+                .any(|adapter| adapter.device.is_some()),
+            "the duplicating adapter says how long its device took: {:?}",
+            desktop.adapters
+        );
     }
 
     #[test]

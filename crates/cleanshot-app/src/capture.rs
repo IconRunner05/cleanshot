@@ -119,16 +119,22 @@ pub(super) fn capture(
     session.panel.borrow_mut().take();
     session.countdown.borrow_mut().take();
     session.captures_started.update(|started| started + 1);
+    let stage = |name: &str| {
+        session.perf(|_| format!("P-01 {name}_ms={}", asked.elapsed().as_millis()));
+    };
+    stage("started");
     let defer: Rc<Defer> = Rc::new(defer);
     let pass_on: Rc<PassOn> = Rc::new(pass_on);
     let Some(Desktop {
         monitors: captures,
         copied,
+        adapters,
         outputs,
     }) = copy_screen(session)
     else {
         return;
     };
+    stage("screen_copied");
     let under_pointer = || match monitor_under_cursor(&captures) {
         Ok(monitor) => Some(monitor),
         Err(error) => {
@@ -153,7 +159,7 @@ pub(super) fn capture(
         under_pointer,
     ) {
         None => {
-            session.log_capture(&copied, &outputs, &captures);
+            session.log_capture(&copied, &adapters, &outputs, &captures);
             return session.sample_after_use(&*defer);
         }
         Some(Plan::Overlay(selected)) => (selected, false),
@@ -162,12 +168,13 @@ pub(super) fn capture(
             if let Some(image) = finish(session, &captures, selected, Output::Copy) {
                 thumbnail::show(session, image, selected, &defer, &pass_on);
             }
-            session.log_capture(&copied, &outputs, &captures);
+            session.log_capture(&copied, &adapters, &outputs, &captures);
             return session.sample_after_use(&*defer);
         }
     };
     // F-08: listed before the overlay opens, so the list never holds it.
     let pickable = listed_windows(session, &captures);
+    stage("windows_listed");
     let captures = Rc::new(captures);
     let frozen = Rc::clone(&captures);
     let saving_off = match session.policy.saving() {
@@ -191,12 +198,12 @@ pub(super) fn capture(
                 shown.pick_window();
             }
             *session.overlay.borrow_mut() = Some(shown);
-            session.perf(|_| format!("P-01 overlay_visible_ms={}", asked.elapsed().as_millis()));
+            stage("overlay_visible");
         }
         Err(error) => session.warn(Warning::Failed("The overlay could not open", &error)),
     }
     // P-01: the black-share pass runs after the overlay is visible.
-    session.log_capture(&copied, &outputs, &captures);
+    session.log_capture(&copied, &adapters, &outputs, &captures);
 }
 
 /// What the overlay's events do: an Options pick applies and leaves it open (F-12); every
