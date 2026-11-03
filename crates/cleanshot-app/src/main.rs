@@ -472,6 +472,7 @@ fn refused_kind(error: &DeliveryError) -> &'static str {
         DeliveryError::NoFreeName { .. } => "NoFreeName",
         DeliveryError::NotWritten { .. } => "NotWritten",
         DeliveryError::TextNotDrawn => "TextNotDrawn",
+        DeliveryError::ImageNotMade => "ImageNotMade",
         DeliveryError::NoSaveDialog => "NoSaveDialog",
         DeliveryError::SavingOff(SavingOff::ClipboardOnly) => "SavingOff ClipboardOnly",
         DeliveryError::SavingOff(SavingOff::FolderNotValid) => "SavingOff FolderNotValid",

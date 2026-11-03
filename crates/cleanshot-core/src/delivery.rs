@@ -33,6 +33,8 @@ pub enum DeliveryError {
     NotWritten { folder: PathBuf },
     #[error("the text could not be drawn")]
     TextNotDrawn,
+    #[error("the image could not be made from the capture and its markup")]
+    ImageNotMade,
     #[error("the Save As dialog did not open")]
     NoSaveDialog,
     #[error("the organisation's policy turns saving off: {0:?}")]
@@ -75,6 +77,7 @@ pub fn delivery_notice(outcome: &Result<Delivered, DeliveryError>) -> String {
         Err(DeliveryError::TextNotDrawn) => {
             "The text could not be drawn, so nothing was copied or saved".to_owned()
         }
+        Err(DeliveryError::ImageNotMade) => "The image could not be made. Try again.".to_owned(),
         Err(DeliveryError::NoSaveDialog) => "The Save As dialog did not open".to_owned(),
         Err(DeliveryError::SavingOff(off)) => saving_off_notice(*off),
         Err(DeliveryError::OutsidePolicyFolder { folder }) => {
@@ -149,6 +152,14 @@ mod tests {
             height: 9,
         };
         assert!(notice(Err(large)).contains("70000x9"));
+    }
+
+    #[test]
+    fn d120_an_image_that_could_not_be_made_says_so_and_to_try_again() {
+        assert_eq!(
+            delivery_notice(&Err(DeliveryError::ImageNotMade)),
+            "The image could not be made. Try again."
+        );
     }
 
     #[test]
