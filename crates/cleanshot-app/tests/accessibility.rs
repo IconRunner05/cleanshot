@@ -89,6 +89,7 @@ fn main() {
                         .expect("the walk thread waits for the first frame");
                 }
             },
+            |_| {},
         );
         if let Err(error) = opened {
             println!("the editor did not open: {error}");

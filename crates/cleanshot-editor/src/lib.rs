@@ -27,6 +27,10 @@ pub use crate::settings_window::open_settings;
 pub use crate::text::em_widths;
 use crate::toolbar::Icons;
 
+/// Where the editor writes a diagnostic for the --log file: fixed words, never an error's own
+/// text, which can name a path or hold what the user typed (C-23).
+type Log = Rc<dyn Fn(&'static str)>;
+
 /// Why the editor could not start, open a window or run the bench.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

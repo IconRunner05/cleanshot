@@ -73,6 +73,7 @@ fn main() {
             },
             false,
             |_| Ok(()),
+            |_| {},
         );
         if !matches!(refused, Err(cleanshot_editor::Error::SettingsHidden)) {
             left_as_found.finish(Err(format!("HideSettings opened the window: {refused:?}")));
@@ -107,6 +108,7 @@ fn main() {
                     remove_run_value()
                 }
             },
+            |_| {},
         );
         match opened_now {
             Ok(()) => opened

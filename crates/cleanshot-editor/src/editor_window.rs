@@ -18,7 +18,6 @@ use gpui::{
     WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
 
-use crate::Error;
 use crate::canvas::{
     OnPointer, Overlay, Pointer, RedactionPreviews, document_canvas, render_image,
 };
@@ -28,6 +27,7 @@ use crate::text::register_inter;
 use crate::text_box::TextBox;
 use crate::theme::Theme;
 use crate::toolbar::toolbar;
+use crate::{Error, Log};
 use text_input::paint_text_box;
 
 type Deliver = Box<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
@@ -59,6 +59,7 @@ struct EditorView {
     /// How each tool draws, as the property strip sets it; not part of the document.
     looks: Looks,
     redactions: Rc<RedactionPreviews>,
+    log: Log,
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
     placement: Option<Placement>,
@@ -79,6 +80,7 @@ impl EditorView {
     fn new(
         document: Document,
         outputs: Option<Outputs>,
+        log: Log,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -103,7 +105,8 @@ impl EditorView {
             drag: None,
             text_box: None,
             looks: Looks::default(),
-            redactions: Rc::default(),
+            redactions: Rc::new(RedactionPreviews::new(Rc::clone(&log))),
+            log,
             shift: false,
             placement: None,
             space_held: false,
@@ -297,7 +300,8 @@ impl EditorView {
                 return;
             }
         };
-        let dialog = ask_save_path(cx, &folder, &name);
+        let log = Rc::clone(&self.log);
+        let dialog = ask_save_path(cx, &folder, &name, move |event| log(event));
         self.save_as = Some(cx.spawn_in(window, async move |view, cx| {
             let chosen = dialog.await;
             // Err only means the window closed while the dialog was open, with nothing to save.
@@ -496,21 +500,23 @@ impl Render for EditorView {
 
 /// F-22: opens the Save As dialog on `folder`, offering `name`. The answer is the path the
 /// user confirmed, [`DeliveryError::NoSaveDialog`] if the dialog failed, or `None` for a cancel.
-pub fn ask_save_path(
+/// Why it failed goes to `log`.
+pub fn ask_save_path<L: Fn(&'static str) + 'static>(
     cx: &App,
     folder: &Path,
     name: &str,
-) -> impl Future<Output = Option<Result<PathBuf, DeliveryError>>> + use<> {
+    log: L,
+) -> impl Future<Output = Option<Result<PathBuf, DeliveryError>>> + use<L> {
     let dialog = cx.prompt_for_new_path(folder, Some(name));
     async move {
         match dialog.await {
             Ok(Ok(chosen)) => chosen.map(Ok),
-            Ok(Err(error)) => {
-                eprintln!("the Save As dialog did not open: {error:#}");
+            Ok(Err(_)) => {
+                log("save_dialog not_opened");
                 Some(Err(DeliveryError::NoSaveDialog))
             }
-            Err(dropped) => {
-                eprintln!("the Save As dialog closed with no answer: {dropped}");
+            Err(_) => {
+                log("save_dialog no_answer");
                 Some(Err(DeliveryError::NoSaveDialog))
             }
         }
@@ -525,6 +531,7 @@ pub struct EditorWindow(WindowHandle<EditorView>);
 /// dialog on the folder and file name `save_as_start` gives at that moment, or shows why it
 /// cannot, and hands the document and the confirmed path to `save_to` (F-22). `on_first_frame`
 /// gets the moment the frame after the window's first draw begins (P-07), as the bench times it.
+/// What fails out of sight, such as a redaction preview, goes to `log`.
 ///
 /// # Errors
 ///
@@ -536,6 +543,7 @@ pub fn open(
     save_as_start: impl Fn() -> Result<(PathBuf, String), DeliveryError> + 'static,
     save_to: impl Fn(&Path, &Document) -> Result<Delivered, DeliveryError> + 'static,
     on_first_frame: impl FnOnce(Instant) + 'static,
+    log: impl Fn(&'static str) + 'static,
 ) -> Result<EditorWindow, Error> {
     let document = Document::new(Arc::new(capture));
     let outputs = Outputs {
@@ -543,9 +551,15 @@ pub fn open(
         save_as_start: Box::new(save_as_start),
         save_to: Box::new(save_to),
     };
-    open_with(cx, document, Some(outputs), move |window, _| {
-        window.on_next_frame(move |_, _| on_first_frame(Instant::now()));
-    })
+    open_with(
+        cx,
+        document,
+        Some(outputs),
+        Rc::new(log),
+        move |window, _| {
+            window.on_next_frame(move |_, _| on_first_frame(Instant::now()));
+        },
+    )
 }
 
 /// [`open`], running `on_open` on the new window before its first frame. `on_open` runs only
@@ -554,13 +568,14 @@ pub(crate) fn open_with(
     cx: &mut App,
     document: Document,
     outputs: Option<Outputs>,
+    log: Log,
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
     register_inter(cx)?;
     let options = window_options(cx);
     cx.open_window(options, |window, cx| {
         on_open(window, cx);
-        cx.new(|cx| EditorView::new(document, outputs, window, cx))
+        cx.new(|cx| EditorView::new(document, outputs, log, window, cx))
     })
     .map(EditorWindow)
     .map_err(|error| Error::WindowOpen(error.into()))

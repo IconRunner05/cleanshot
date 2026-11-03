@@ -27,6 +27,10 @@ pub(super) fn open_settings(cx: &mut cleanshot_editor::App, session: &Rc<Session
             let logging = Rc::clone(session);
             move |on| set_start_with_windows(&logging, on)
         },
+        {
+            let logging = Rc::clone(session);
+            move |event| logging.log_line("settings", |_| event.to_owned())
+        },
     );
     if let Err(error) = opened {
         session.warn(&format!("The settings window did not open: {error}."));

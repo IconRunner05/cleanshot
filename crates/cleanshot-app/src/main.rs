@@ -424,6 +424,10 @@ fn open_editor(cx: &mut cleanshot_editor::App, image: RgbaImage, session: &Rc<Se
         editor_save_as_start(session),
         editor_save_to(session),
         editor_first_frame(session),
+        {
+            let logging = Rc::clone(session);
+            move |event| logging.log_line("editor", |_| event.to_owned())
+        },
     ) {
         session.warn(&format!("The editor could not open: {error}."));
     }
@@ -476,13 +480,15 @@ fn editor_first_frame(session: &Rc<Session>) -> impl FnOnce(Instant) + 'static {
 
 /// F-22: saves the overlay's `image` to the path chosen in Save As. A cancel and a save show
 /// nothing, as the overlay's Save does; a failure is shown from the tray.
-async fn save_as(session: &Session, image: RgbaImage, cx: &mut AsyncApp) {
+async fn save_as(session: &Rc<Session>, image: RgbaImage, cx: &mut AsyncApp) {
     let start = save_as_start(&session.saving_settings(), session.policy.saving());
     let (folder, name) = match start {
         Ok(start) => start,
         Err(error) => return session.warn(&delivery_notice(&Err(error))),
     };
-    let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name));
+    let logging = Rc::clone(session);
+    let log = move |event: &'static str| logging.log_line("capture", |_| event.to_owned());
+    let chosen = cx.update(|cx| ask_save_path(cx, &folder, &name, log));
     save_chosen(session, image, chosen.await);
 }
 

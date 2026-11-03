@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -59,7 +60,9 @@ pub fn bench(
     let image = Arc::clone(document.base());
     let mut on_done: Option<OnDone> = Some(Box::new(on_done));
     let start = Instant::now();
-    let opened = open_with(cx, document, None, |window, cx| {
+    // The bench runs from cleanshot-fieldtest, a console tool whose stderr is read.
+    let log = Rc::new(|event| eprintln!("{event}"));
+    let opened = open_with(cx, document, None, log, |window, cx| {
         let Some(on_done) = on_done.take() else {
             return;
         };

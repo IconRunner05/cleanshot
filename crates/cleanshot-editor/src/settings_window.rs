@@ -14,9 +14,9 @@ use gpui::{
     Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 
-use crate::Error;
 use crate::text::register_inter;
 use crate::theme::{ACCENT, Theme};
+use crate::{Error, Log};
 
 type Apply = Rc<dyn Fn(Settings) -> Applied>;
 /// Reads the settings file's own values as the app holds them now.
@@ -39,7 +39,8 @@ impl Global for OpenSettings {}
 /// Each change is first checked as the settings file would read it, then handed to `apply`,
 /// whose outcome the window shows. What `policy` sets is shown, not offered (D-86). The
 /// start-with-Windows switch shows `starts_with_windows` and calls `set_start_with_windows` with
-/// the state the user picked; its error is shown and the switch keeps its state (F-56, D-93).
+/// the state the user picked; its error is shown and the switch keeps its state (F-56, D-93). A
+/// dialog that fails goes to `log`.
 ///
 /// # Errors
 ///
@@ -52,6 +53,7 @@ pub fn open_settings(
     apply: impl Fn(Settings) -> Applied + 'static,
     starts_with_windows: bool,
     set_start_with_windows: impl Fn(bool) -> Result<(), StartupEntryError> + 'static,
+    log: impl Fn(&'static str) + 'static,
 ) -> Result<(), Error> {
     if policy.settings_hidden() {
         return Err(Error::SettingsHidden);
@@ -86,7 +88,9 @@ pub fn open_settings(
     };
     let handle = cx
         .open_window(options, |window, cx| {
-            cx.new(|cx| SettingsView::new(current, policy, apply, startup, window, cx))
+            cx.new(|cx| {
+                SettingsView::new(current, policy, apply, startup, Rc::new(log), window, cx)
+            })
         })
         .map_err(|error| Error::WindowOpen(error.into()))?;
     cx.set_global(OpenSettings(handle));
@@ -101,6 +105,7 @@ struct SettingsView {
     policy: Policy,
     apply: Apply,
     startup: StartWithWindows,
+    log: Log,
     /// The action whose hotkey the next key press sets.
     recording: Option<HotkeyAction>,
     notice: Option<SharedString>,
@@ -115,6 +120,7 @@ impl SettingsView {
         policy: Policy,
         apply: Apply,
         startup: StartWithWindows,
+        log: Log,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -127,6 +133,7 @@ impl SettingsView {
             policy,
             apply,
             startup,
+            log,
             recording: None,
             notice: None,
             focus,
@@ -204,15 +211,16 @@ impl SettingsView {
             multiple: false,
             prompt: None,
         });
+        let log = Rc::clone(&self.log);
         self.choosing_folder = Some(cx.spawn_in(window, async move |view, cx| {
             let chosen = match dialog.await {
                 Ok(Ok(chosen)) => Ok(chosen.and_then(|paths| paths.into_iter().next())),
-                Ok(Err(error)) => {
-                    eprintln!("the folder dialog did not open: {error:#}");
+                Ok(Err(_)) => {
+                    log("folder_dialog not_opened");
                     Err(SettingsNotice::NoFolderDialog)
                 }
-                Err(dropped) => {
-                    eprintln!("the folder dialog closed with no answer: {dropped}");
+                Err(_) => {
+                    log("folder_dialog no_answer");
                     Err(SettingsNotice::NoFolderDialog)
                 }
             };

@@ -16,6 +16,7 @@ use gpui::{
 };
 use smallvec::smallvec;
 
+use crate::Log;
 use crate::placement::{Fit, Placement};
 use crate::text::paint_label;
 use crate::theme::ACCENT;
@@ -34,8 +35,11 @@ pub(crate) fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
 
 /// What the canvas shows for each redaction: the pixels an export leaves there (F-36, D-58),
 /// made once for each rectangle and mode rather than every frame.
-#[derive(Clone, Default)]
-pub(crate) struct RedactionPreviews(HashMap<RedactionKey, RedactionPreview>);
+#[derive(Clone)]
+pub(crate) struct RedactionPreviews {
+    previews: HashMap<RedactionKey, RedactionPreview>,
+    log: Log,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct RedactionKey {
@@ -65,6 +69,13 @@ enum RedactionPreview {
 }
 
 impl RedactionPreviews {
+    pub(crate) fn new(log: Log) -> Self {
+        Self {
+            previews: HashMap::new(),
+            log,
+        }
+    }
+
     /// Keeps a preview for each redaction in `document`, making the ones it lacks and dropping
     /// the ones no longer there. A redaction still being dragged is not in the document, so it
     /// has none until release and paints as a solid fill (D-58).
@@ -79,12 +90,12 @@ impl RedactionPreviews {
                 continue;
             }
             let preview = self
-                .0
+                .previews
                 .remove(&key)
-                .unwrap_or_else(|| redaction_preview(document.base(), rect, mode));
+                .unwrap_or_else(|| redaction_preview(document.base(), rect, mode, &*self.log));
             kept.insert(key, preview);
         }
-        self.0 = kept;
+        self.previews = kept;
     }
 
     /// Paints the redaction at `rect` and returns where it painted, `None` if nowhere.
@@ -100,16 +111,16 @@ impl RedactionPreviews {
             window.paint_quad(fill(bounds, gpui::black()));
             Some(bounds)
         };
-        match self.0.get(&RedactionKey::new(rect, mode)) {
+        match self.previews.get(&RedactionKey::new(rect, mode)) {
             Some(RedactionPreview::Pixels { bounds, image }) => {
                 let bounds = fit.bounds(*bounds);
-                match window.paint_image(bounds, bounds, 0.0.into(), Arc::clone(image), 0, false) {
-                    Ok(()) => Some(bounds),
-                    Err(error) => {
-                        eprintln!("the redaction preview could not be drawn: {error:#}");
-                        hide(window)
-                    }
+                let painted =
+                    window.paint_image(bounds, bounds, 0.0.into(), Arc::clone(image), 0, false);
+                if painted.is_ok() {
+                    return Some(bounds);
                 }
+                (self.log)("redaction_preview not_painted");
+                hide(window)
             }
             Some(RedactionPreview::CoversNoPixel) => None,
             Some(RedactionPreview::Failed) | None => hide(window),
@@ -121,7 +132,12 @@ impl RedactionPreviews {
     clippy::cast_precision_loss,
     reason = "image sides are far below 2^24, where f32 stops being exact"
 )]
-fn redaction_preview(image: &RgbaImage, rect: RectF, mode: RedactMode) -> RedactionPreview {
+fn redaction_preview(
+    image: &RgbaImage,
+    rect: RectF,
+    mode: RedactMode,
+    log: &dyn Fn(&'static str),
+) -> RedactionPreview {
     match redacted(image, rect, mode) {
         Ok(Some(Redacted { left, top, pixels })) => RedactionPreview::Pixels {
             bounds: RectF {
@@ -133,8 +149,8 @@ fn redaction_preview(image: &RgbaImage, rect: RectF, mode: RedactMode) -> Redact
             image: render_image(&pixels),
         },
         Ok(None) => RedactionPreview::CoversNoPixel,
-        Err(error) => {
-            eprintln!("the redaction preview could not be made: {error}");
+        Err(_) => {
+            log("redaction_preview not_made");
             RedactionPreview::Failed
         }
     }
@@ -577,7 +593,7 @@ mod tests {
     use cleanshot_core::History;
 
     fn image_of(previews: &RedactionPreviews, rect: RectF, mode: RedactMode) -> Arc<RenderImage> {
-        match previews.0.get(&RedactionKey::new(rect, mode)) {
+        match previews.previews.get(&RedactionKey::new(rect, mode)) {
             Some(RedactionPreview::Pixels { image, .. }) => Arc::clone(image),
             Some(RedactionPreview::CoversNoPixel | RedactionPreview::Failed) | None => {
                 panic!("a preview of {rect:?}")
@@ -610,7 +626,7 @@ mod tests {
         let mut history = History::new(Document::new(Arc::new(image)));
         history.apply(add()).unwrap();
         history.apply(add()).unwrap();
-        let mut previews = RedactionPreviews::default();
+        let mut previews = RedactionPreviews::new(Rc::new(|_| {}));
         previews.update(history.document());
         let first = image_of(&previews, rect, mode);
         history.undo().unwrap();
@@ -618,6 +634,6 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &image_of(&previews, rect, mode)));
         history.undo().unwrap();
         previews.update(history.document());
-        assert!(previews.0.is_empty());
+        assert!(previews.previews.is_empty());
     }
 }
