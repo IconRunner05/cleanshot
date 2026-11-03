@@ -55,16 +55,18 @@ enum Plan {
 }
 
 /// What a capture of `shot` does once the screen is copied, or None when the pointer's
-/// monitor is unknown. F-07 follows `after_capture` (D-34); F-06 copies the last selection
-/// with no overlay, or opens one when there is none yet (D-35).
+/// monitor is unknown. A region capture preselects `remembered` (F-12); F-07 follows
+/// `after_capture` (D-34); F-06 copies the last selection with no overlay, or opens one when
+/// there is none yet (D-35).
 fn plan(
     shot: Shot,
     after_capture: AfterCapture,
     last_selection: Option<RECT>,
+    remembered: Option<RECT>,
     pointer_monitor: impl FnOnce() -> Option<RECT>,
 ) -> Option<Plan> {
     Some(match (shot, after_capture) {
-        (Shot::Mode(CaptureMode::Region), _) => Plan::Overlay(None),
+        (Shot::Mode(CaptureMode::Region), _) => Plan::Overlay(remembered),
         (Shot::Mode(CaptureMode::FullScreen), AfterCapture::Copy) => Plan::Copy(pointer_monitor()?),
         (Shot::Mode(CaptureMode::FullScreen), AfterCapture::ShowToolbar) => {
             Plan::Overlay(Some(pointer_monitor()?))
@@ -72,6 +74,30 @@ fn plan(
         (Shot::LastRegion, _) => last_selection.map_or(Plan::Overlay(None), Plan::Copy),
         (Shot::Mode(CaptureMode::Window), _) => Plan::PickWindow,
     })
+}
+
+/// F-12 Remember last selection: the last selection, when the setting is on and every pixel
+/// of it is still on one of `monitors`.
+fn remembered(
+    remember: bool,
+    last_selection: Option<RECT>,
+    monitors: impl IntoIterator<Item = RECT>,
+) -> Option<RECT> {
+    let area = |rect: RECT| i64::from(rect.right - rect.left) * i64::from(rect.bottom - rect.top);
+    let covered = |selection: RECT| {
+        monitors
+            .into_iter()
+            .map(|monitor| RECT {
+                left: selection.left.max(monitor.left),
+                top: selection.top.max(monitor.top),
+                right: selection.right.min(monitor.right),
+                bottom: selection.bottom.min(monitor.bottom),
+            })
+            .filter(|shared| shared.left < shared.right && shared.top < shared.bottom)
+            .map(area)
+            .sum::<i64>()
+    };
+    last_selection.filter(|&selection| remember && covered(selection) == area(selection))
 }
 
 // F-01, F-02: the screen is copied before any window of ours appears, then frozen on every
@@ -115,10 +141,16 @@ pub(super) fn capture(
         }
     };
     let last = session.last_selection.get();
+    let remembered = remembered(
+        session.settings.borrow().remember_last_selection,
+        last,
+        captures.iter().map(|capture| capture.bounds),
+    );
     let (selected, picking) = match plan(
         shot,
         session.settings.borrow().after_capture,
         last,
+        remembered,
         under_pointer,
     ) {
         None => {
@@ -334,6 +366,7 @@ mod tests {
                 Shot::Mode(CaptureMode::FullScreen),
                 AfterCapture::Copy,
                 None,
+                None,
                 monitor
             ),
             Some(Plan::Copy(MONITOR))
@@ -343,6 +376,7 @@ mod tests {
                 Shot::Mode(CaptureMode::FullScreen),
                 AfterCapture::ShowToolbar,
                 None,
+                None,
                 monitor
             ),
             Some(Plan::Overlay(Some(MONITOR)))
@@ -351,6 +385,7 @@ mod tests {
             plan(
                 Shot::Mode(CaptureMode::FullScreen),
                 AfterCapture::Copy,
+                None,
                 None,
                 || None
             ),
@@ -362,9 +397,13 @@ mod tests {
     fn f08_the_window_hotkey_opens_the_overlay_picking_a_window_whatever_was_last() {
         for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
             assert_eq!(
-                plan(Shot::Mode(CaptureMode::Window), after, Some(LAST), || Some(
-                    MONITOR
-                )),
+                plan(
+                    Shot::Mode(CaptureMode::Window),
+                    after,
+                    Some(LAST),
+                    Some(LAST),
+                    || Some(MONITOR)
+                ),
                 Some(Plan::PickWindow)
             );
         }
@@ -375,11 +414,11 @@ mod tests {
         let monitor = || Some(MONITOR);
         for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
             assert_eq!(
-                plan(Shot::LastRegion, after, Some(LAST), monitor),
+                plan(Shot::LastRegion, after, Some(LAST), None, monitor),
                 Some(Plan::Copy(LAST))
             );
             assert_eq!(
-                plan(Shot::LastRegion, after, None, monitor),
+                plan(Shot::LastRegion, after, None, None, monitor),
                 Some(Plan::Overlay(None))
             );
         }
@@ -388,9 +427,59 @@ mod tests {
                 Shot::Mode(CaptureMode::Region),
                 AfterCapture::Copy,
                 Some(LAST),
+                None,
                 monitor
             ),
             Some(Plan::Overlay(None))
         );
+    }
+
+    #[test]
+    fn f12_a_region_capture_opens_with_the_remembered_selection_preselected() {
+        for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
+            assert_eq!(
+                plan(
+                    Shot::Mode(CaptureMode::Region),
+                    after,
+                    None,
+                    Some(LAST),
+                    || None
+                ),
+                Some(Plan::Overlay(Some(LAST)))
+            );
+        }
+    }
+
+    #[test]
+    fn f12_the_last_selection_is_remembered_only_when_on_and_still_on_the_monitors() {
+        let right = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let across = RECT {
+            left: -100,
+            top: 100,
+            right: 100,
+            bottom: 200,
+        };
+        assert_eq!(
+            remembered(true, Some(across), [MONITOR, right]),
+            Some(across)
+        );
+        assert_eq!(remembered(false, Some(across), [MONITOR, right]), None);
+        assert_eq!(remembered(true, None, [MONITOR, right]), None);
+        assert_eq!(
+            remembered(true, Some(across), [right]),
+            None,
+            "half of it was on a monitor no longer there"
+        );
+        let below = RECT {
+            top: 1000,
+            bottom: 1200,
+            ..across
+        };
+        assert_eq!(remembered(true, Some(below), [MONITOR, right]), None);
     }
 }

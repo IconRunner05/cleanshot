@@ -20,6 +20,10 @@ section exists.
 - Show pointer (F-12): with show_pointer on, every capture holds the pointer as it looked
   and where it was when you captured, and the frozen screen shows it before you copy or save.
   It is off by default; the Options menu will switch it.
+- Remember last selection (F-12): with remember_last_selection on, a region capture opens
+  with your last selection already drawn, ready to copy or adjust, as long as it is still
+  on screen. It is kept only until Cleanshot quits. It is off by default; the Options menu
+  will switch it.
 - The capture panel (F-11): Ctrl+Shift+5 shows a toolbar before you capture, where you
   choose Region, Window or Screen and a timer, then press Capture. It takes the keyboard
   focus, gives it back when it closes, and remembers your choices until Cleanshot quits.
