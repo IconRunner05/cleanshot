@@ -33,7 +33,7 @@ use crate::toolbar::automation::{self, Request};
 use cleanshot_core::ToolbarControl;
 
 use crate::toolbar::{OffTip, Paint};
-use crate::window_state;
+use crate::window_state::{self, client_point};
 
 pub(crate) const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
 const BORDER_WIDTH: f32 = 1.5;
@@ -426,16 +426,6 @@ pub(crate) fn bgra(image: &RgbaImage) -> Vec<u8> {
         pixel.swap(0, 2);
     }
     bgra
-}
-
-/// The client point of a mouse message's `lparam`.
-pub(crate) fn client_point(lparam: LPARAM) -> POINT {
-    // Client coordinates are signed 16-bit halves of lparam; captured drags go negative.
-    let bytes = lparam.0.to_le_bytes();
-    POINT {
-        x: i32::from(i16::from_le_bytes([bytes[0], bytes[1]])),
-        y: i32::from(i16::from_le_bytes([bytes[2], bytes[3]])),
-    }
 }
 
 /// The desktop point of a mouse message's `lparam` on a window whose top-left is `origin`.

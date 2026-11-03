@@ -30,12 +30,12 @@ use super::{
     place, slid, window_size,
 };
 use crate::Error;
-use crate::overlay::{bgra, client_point, target_and_bitmap};
+use crate::overlay::{bgra, target_and_bitmap};
 use crate::palette::Palette;
 use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
 use crate::toolbar::OffTip;
-use crate::window_state;
+use crate::window_state::{self, client_point};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotThumbnail");
 const SLIDE_TIMER: usize = 1;

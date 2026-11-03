@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, POINT};
 use windows::Win32::UI::WindowsAndMessaging::{
     GWLP_USERDATA, GetWindowLongPtrW, SetWindowLongPtrW, WM_NCDESTROY,
 };
@@ -55,4 +55,14 @@ pub(crate) unsafe fn for_message<T>(window: HWND, message: u32) -> Option<Rc<T>>
 pub(crate) unsafe fn attached<'window, T>(window: HWND) -> &'window T {
     // SAFETY: the caller keeps the window, and so the window's count, alive for 'window.
     unsafe { &*(GetWindowLongPtrW(window, GWLP_USERDATA) as *const T) }
+}
+
+/// The client point of a mouse message's `lparam`.
+pub(crate) fn client_point(lparam: LPARAM) -> POINT {
+    // Client coordinates are signed 16-bit halves of lparam; captured drags go negative.
+    let bytes = lparam.0.to_le_bytes();
+    POINT {
+        x: i32::from(i16::from_le_bytes([bytes[0], bytes[1]])),
+        y: i32::from(i16::from_le_bytes([bytes[2], bytes[3]])),
+    }
 }
