@@ -259,9 +259,10 @@ impl Render for SettingsView {
             ))
             .child(show_thumbnail_row(settings.show_thumbnail, theme, cx))
             .child(self.start_with_windows_row(theme, cx));
-        let saving = self.saving_section(theme, cx);
-        let hotkeys = section("Hotkeys", theme)
-            .children(HotkeyAction::ALL.map(|action| self.hotkey_row(action, theme, cx)));
+        let saving = self.saving_section(&settings, theme, cx);
+        let hotkeys = section("Hotkeys", theme).children(
+            HotkeyAction::ALL.map(|action| self.hotkey_row(action, &settings, theme, cx)),
+        );
         div()
             .id("settings")
             .role(Role::Application)
@@ -321,7 +322,12 @@ impl SettingsView {
 
     /// The save folder and format, with what the organisation's policy sets shown as set and
     /// not offered for change, and neither shown when the policy turns saving off (D-86).
-    fn saving_section(&self, theme: Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn saving_section(
+        &self,
+        settings: &Settings,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let section = section("Saving", theme);
         let (policy_folder, png_only) = match self.policy.saving() {
             Saving::Off(off) => {
@@ -336,8 +342,9 @@ impl SettingsView {
                 .child(set_by_policy(SET_BY_ORGANISATION, theme)),
             None => folder_row
                 .child(shown_value(
-                    (self.current)()
+                    settings
                         .save_folder
+                        .clone()
                         .unwrap_or_else(|| "Pictures\\Screenshots".to_owned()),
                     theme,
                 ))
@@ -369,7 +376,7 @@ impl SettingsView {
                     (SaveFormat::Jpg, SaveFormat::Jpg.name()),
                     (SaveFormat::Bmp, SaveFormat::Bmp.name()),
                 ],
-                (self.current)().save_format,
+                settings.save_format,
                 theme,
                 cx,
                 |settings, choice| settings.save_format = choice,
@@ -384,6 +391,7 @@ impl SettingsView {
     fn hotkey_row(
         &self,
         action: HotkeyAction,
+        settings: &Settings,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -391,7 +399,7 @@ impl SettingsView {
         let shown = if recording {
             "Press a hotkey...".to_owned()
         } else {
-            (self.current)().hotkeys.get(action).to_string()
+            settings.hotkeys.get(action).to_string()
         };
         let name = format!("{} hotkey: {shown}", action.name());
         row()
