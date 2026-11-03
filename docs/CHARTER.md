@@ -308,7 +308,7 @@ The app manifest (`crates/cleanshot-app/cleanshot.exe.manifest`, embedded by the
 ### Code rules
 
 - `cargo fmt`; `cargo clippy --all-targets -- -D warnings` with `clippy::pedantic` warnings reviewed, not blanket-allowed.
-- No `unwrap()`/`expect()` outside tests and `main` start-up; errors surface to the user as a short toast, never a panic dialog.
+- Invariants (D-120): an "impossible" state is designed out by its type where that is cheap; where it is not, it crashes loudly with the invariant named (`expect("<the invariant>")`, or `panic!`/`unreachable!` with a message). Bare `unwrap()` and message-less panics only in tests and `main` start-up. Nothing supervises this process, so an invariant break is never caught and carried on, and no error is swallowed: a discarded `Result` says on its line why dropping it is safe. Expected failures reach the user as a short toast. Release keeps `panic = "abort"`, behind a panic hook that shows one fixed-text crash notice ("Cleanshot hit an internal error and closed.") and, under `--log`, writes a `panic` line with the source location only (D-109).
 - Public functions in `core` and `render` get doc comments and unit tests.
 - Name tests after IDs where they prove a criterion: `f21_never_overwrites_existing_file`, `c15_rejects_reserved_names`.
 
