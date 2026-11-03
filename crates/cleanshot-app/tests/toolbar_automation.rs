@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use cleanshot_core::RgbaImage;
 use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_container};
 use cleanshot_win::capture::{MonitorImage, RECT};
-use cleanshot_win::overlay::{Overlay, OverlayEvent};
+use cleanshot_win::overlay::{Frozen, Overlay, OverlayEvent};
 
 const TEST: &str = "f05_ui_automation_names_the_toolbar_buttons_and_copy_presses_copy";
 const BUTTONS: [&str; 5] = ["Options", "Copy", "Save", "Edit", "Cancel"];
@@ -75,10 +75,11 @@ fn main() {
             image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
         };
         let shown = Overlay::show(
-            &[monitor],
-            Some(SELECTED),
-            Vec::new(),
-            None,
+            Frozen {
+                captures: &[monitor],
+                selected: Some(SELECTED),
+                ..Frozen::default()
+            },
             Vec::new,
             move |event| {
                 let copied = match event {

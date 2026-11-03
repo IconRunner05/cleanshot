@@ -114,8 +114,8 @@ mod tests {
 
     use super::*;
     use crate::capture::screen_rect;
-    use crate::overlay::Overlay;
     use crate::overlay::tests::{monitor, press, screen};
+    use crate::overlay::{Frozen, Overlay};
 
     /// An overlay on `monitor()` picking from `pickable`, and the selections it copies.
     fn picking(frames: Vec<RECT>) -> (Overlay, Rc<RefCell<Vec<RECT>>>) {
@@ -128,11 +128,19 @@ mod tests {
             .collect();
         let copied = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&copied);
-        let overlay = Overlay::show(&[monitor()], None, pickable, None, Vec::new, move |event| {
-            if let OverlayEvent::Copy(selected) = event {
-                sink.borrow_mut().push(selected);
-            }
-        })
+        let overlay = Overlay::show(
+            Frozen {
+                captures: &[monitor()],
+                pickable,
+                ..Frozen::default()
+            },
+            Vec::new,
+            move |event| {
+                if let OverlayEvent::Copy(selected) = event {
+                    sink.borrow_mut().push(selected);
+                }
+            },
+        )
         .expect("the overlay opens");
         (overlay, copied)
     }
@@ -250,8 +258,16 @@ mod tests {
             frame: screen_rect(desktop.bounds),
             title: "Notes".to_owned(),
         }];
-        let overlay = Overlay::show(&[desktop], None, pickable, None, Vec::new, |_| {})
-            .expect("the overlay opens");
+        let overlay = Overlay::show(
+            Frozen {
+                captures: &[desktop],
+                pickable,
+                ..Frozen::default()
+            },
+            Vec::new,
+            |_| {},
+        )
+        .expect("the overlay opens");
         let window = overlay.windows[0];
         for key in [Key::SwitchMode, Key::Focus(TabDirection::Forward)] {
             press(window, key);

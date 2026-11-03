@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use cleanshot_core::{DeliveryError, RgbaImage, SavingOff, delivery_notice};
 use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_container};
 use cleanshot_win::capture::{MonitorImage, RECT};
-use cleanshot_win::overlay::Overlay;
+use cleanshot_win::overlay::{Frozen, Overlay};
 
 const TEST: &str = "f57_ui_automation_reports_save_off_with_the_reason_and_refuses_to_press_it";
 const SELECTED: RECT = RECT {
@@ -87,10 +87,12 @@ fn main() {
             image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
         };
         let shown = Overlay::show(
-            &[monitor],
-            Some(SELECTED),
-            Vec::new(),
-            Some(reason),
+            Frozen {
+                captures: &[monitor],
+                selected: Some(SELECTED),
+                saving_off: Some(reason),
+                ..Frozen::default()
+            },
             Vec::new,
             move |event| {
                 if chosen.send(format!("{event:?}")).is_err() {

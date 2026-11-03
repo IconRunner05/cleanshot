@@ -260,6 +260,21 @@ impl Shared {
     }
 }
 
+/// The screen frozen at the hotkey, and what the overlay lets be done with it.
+#[derive(Default)]
+pub struct Frozen<'a> {
+    /// One per monitor.
+    pub captures: &'a [MonitorImage],
+    /// The selection the overlay opens with (F-12).
+    pub selected: Option<RECT>,
+    /// The windows W switches to picking from, as [`crate::capture::pickable_windows`] listed
+    /// them at the freeze (F-08).
+    pub pickable: Vec<Pickable>,
+    /// With saving off, the toolbar shows Save greyed, out of Tab order, with this sentence as
+    /// its accessible help text (F-57); choosing it still sends [`OverlayEvent::Save`].
+    pub saving_off: Option<String>,
+}
+
 /// One topmost, never-activated window per monitor, each showing that monitor's frozen
 /// capture dimmed by 40% (F-02), with one selection drawn, moved and resized across them
 /// (F-03). Its keys are hotkeys only while it is up, because a window that never activates
@@ -289,11 +304,7 @@ impl Overlay {
         window::prewarm(&factory, &palette).map_err(Error::Window)
     }
 
-    /// Shows `captures`, one window per monitor at that monitor's physical bounds, with W
-    /// switching to picking one of `pickable`, the frames [`crate::capture::pickable_windows`]
-    /// listed at the freeze (F-08). With `saving_off`, the toolbar shows Save greyed, out of Tab
-    /// order, with that sentence as its accessible help text (F-57); choosing it still sends
-    /// [`OverlayEvent::Save`].
+    /// Shows `frozen`'s captures, one window per monitor at that monitor's physical bounds.
     ///
     /// # Errors
     ///
@@ -302,10 +313,12 @@ impl Overlay {
     /// [`Error::NoCaptures`] if `captures` is empty;
     /// [`Error::HotkeyTaken`] if another program holds one of its keys as a hotkey.
     pub fn show(
-        captures: &[MonitorImage],
-        selected: Option<RECT>,
-        pickable: Vec<Pickable>,
-        saving_off: Option<String>,
+        Frozen {
+            captures,
+            selected,
+            pickable,
+            saving_off,
+        }: Frozen<'_>,
         options: impl Fn() -> Vec<OptionsEntry> + 'static,
         on_event: impl FnMut(OverlayEvent) + 'static,
     ) -> Result<Self, Error> {
@@ -533,10 +546,10 @@ pub(crate) mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&events);
         let overlay = Overlay::show(
-            &[monitor()],
-            None,
-            Vec::new(),
-            None,
+            Frozen {
+                captures: &[monitor()],
+                ..Frozen::default()
+            },
             Vec::new,
             move |event| {
                 sink.borrow_mut().push(format!("{event:?}"));
@@ -588,8 +601,15 @@ pub(crate) mod tests {
     fn f13_closing_fades_the_overlay_only_with_animation_effects_on() {
         let _screen = screen();
         let animations = fade::animations_on().expect("the setting is readable");
-        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, Vec::new, |_| {})
-            .expect("the overlay opens");
+        let overlay = Overlay::show(
+            Frozen {
+                captures: &[monitor()],
+                ..Frozen::default()
+            },
+            Vec::new,
+            |_| {},
+        )
+        .expect("the overlay opens");
         let closing = Instant::now();
         overlay.close().expect("the overlay fades");
         let closed = closing.elapsed();
@@ -604,8 +624,15 @@ pub(crate) mod tests {
     #[test]
     fn p01_show_returns_with_every_window_painted() {
         let _screen = screen();
-        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, Vec::new, |_| {})
-            .expect("the overlay opens");
+        let overlay = Overlay::show(
+            Frozen {
+                captures: &[monitor()],
+                ..Frozen::default()
+            },
+            Vec::new,
+            |_| {},
+        )
+        .expect("the overlay opens");
         let pending: Vec<bool> = overlay
             .windows
             .iter()
@@ -626,10 +653,11 @@ pub(crate) mod tests {
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
         let overlay = Overlay::show(
-            &[monitor()],
-            Some(screen),
-            Vec::new(),
-            None,
+            Frozen {
+                captures: &[monitor()],
+                selected: Some(screen),
+                ..Frozen::default()
+            },
             Vec::new,
             move |event| {
                 if let OverlayEvent::Copy(selected) = event {
@@ -702,10 +730,10 @@ pub(crate) mod tests {
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
         let overlay = Overlay::show(
-            &[monitor(), above_left],
-            None,
-            Vec::new(),
-            None,
+            Frozen {
+                captures: &[monitor(), above_left],
+                ..Frozen::default()
+            },
             Vec::new,
             move |event| {
                 if let OverlayEvent::Copy(selected) = event {
@@ -748,10 +776,11 @@ pub(crate) mod tests {
         let asked = Rc::new(Cell::new(None));
         let sink = Rc::clone(&asked);
         let overlay = Overlay::show(
-            &[monitor()],
-            Some(screen),
-            Vec::new(),
-            None,
+            Frozen {
+                captures: &[monitor()],
+                selected: Some(screen),
+                ..Frozen::default()
+            },
             Vec::new,
             move |event| {
                 if let OverlayEvent::SaveAs(selected) = event {
@@ -786,10 +815,11 @@ pub(crate) mod tests {
 
         let _screen = screen();
         let overlay = Overlay::show(
-            &[monitor()],
-            Some(monitor().bounds),
-            Vec::new(),
-            None,
+            Frozen {
+                captures: &[monitor()],
+                selected: Some(monitor().bounds),
+                ..Frozen::default()
+            },
             Vec::new,
             |_| {},
         )
@@ -829,10 +859,12 @@ pub(crate) mod tests {
         let selected = monitor().bounds;
         let off = Some("Saving is off".to_owned());
         let overlay = Overlay::show(
-            &[monitor()],
-            Some(selected),
-            Vec::new(),
-            off,
+            Frozen {
+                captures: &[monitor()],
+                selected: Some(selected),
+                saving_off: off,
+                ..Frozen::default()
+            },
             Vec::new,
             move |event| {
                 sink.borrow_mut().push(match event {
@@ -893,15 +925,16 @@ pub(crate) mod tests {
             image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
         };
         let overlay = Overlay::show(
-            &[large],
-            Some(RECT {
-                left: 100,
-                top: 100,
-                right: 300,
-                bottom: 200,
-            }),
-            Vec::new(),
-            None,
+            Frozen {
+                captures: &[large],
+                selected: Some(RECT {
+                    left: 100,
+                    top: 100,
+                    right: 300,
+                    bottom: 200,
+                }),
+                ..Frozen::default()
+            },
             menu,
             move |event| {
                 if let OverlayEvent::Options(item) = event {
@@ -961,11 +994,18 @@ pub(crate) mod tests {
             Rc::clone(&freed),
             Rc::clone(&freed_during),
         );
-        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, Vec::new, move |_| {
-            let Freed(_) = &guard;
-            drop(closing.borrow_mut().take());
-            report.set(Some(watching.get()));
-        })
+        let overlay = Overlay::show(
+            Frozen {
+                captures: &[monitor()],
+                ..Frozen::default()
+            },
+            Vec::new,
+            move |_| {
+                let Freed(_) = &guard;
+                drop(closing.borrow_mut().take());
+                report.set(Some(watching.get()));
+            },
+        )
         .expect("the overlay opens");
         let window = overlay.windows[0];
         *slot.borrow_mut() = Some(overlay);
@@ -983,7 +1023,14 @@ pub(crate) mod tests {
     #[test]
     fn f01_an_overlay_given_no_monitor_says_so_and_opens_nothing() {
         let _screen = screen();
-        let shown = Overlay::show(&[], None, Vec::new(), None, Vec::new, |_| {});
+        let shown = Overlay::show(
+            Frozen {
+                captures: &[],
+                ..Frozen::default()
+            },
+            Vec::new,
+            |_| {},
+        );
         assert!(matches!(shown, Err(Error::NoCaptures)), "{:?}", shown.err());
     }
 
@@ -993,10 +1040,10 @@ pub(crate) mod tests {
         let cancelled = Rc::new(Cell::new(false));
         let sink = Rc::clone(&cancelled);
         let overlay = Overlay::show(
-            &[monitor()],
-            None,
-            Vec::new(),
-            None,
+            Frozen {
+                captures: &[monitor()],
+                ..Frozen::default()
+            },
             Vec::new,
             move |event| {
                 sink.set(matches!(event, OverlayEvent::Cancelled));
@@ -1037,7 +1084,14 @@ pub(crate) mod tests {
         // SAFETY: a thread hotkey needs no window; it is released below.
         unsafe { RegisterHotKey(None, TAKEN, modifiers, u32::from(last.0)) }
             .expect("no other program holds the overlay's last key");
-        let shown = Overlay::show(&[monitor()], None, Vec::new(), None, Vec::new, |_| {});
+        let shown = Overlay::show(
+            Frozen {
+                captures: &[monitor()],
+                ..Frozen::default()
+            },
+            Vec::new,
+            |_| {},
+        );
         // SAFETY: TAKEN was registered above on this thread.
         unsafe { UnregisterHotKey(None, TAKEN) }.expect("the taken key was registered");
         assert!(
