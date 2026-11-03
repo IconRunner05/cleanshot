@@ -3,6 +3,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod thumbnail_layout;
+
 mod bubble;
 mod capture_mode;
 mod capture_panel;
