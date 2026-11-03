@@ -58,6 +58,21 @@ impl Document {
         self.crop
     }
 
+    /// The part of the base image an export keeps: the crop, or else all of it (F-37).
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "image sides are far below 2^24, where f32 stops being exact"
+    )]
+    pub fn kept_area(&self) -> RectF {
+        self.crop.unwrap_or(RectF {
+            x: 0.0,
+            y: 0.0,
+            width: self.base.width() as f32,
+            height: self.base.height() as f32,
+        })
+    }
+
     /// The border and shadow an export draws around the image (F-44).
     #[must_use]
     pub fn frame(&self) -> Frame {
@@ -122,9 +137,16 @@ pub fn dimmed_areas<'a>(
     if spotlights.is_empty() {
         return Vec::new();
     }
+    areas_outside(base, &spotlights)
+}
+
+/// Everything of `base` outside all of `kept`, as rectangles that do not overlap, such as
+/// what a crop leaves out (D-113).
+#[must_use]
+pub fn areas_outside(base: &RgbaImage, kept: &[RectF]) -> Vec<RectF> {
     let cuts = |limit: u32, sides: fn(&RectF) -> [f32; 2]| {
         let limit = f64::from(limit);
-        let mut cuts: Vec<f64> = spotlights
+        let mut cuts: Vec<f64> = kept
             .iter()
             .flat_map(sides)
             .map(|side| f64::from(side).clamp(0.0, limit))
@@ -137,7 +159,7 @@ pub fn dimmed_areas<'a>(
     let columns = cuts(base.width(), |rect| [rect.x, rect.x + rect.width]);
     let rows = cuts(base.height(), |rect| [rect.y, rect.y + rect.height]);
     let lit = |x: f64, y: f64| {
-        spotlights.iter().any(|spot| {
+        kept.iter().any(|spot| {
             let (left, top) = (f64::from(spot.x), f64::from(spot.y));
             (left..left + f64::from(spot.width)).contains(&x)
                 && (top..top + f64::from(spot.height)).contains(&y)
@@ -490,6 +512,20 @@ mod tests {
         assert_eq!(numbers(history.document()), ["1@20", "2@30"]);
         history.undo().unwrap();
         assert_eq!(numbers(history.document()), ["1@10", "2@20", "3@30"]);
+    }
+
+    #[test]
+    fn d113_the_kept_area_is_the_crop_or_the_whole_image_and_the_rest_is_outside_it() {
+        use crate::{Command, History};
+        let image = RgbaImage::new(40, 30, vec![0; 40 * 30 * 4]).unwrap();
+        let mut history = History::new(Document::new(Arc::new(image.clone())));
+        assert_eq!(history.document().kept_area(), rect(0.0, 0.0, 40.0, 30.0));
+        let crop = rect(5.0, 4.0, 10.0, 8.0);
+        history.apply(Command::SetCrop(Some(crop))).unwrap();
+        assert_eq!(history.document().kept_area(), crop);
+        let outside = areas_outside(&image, &[crop]);
+        let area: f32 = outside.iter().map(|area| area.width * area.height).sum();
+        assert_eq!(area, 40.0 * 30.0 - 10.0 * 8.0);
     }
 
     #[test]

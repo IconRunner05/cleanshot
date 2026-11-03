@@ -22,6 +22,9 @@ section exists.
 
 ### Fixed
 
+- A crop showed in the editor only while it was being dragged, so the Crop tool looked
+  as if it did nothing (F-37). Now the view fits the crop and everything outside it is
+  dimmed. Copy and Save were already cropped.
 - Closing the settings window or the editor when no other Cleanshot window was open quit
   Cleanshot too. It now closes only that window, and Cleanshot stays in the tray (F-55).
 - On a laptop with two graphics chips, a capture no longer wakes the one that drives no

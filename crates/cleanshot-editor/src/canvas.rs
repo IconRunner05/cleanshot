@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Bubble, Color, Command, Document, Fill, Frame, Label, PointF, RectF, RedactMode, RgbaImage,
-    SPOTLIGHT_DIM, Shape, ShapeId, Style, arrow_head, dimmed_areas, handles, step_numbers, text_on,
+    SPOTLIGHT_DIM, Shape, ShapeId, Style, areas_outside, arrow_head, dimmed_areas, handles,
+    step_numbers, text_on,
 };
 use cleanshot_render::{Redacted, redacted};
 use gpui::{
@@ -218,8 +219,9 @@ pub(crate) fn document_canvas(
         move |bounds, hitbox, window, cx| {
             let image = document.base();
             let scale_factor = window.scale_factor();
-            let placement =
-                placement.unwrap_or_else(|| Placement::fitted(bounds.size, image, scale_factor));
+            let placement = placement.unwrap_or_else(|| {
+                Placement::fitted(bounds.size, document.kept_area(), scale_factor)
+            });
             let fit = Fit::new(bounds, image, placement, scale_factor);
             paint_frame(document.frame(), fit.image_bounds, fit.scale, window);
             // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
@@ -263,6 +265,14 @@ pub(crate) fn document_canvas(
                 if id.is_some() && overlay.selected == id {
                     selected_shape = Some(shape);
                 }
+            }
+            if let Some(crop) = document.crop() {
+                paint_dim(
+                    &areas_outside(image, &[crop]),
+                    fit.image_bounds,
+                    &fit,
+                    window,
+                );
             }
             if let Some(Command::SetCrop(Some(crop))) = &overlay.preview {
                 paint_outline(fit.bounds(*crop), window);

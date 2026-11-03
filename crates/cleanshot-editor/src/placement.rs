@@ -45,26 +45,22 @@ pub(crate) struct Placement {
 }
 
 impl Placement {
-    /// The image centred on a `canvas` of that size below the toolbar's room, as large as
-    /// fits but never more than one image pixel per device pixel (D-41, D-110).
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "image sides are far below 2^24, where f32 stops being exact"
-    )]
-    pub fn fitted(canvas: Size<Pixels>, image: &RgbaImage, scale_factor: f32) -> Self {
+    /// The image placed so its `area`, in image pixels, is centred on a `canvas` of that size
+    /// below the toolbar's room, as large as fits but never more than one image pixel per
+    /// device pixel (D-41, D-110). The area is the whole image, or its crop (D-113).
+    pub fn fitted(canvas: Size<Pixels>, area: RectF, scale_factor: f32) -> Self {
         let room = size(
             canvas.width - MARGIN * 2.0,
             canvas.height - CHROME_TOP - MARGIN,
         );
-        let (width, height) = (image.width() as f32, image.height() as f32);
-        let scale = (f32::from(room.width) / width)
-            .min(f32::from(room.height) / height)
+        let scale = (f32::from(room.width) / area.width)
+            .min(f32::from(room.height) / area.height)
             .min(1.0 / scale_factor)
             .max(MIN_SCALE);
         Self {
             corner: point(
-                MARGIN + (room.width - px(width * scale)) / 2.0,
-                CHROME_TOP + (room.height - px(height * scale)) / 2.0,
+                MARGIN + (room.width - px(area.width * scale)) / 2.0 - px(area.x * scale),
+                CHROME_TOP + (room.height - px(area.height * scale)) / 2.0 - px(area.y * scale),
             ),
             scale,
         }
@@ -151,6 +147,10 @@ impl Fit {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use cleanshot_core::Document;
+
     use super::*;
 
     const CANVAS: Size<Pixels> = Size {
@@ -162,13 +162,17 @@ mod tests {
         RgbaImage::new(width, height, vec![0; width as usize * height as usize * 4]).unwrap()
     }
 
+    fn all_of(image: &RgbaImage) -> RectF {
+        Document::new(Arc::new(image.clone())).kept_area()
+    }
+
     fn fit(image_width: u32, image_height: u32, scale_factor: f32) -> Fit {
         let image = image(image_width, image_height);
         let canvas = Bounds::new(point(px(0.0), px(0.0)), CANVAS);
         Fit::new(
             canvas,
             &image,
-            Placement::fitted(CANVAS, &image, scale_factor),
+            Placement::fitted(CANVAS, all_of(&image), scale_factor),
             scale_factor,
         )
     }
@@ -178,7 +182,7 @@ mod tests {
         let image = image(301, 157);
         let canvas = Bounds::new(point(px(0.3), px(41.7)), size(px(997.0), px(603.0)));
         for scale_factor in [1.0, 1.25, 1.5, 1.75, 2.0] {
-            let placement = Placement::fitted(canvas.size, &image, scale_factor);
+            let placement = Placement::fitted(canvas.size, all_of(&image), scale_factor);
             let fit = Fit::new(canvas, &image, placement, scale_factor);
             assert!(
                 (fit.scale * scale_factor - 1.0).abs() < 1e-6,
@@ -212,6 +216,36 @@ mod tests {
     }
 
     #[test]
+    fn d113_a_cropped_capture_is_fitted_by_its_crop_below_the_toolbar() {
+        let image = image(2000, 1000);
+        let canvas = Bounds::new(point(px(0.0), px(0.0)), CANVAS);
+        let shown = |crop: RectF| {
+            let fit = Fit::new(canvas, &image, Placement::fitted(CANVAS, crop, 1.0), 1.0);
+            fit.bounds(crop)
+        };
+        let small = RectF {
+            x: 400.0,
+            y: 300.0,
+            width: 484.0,
+            height: 230.0,
+        };
+        assert_eq!(
+            shown(small),
+            Bounds::new(point(px(258.0), px(239.0)), size(px(484.0), px(230.0)))
+        );
+        let large = RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 1936.0,
+            height: 920.0,
+        };
+        assert_eq!(
+            shown(large),
+            Bounds::new(point(px(16.0), px(124.0)), size(px(968.0), px(460.0)))
+        );
+    }
+
+    #[test]
     fn d110_the_editor_opens_round_the_capture_at_100_percent_where_it_fits_and_fitted_where_not() {
         let work_area = size(px(1280.0), px(680.0));
         for (width, height, scale) in [(600, 300, 1.0), (900, 600, 1.5), (300, 200, 2.0)] {
@@ -220,7 +254,7 @@ mod tests {
             let fit = Fit::new(
                 Bounds::new(point(px(0.0), px(0.0)), window),
                 &image,
-                Placement::fitted(window, &image, scale),
+                Placement::fitted(window, all_of(&image), scale),
                 scale,
             );
             assert!(
@@ -245,7 +279,7 @@ mod tests {
         let window = opening_size(&large, 1.0, work_area);
         assert_eq!(window.height, work_area.height);
         assert!(window.width <= work_area.width);
-        let fitted = Placement::fitted(window, &large, 1.0);
+        let fitted = Placement::fitted(window, all_of(&large), 1.0);
         assert!((fitted.scale - 0.27).abs() < 1e-6, "(680 - 140) / 2000");
     }
 
@@ -263,7 +297,7 @@ mod tests {
     fn f39_zooming_keeps_the_image_pixel_under_the_pointer() {
         let image = image(400, 300);
         let canvas = Bounds::new(point(px(20.0), px(30.0)), CANVAS);
-        let placement = Placement::fitted(CANVAS, &image, 1.0);
+        let placement = Placement::fitted(CANVAS, all_of(&image), 1.0);
         let pointer = point(px(612.0), px(411.0));
         let before = Fit::new(canvas, &image, placement, 1.0).image_point(canvas.origin + pointer);
         let zoomed = placement.zoomed(3.0, pointer);

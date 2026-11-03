@@ -57,7 +57,7 @@ pub fn bench(
         Ok(document) => document,
         Err(error) => return on_done(cx, Err(error)),
     };
-    let image = Arc::clone(document.base());
+    let kept = document.kept_area();
     let mut on_done: Option<OnDone> = Some(Box::new(on_done));
     let start = Instant::now();
     // The bench runs from cleanshot-fieldtest, a console tool whose stderr is read.
@@ -71,7 +71,7 @@ pub fn bench(
             let now = Instant::now();
             let canvas = window.viewport_size();
             Run {
-                fitted: Placement::fitted(canvas, &image, window.scale_factor()),
+                fitted: Placement::fitted(canvas, kept, window.scale_factor()),
                 centre: point(canvas.width / 2.0, canvas.height / 2.0),
                 first_frame: now - start,
                 last_frame: now,

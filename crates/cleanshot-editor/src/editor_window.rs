@@ -258,8 +258,15 @@ impl EditorView {
     }
 
     fn apply(&mut self, command: Command) {
+        // D-113: a new crop is shown fitted, whatever the zoom was.
+        let refit = matches!(command, Command::SetCrop(_));
         match self.history.apply(command) {
-            Ok(()) => self.refresh(),
+            Ok(()) => {
+                if refit {
+                    self.placement = None;
+                }
+                self.refresh();
+            }
             Err(error) => self.notice = Some(refusal(&error).into()),
         }
     }
