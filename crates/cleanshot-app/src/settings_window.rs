@@ -11,7 +11,8 @@ use crate::{Session, region_hotkey};
 
 /// F-55: opens the settings window, or brings it forward, or says in the tray why it could not.
 pub(super) fn open_settings(cx: &mut cleanshot_editor::App, session: &Rc<Session>) {
-    let current = session.settings.borrow().clone();
+    let reading = Rc::clone(session);
+    let current = move || reading.settings.borrow().clone();
     let applying = Rc::clone(session);
     let apply = move |changed| apply_settings(&applying, changed);
     let opened = cleanshot_editor::open_settings(

@@ -10,8 +10,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Bounds, Context, Div, ElementId, FocusHandle, Global, InteractiveElement,
     IntoElement, KeyDownEvent, ParentElement, PathPromptOptions, Render, Role, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, Task, TitlebarOptions, Toggled, Window,
-    WindowBounds, WindowHandle, WindowOptions, div, px, size,
+    Stateful, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions, Toggled,
+    Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 
 use crate::Error;
@@ -19,6 +19,8 @@ use crate::text::register_inter;
 use crate::theme::{ACCENT, Theme};
 
 type Apply = Rc<dyn Fn(Settings) -> Applied>;
+/// Reads the settings file's own values as the app holds them now.
+type Current = Rc<dyn Fn() -> Settings>;
 
 /// F-56, D-93: whether Windows starts this exe at sign-in, read when the window opens, and how
 /// to change it.
@@ -32,7 +34,8 @@ struct OpenSettings(WindowHandle<SettingsView>);
 
 impl Global for OpenSettings {}
 
-/// Shows the settings window (F-55) for `current`, or brings forward the one already open.
+/// Shows the settings window (F-55) for the settings `current` reads, or brings forward the one
+/// already open.
 /// Each change is first checked as the settings file would read it, then handed to `apply`,
 /// whose outcome the window shows. What `policy` sets is shown, not offered (D-86). The
 /// start-with-Windows switch shows `starts_with_windows` and calls `set_start_with_windows` with
@@ -44,7 +47,7 @@ impl Global for OpenSettings {}
 /// [`Error::WindowOpen`] if the window could not open.
 pub fn open_settings(
     cx: &mut App,
-    current: Settings,
+    current: impl Fn() -> Settings + 'static,
     policy: Policy,
     apply: impl Fn(Settings) -> Applied + 'static,
     starts_with_windows: bool,
@@ -63,6 +66,7 @@ pub fn open_settings(
     }
     register_inter(cx)?;
     let apply: Apply = Rc::new(apply);
+    let current: Current = Rc::new(current);
     let startup = StartWithWindows {
         on: starts_with_windows,
         set: Box::new(set_start_with_windows),
@@ -90,8 +94,10 @@ pub fn open_settings(
 }
 
 struct SettingsView {
-    /// The settings file's own values; what the policy sets is never written into it.
-    settings: Settings,
+    /// The settings file's own values, read afresh for each render and each change, so a
+    /// change made elsewhere (the Options menu, F-12) is shown and never written over; what
+    /// the policy sets is never written into it.
+    current: Current,
     policy: Policy,
     apply: Apply,
     startup: StartWithWindows,
@@ -100,11 +106,12 @@ struct SettingsView {
     notice: Option<SharedString>,
     focus: FocusHandle,
     choosing_folder: Option<Task<()>>,
+    _activation: Subscription,
 }
 
 impl SettingsView {
     fn new(
-        settings: Settings,
+        current: Current,
         policy: Policy,
         apply: Apply,
         startup: StartWithWindows,
@@ -113,8 +120,10 @@ impl SettingsView {
     ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        // F-12: a change made from the Options menu while this window was in the background.
+        let activation = cx.observe_window_activation(window, |_, _, cx| cx.notify());
         Self {
-            settings,
+            current,
             policy,
             apply,
             startup,
@@ -122,6 +131,7 @@ impl SettingsView {
             notice: None,
             focus,
             choosing_folder: None,
+            _activation: activation,
         }
     }
 
@@ -132,8 +142,8 @@ impl SettingsView {
             Ok(changed) => changed,
             Err(problems) => return self.tell(&SettingsNotice::Refused(problems)),
         };
-        let (kept, notice) = (self.apply)(changed.clone()).outcome(&self.settings, changed);
-        self.settings = kept;
+        let before = (self.current)();
+        let (_kept_by_the_app, notice) = (self.apply)(changed.clone()).outcome(&before, changed);
         self.notice = notice.map(|notice| settings_notice(&notice).into());
     }
 
@@ -142,7 +152,7 @@ impl SettingsView {
     }
 
     fn set_hotkey(&mut self, action: HotkeyAction, hotkey: Hotkey) {
-        match self.settings.hotkeys.used_by_another(action, hotkey) {
+        match (self.current)().hotkeys.used_by_another(action, hotkey) {
             Some(other) => self.tell(&SettingsNotice::HotkeyShared {
                 wanted: hotkey,
                 other,
@@ -152,7 +162,7 @@ impl SettingsView {
     }
 
     fn edit(&mut self, edit: impl FnOnce(&mut Settings)) {
-        let mut changed = self.settings.clone();
+        let mut changed = (self.current)();
         edit(&mut changed);
         self.change(changed);
     }
@@ -234,7 +244,7 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
-        let settings = &self.settings;
+        let settings = (self.current)();
         let capture = section("Capture", theme)
             .child(radio_group(
                 "After capture",
@@ -326,9 +336,8 @@ impl SettingsView {
                 .child(set_by_policy(SET_BY_ORGANISATION, theme)),
             None => folder_row
                 .child(shown_value(
-                    self.settings
+                    (self.current)()
                         .save_folder
-                        .clone()
                         .unwrap_or_else(|| "Pictures\\Screenshots".to_owned()),
                     theme,
                 ))
@@ -360,7 +369,7 @@ impl SettingsView {
                     (SaveFormat::Jpg, SaveFormat::Jpg.name()),
                     (SaveFormat::Bmp, SaveFormat::Bmp.name()),
                 ],
-                self.settings.save_format,
+                (self.current)().save_format,
                 theme,
                 cx,
                 |settings, choice| settings.save_format = choice,
@@ -382,7 +391,7 @@ impl SettingsView {
         let shown = if recording {
             "Press a hotkey...".to_owned()
         } else {
-            self.settings.hotkeys.get(action).to_string()
+            (self.current)().hotkeys.get(action).to_string()
         };
         let name = format!("{} hotkey: {shown}", action.name());
         row()
