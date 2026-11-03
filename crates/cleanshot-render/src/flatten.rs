@@ -74,10 +74,10 @@ pub fn flatten(document: &Document, masks: &TextMasks) -> Result<Flattened, Erro
     for entry in document.shapes() {
         if entry.style.shadow() {
             let mut layer = Pixmap::new(pixmap.width(), pixmap.height()).ok_or_else(too_large)?;
-            draw(&mut layer, entry, masks)?;
+            draw(&mut layer, entry, Some(masks))?;
             cast_shadow(&mut pixmap, &layer);
         }
-        draw(&mut pixmap, entry, masks)?;
+        draw(&mut pixmap, entry, Some(masks))?;
     }
     if let Some(crop) = document.crop() {
         pixmap = covered_pixels(crop, pixmap.width(), pixmap.height())
@@ -149,7 +149,12 @@ pub(crate) fn covered_pixels(
     ))
 }
 
-fn draw(pixmap: &mut Pixmap, entry: &ShapeEntry, masks: &TextMasks) -> Result<(), Error> {
+/// Draws `entry` on `pixmap`, its text from `masks`, or without its text when there are none.
+pub(crate) fn draw(
+    pixmap: &mut Pixmap,
+    entry: &ShapeEntry,
+    masks: Option<&TextMasks>,
+) -> Result<(), Error> {
     let paint = paint(entry.style.color, BlendMode::SourceOver);
     let stroke = Stroke {
         width: entry.style.stroke_width,
@@ -267,7 +272,15 @@ fn rounded_rect(rect: RectF, radius: f32) -> Option<Path> {
 }
 
 /// Paints the glyph layers of the shape `id` in `color`, or in a colour glyph's own colour.
-fn text(pixmap: &mut Pixmap, id: ShapeId, masks: &TextMasks, color: Color) -> Result<(), Error> {
+fn text(
+    pixmap: &mut Pixmap,
+    id: ShapeId,
+    masks: Option<&TextMasks>,
+    color: Color,
+) -> Result<(), Error> {
+    let Some(masks) = masks else {
+        return Ok(());
+    };
     let layers = masks.layers(id).ok_or(Error::MissingTextMask(id))?;
     for layer in layers {
         glyphs(pixmap, layer, layer.color().unwrap_or(color));

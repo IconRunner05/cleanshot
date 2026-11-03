@@ -1,7 +1,63 @@
-use cleanshot_core::{Color, Style};
-use tiny_skia::Pixmap;
+use cleanshot_core::{Color, RgbaImage, ShapeEntry, Style};
+use tiny_skia::{IntRect, Pixmap};
 
-use crate::flatten::source_over;
+use crate::flatten::{draw, source_over, straight};
+use crate::{Error, Patch};
+
+/// The shadow `entry` casts on an image of `width` by `height`, drawn alone as the export
+/// draws it under the shape (D-114), for the editor to show. Text casts none here, having no
+/// glyph masks. `None` when `entry` casts no shadow or it falls outside the image.
+///
+/// # Errors
+///
+/// [`Error::TooLarge`] if the image exceeds the renderer's size limit.
+pub fn shape_shadow(entry: &ShapeEntry, width: u32, height: u32) -> Result<Option<Patch>, Error> {
+    if !entry.style.shadow() {
+        return Ok(None);
+    }
+    let too_large = || Error::TooLarge { width, height };
+    let mut layer = Pixmap::new(width, height).ok_or_else(too_large)?;
+    draw(&mut layer, entry, None)?;
+    let mut shadow = Pixmap::new(width, height).ok_or_else(too_large)?;
+    cast_shadow(&mut shadow, &layer);
+    let Some(bounds) = covered_bounds(&shadow) else {
+        return Ok(None);
+    };
+    let Some(patch) = shadow.clone_rect(bounds) else {
+        return Ok(None);
+    };
+    let pixels =
+        RgbaImage::new(patch.width(), patch.height(), straight(&patch)).map_err(Error::Output)?;
+    Ok(Some(Patch {
+        left: bounds.x().unsigned_abs(),
+        top: bounds.y().unsigned_abs(),
+        pixels,
+    }))
+}
+
+/// The smallest rectangle holding every pixel of `pixmap` that is not transparent.
+fn covered_bounds(pixmap: &Pixmap) -> Option<IntRect> {
+    let (left, right, top, bottom) = covered(pixmap)?;
+    IntRect::from_ltrb(
+        i32::try_from(left).ok()?,
+        i32::try_from(top).ok()?,
+        i32::try_from(right + 1).ok()?,
+        i32::try_from(bottom + 1).ok()?,
+    )
+}
+
+/// The first and last column and row of `pixmap` with any coverage.
+fn covered(pixmap: &Pixmap) -> Option<(usize, usize, usize, usize)> {
+    let width = pixmap.width() as usize;
+    let mut bounds: Option<(usize, usize, usize, usize)> = None;
+    for (y, row) in pixmap.pixels().chunks_exact(width).enumerate() {
+        for x in (0..width).filter(|&x| row[x].alpha() > 0) {
+            let (left, right, top, _) = bounds.unwrap_or((x, x, y, y));
+            bounds = Some((left.min(x), right.max(x), top, y));
+        }
+    }
+    bounds
+}
 
 const BLACK: Color = Color {
     r: 0,
@@ -32,14 +88,7 @@ pub(crate) fn cast_shadow(pixmap: &mut Pixmap, layer: &Pixmap) {
     let width = layer.width() as usize;
     let height = layer.height() as usize;
     let coverage = |x: usize, y: usize| f64::from(layer.pixels()[y * width + x].alpha()) / 255.0;
-    let mut bounds: Option<(usize, usize, usize, usize)> = None;
-    for y in 0..height {
-        for x in (0..width).filter(|&x| coverage(x, y) > 0.0) {
-            let (left, right, top, _) = bounds.unwrap_or((x, x, y, y));
-            bounds = Some((left.min(x), right.max(x), top, y));
-        }
-    }
-    let Some((left, right, top, bottom)) = bounds else {
+    let Some((left, right, top, bottom)) = covered(layer) else {
         return;
     };
     let (reach, weights) = gaussian(Style::SHADOW_BLUR);
@@ -99,6 +148,10 @@ mod tests {
         pixmap.pixel(x, y).unwrap().red()
     }
 
+    fn byte(image: &RgbaImage, x: u32, y: u32, channel: usize) -> u8 {
+        image.pixels()[(y * image.width() + x) as usize * 4 + channel]
+    }
+
     #[test]
     fn d114_a_shadow_falls_below_the_shape_fades_out_and_leaves_the_rest_alone() {
         let mut layer = Pixmap::new(80, 60).unwrap();
@@ -127,5 +180,79 @@ mod tests {
             red(&pixmap, 43, 25),
             "left and right alike"
         );
+    }
+
+    #[test]
+    fn d114_the_editor_gets_the_shadow_the_export_draws_and_text_gets_none_without_masks() {
+        use std::sync::Arc;
+
+        use cleanshot_core::{
+            Command, Document, Fill, History, Look, Property, RectF, Shape, TextBlock, TextMasks,
+            Tool,
+        };
+
+        let dressed = |shape: Shape, shadow| {
+            let tool = Tool::drawing(&shape);
+            Look::default_for(tool)
+                .with(Property::Fill(Fill::Solid))
+                .and_then(|look| look.with(Property::Shadow(shadow)))
+                .unwrap()
+                .dress(shape)
+        };
+        let box_at = RectF {
+            x: 20.0,
+            y: 10.0,
+            width: 30.0,
+            height: 20.0,
+        };
+        let (shape, style) = dressed(
+            Shape::Rect {
+                rect: box_at,
+                fill: Fill::Solid,
+            },
+            true,
+        );
+        let white = RgbaImage::new(80, 60, vec![255; 80 * 60 * 4]).unwrap();
+        let mut history = History::new(Document::new(Arc::new(white)));
+        history.apply(Command::Add { shape, style }).unwrap();
+        let entry = history.document().shapes()[0].clone();
+        let flat = crate::flatten(history.document(), &TextMasks::default()).unwrap();
+        let patch = shape_shadow(&entry, 80, 60).unwrap().unwrap();
+        for (x, y) in [(35, 31), (35, 34), (52, 20), (18, 30)] {
+            let alpha = byte(&patch.pixels, x - patch.left, y - patch.top, 3);
+            let exported = byte(flat.image(), x, y, 0);
+            assert!(
+                (i32::from(255 - alpha) - i32::from(exported)).abs() <= 1,
+                "({x}, {y}): shadow alpha {alpha}, export {exported}"
+            );
+        }
+        let (shape, style) = dressed(
+            Shape::Rect {
+                rect: box_at,
+                fill: Fill::Solid,
+            },
+            false,
+        );
+        let plain = ShapeEntry {
+            style,
+            shape,
+            ..entry.clone()
+        };
+        assert_eq!(shape_shadow(&plain, 80, 60).unwrap(), None);
+        let block = TextBlock::new(
+            cleanshot_core::PointF { x: 4.0, y: 4.0 },
+            "a".into(),
+            12.0,
+            1.0,
+        )
+        .unwrap();
+        let (shape, style) = dressed(Shape::Text(block), true);
+        assert!(style.shadow());
+        let text = ShapeEntry {
+            style,
+            shape,
+            ..entry
+        };
+        assert_eq!(shape_shadow(&text, 80, 60).unwrap(), None);
     }
 }

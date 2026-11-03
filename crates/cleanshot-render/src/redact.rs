@@ -3,8 +3,8 @@ use std::ops::Range;
 use cleanshot_core::{RectF, RedactMode, RgbaImage};
 use tiny_skia::{IntSize, Pixmap};
 
-use crate::Error;
 use crate::flatten::{covered_pixels, premultiplied, straight};
+use crate::{Error, Patch};
 
 /// The side of a pixelation cell in image pixels. Cells are spread evenly over the area, so
 /// none is much smaller than this unless the area itself is.
@@ -53,14 +53,6 @@ pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode) {
     }
 }
 
-/// What a redaction leaves of the screenshot: the pixels it covers, from `left`, `top`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Redacted {
-    pub left: u32,
-    pub top: u32,
-    pub pixels: RgbaImage,
-}
-
 /// The pixels a redaction of `rect` in `mode` leaves of `image`, exactly as an export draws
 /// them where no shape is under it (C-22, F-36); `None` if `rect` covers no pixel.
 ///
@@ -71,11 +63,7 @@ pub struct Redacted {
     clippy::cast_precision_loss,
     reason = "an image side is far below 2^24, where f32 stops being exact"
 )]
-pub fn redacted(
-    image: &RgbaImage,
-    rect: RectF,
-    mode: RedactMode,
-) -> Result<Option<Redacted>, Error> {
+pub fn redacted(image: &RgbaImage, rect: RectF, mode: RedactMode) -> Result<Option<Patch>, Error> {
     let Some((columns, rows)) = covered_pixels(rect, image.width(), image.height()) else {
         return Ok(None);
     };
@@ -101,7 +89,7 @@ pub fn redacted(
     };
     redact(&mut pixmap, whole, mode);
     let pixels = RgbaImage::new(width, height, straight(&pixmap)).map_err(Error::Output)?;
-    Ok(Some(Redacted {
+    Ok(Some(Patch {
         left: columns.start,
         top: rows.start,
         pixels,

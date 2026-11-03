@@ -19,7 +19,7 @@ use gpui::{
 };
 
 use crate::canvas::{
-    OnPointer, Overlay, Pointer, RedactionPreviews, document_canvas, render_image,
+    OnPointer, Overlay, Pointer, RedactionPreviews, ShadowPreviews, document_canvas, render_image,
 };
 use crate::placement::{MIN_WINDOW, Placement, opening_size};
 use crate::shape_menu::ShapeMenu;
@@ -80,6 +80,7 @@ struct EditorView {
     /// How each tool draws, as the property strip sets it; not part of the document.
     looks: Looks,
     redactions: Rc<RedactionPreviews>,
+    shadows: Rc<ShadowPreviews>,
     log: Log,
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
@@ -128,6 +129,7 @@ impl EditorView {
             menu: None,
             looks: Looks::default(),
             redactions: Rc::new(RedactionPreviews::new(Rc::clone(&log))),
+            shadows: Rc::new(ShadowPreviews::new(Rc::clone(&log))),
             log,
             shift: false,
             placement: None,
@@ -524,11 +526,13 @@ impl Render for EditorView {
             },
         };
         Rc::make_mut(&mut self.redactions).update(&self.document);
+        Rc::make_mut(&mut self.shadows).update(&self.document);
         let canvas = document_canvas(
             Rc::clone(&self.document),
             Arc::clone(&self.base),
             self.placement,
             Rc::clone(&self.redactions),
+            Rc::clone(&self.shadows),
             overlay,
             on_pointer,
         );

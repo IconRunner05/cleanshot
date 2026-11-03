@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Bubble, Color, Command, Document, Fill, Frame, Label, PointF, RectF, RedactMode, RgbaImage,
-    SPOTLIGHT_DIM, Shape, ShapeId, Style, areas_outside, arrow_head, box_handles, dimmed_areas,
-    handles, step_numbers, text_on,
+    SPOTLIGHT_DIM, Shape, ShapeEntry, ShapeId, Style, areas_outside, arrow_head, box_handles,
+    dimmed_areas, handles, step_numbers, text_on,
 };
-use cleanshot_render::{Redacted, redacted};
+use cleanshot_render::{Patch, redacted, shape_shadow};
 use gpui::{
     App, BorderStyle, Bounds, BoxShadow, Canvas, Corners, DispatchPhase, Hitbox, HitboxBehavior,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point,
@@ -140,7 +140,7 @@ fn redaction_preview(
     log: &dyn Fn(&'static str),
 ) -> RedactionPreview {
     match redacted(image, rect, mode) {
-        Ok(Some(Redacted { left, top, pixels })) => RedactionPreview::Pixels {
+        Ok(Some(Patch { left, top, pixels })) => RedactionPreview::Pixels {
             bounds: RectF {
                 x: left as f32,
                 y: top as f32,
@@ -154,6 +154,176 @@ fn redaction_preview(
             log("redaction_preview not_made");
             RedactionPreview::Failed
         }
+    }
+}
+
+/// What the canvas shows under each shadowed shape whose shadow GPUI cannot draw as a box: the
+/// shadow the export draws there (D-114), made once for each shape rather than every frame.
+#[derive(Clone)]
+pub(crate) struct ShadowPreviews {
+    previews: HashMap<ShapeId, ShadowPreview>,
+    log: Log,
+}
+
+#[derive(Clone)]
+struct ShadowPreview {
+    of: ShapeEntry,
+    image: Option<(RectF, Arc<RenderImage>)>,
+}
+
+impl ShadowPreviews {
+    pub(crate) fn new(log: Log) -> Self {
+        Self {
+            previews: HashMap::new(),
+            log,
+        }
+    }
+
+    /// Keeps a preview for each such shape in `document`, remaking it when the shape changed and
+    /// dropping the ones no longer there. A shape being dragged is not in the document, so its
+    /// shadow shows again on release.
+    pub(crate) fn update(&mut self, document: &Document) {
+        let (width, height) = (document.base().width(), document.base().height());
+        let mut kept = HashMap::new();
+        for entry in document.shapes() {
+            if !entry.style.shadow() || box_shadow(&entry.shape).is_some() {
+                continue;
+            }
+            let preview = match self.previews.remove(&entry.id) {
+                Some(preview) if preview.of == *entry => preview,
+                Some(_) | None => ShadowPreview {
+                    of: entry.clone(),
+                    image: shadow_image(entry, width, height, &*self.log),
+                },
+            };
+            kept.insert(entry.id, preview);
+        }
+        self.previews = kept;
+    }
+
+    fn paint(&self, id: ShapeId, shape: &Shape, style: Style, fit: &Fit, window: &mut Window) {
+        let Some(ShadowPreview {
+            of,
+            image: Some((bounds, image)),
+        }) = self.previews.get(&id)
+        else {
+            return;
+        };
+        if of.shape != *shape || of.style != style {
+            return;
+        }
+        let bounds = fit.bounds(*bounds);
+        let painted = window.paint_image(bounds, bounds, 0.0.into(), Arc::clone(image), 0, false);
+        if painted.is_err() {
+            (self.log)("shadow_preview not_painted");
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "image sides are far below 2^24, where f32 stops being exact"
+)]
+fn shadow_image(
+    entry: &ShapeEntry,
+    width: u32,
+    height: u32,
+    log: &dyn Fn(&'static str),
+) -> Option<(RectF, Arc<RenderImage>)> {
+    match shape_shadow(entry, width, height) {
+        Ok(Some(Patch { left, top, pixels })) => {
+            let bounds = RectF {
+                x: left as f32,
+                y: top as f32,
+                width: pixels.width() as f32,
+                height: pixels.height() as f32,
+            };
+            Some((bounds, render_image(&pixels)))
+        }
+        Ok(None) => None,
+        Err(_) => {
+            log("shadow_preview not_made");
+            None
+        }
+    }
+}
+
+/// The box and corner radius, in image pixels, that cast `shape`'s shadow when GPUI can draw it
+/// as a box shadow: a solid rectangle, a numbered step's circle, a speech bubble's box.
+fn box_shadow(shape: &Shape) -> Option<(RectF, f32)> {
+    match shape {
+        Shape::Rect {
+            rect,
+            fill: Fill::Solid,
+        } => Some((*rect, 0.0)),
+        Shape::Step(step) => {
+            let circle = step.circle();
+            Some((circle, circle.width / 2.0))
+        }
+        Shape::Bubble(bubble) => Some((bubble.outline(), bubble.corner_radius())),
+        Shape::Rect {
+            fill: Fill::Hollow, ..
+        }
+        | Shape::Line { .. }
+        | Shape::Arrow { .. }
+        | Shape::Ellipse { .. }
+        | Shape::Pen(_)
+        | Shape::Text(_)
+        | Shape::Highlight(_)
+        | Shape::Redact { .. }
+        | Shape::Spotlight(_) => None,
+    }
+}
+
+/// Paints the shadow `shape` casts under it (D-114). Bare text's shadow is its glyphs moved
+/// down, unblurred, where the export blurs it: a known gap, recorded in D-114.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the shadow's sizes are a few pixels, exact in f32"
+)]
+fn paint_shadow(
+    id: Option<ShapeId>,
+    shape: &Shape,
+    style: Style,
+    painting: &Painting,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if !style.shadow() {
+        return;
+    }
+    let fit = painting.fit;
+    let offset = Style::SHADOW_OFFSET as f32;
+    if let Some((rect, radius)) = box_shadow(shape) {
+        window.paint_drop_shadows(
+            fit.bounds(rect),
+            Corners::all(px(radius * fit.scale)),
+            &[BoxShadow {
+                color: hsla(0.0, 0.0, 0.0, Style::SHADOW_ALPHA),
+                offset: point(px(0.0), px(offset * fit.scale)),
+                blur_radius: px(Style::SHADOW_BLUR as f32 * fit.scale),
+                spread_radius: px(0.0),
+                inset: false,
+            }],
+        );
+        return;
+    }
+    if let Shape::Text(block) = shape {
+        let below = Fit {
+            origin: fit.origin + point(px(0.0), px(offset * fit.scale)),
+            ..*fit
+        };
+        let black = Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: Style::SHADOW_ALPHA,
+        };
+        paint_label(&Label::Block(block), black, &below, window, cx);
+        return;
+    }
+    if let Some(id) = id {
+        painting.shadows.paint(id, shape, style, fit, window);
     }
 }
 
@@ -219,6 +389,7 @@ pub(crate) fn document_canvas(
     base: Arc<RenderImage>,
     placement: Option<Placement>,
     redactions: Rc<RedactionPreviews>,
+    shadows: Rc<ShadowPreviews>,
     overlay: Overlay,
     on_pointer: OnPointer,
 ) -> Canvas<Hitbox> {
@@ -275,9 +446,11 @@ pub(crate) fn document_canvas(
                 let painting = Painting {
                     fit: &fit,
                     redactions: &redactions,
+                    shadows: &shadows,
                     dimmed: &dimmed,
                     number,
                 };
+                paint_shadow(id, shape, *style, &painting, window, cx);
                 paint_shape(shape, *style, &painting, window, cx);
                 if id.is_some() && overlay.selected == id {
                     selected_shape = Some(shape);
@@ -468,6 +641,7 @@ fn paint_handle(centre: Point<Pixels>, window: &mut Window) {
 struct Painting<'a> {
     fit: &'a Fit,
     redactions: &'a RedactionPreviews,
+    shadows: &'a ShadowPreviews,
     dimmed: &'a [RectF],
     number: usize,
 }
@@ -482,6 +656,7 @@ fn paint_shape(
     let Painting {
         fit,
         redactions,
+        shadows: _,
         dimmed,
         number,
     } = *painting;
@@ -687,5 +862,79 @@ mod tests {
         history.undo().unwrap();
         previews.update(history.document());
         assert!(previews.previews.is_empty());
+    }
+
+    #[test]
+    fn d114_a_shadow_image_is_made_for_an_arrow_or_hollow_box_kept_until_it_changes_and_not_for_a_solid_box()
+     {
+        use cleanshot_core::{Look, Property, Tool, moved};
+
+        let image = RgbaImage::new(64, 48, vec![200; 64 * 48 * 4]).unwrap();
+        let shadowed = |shape: Shape, fill| {
+            let (shape, style) = Look::default_for(Tool::drawing(&shape))
+                .with(Property::Fill(fill))
+                .and_then(|look| look.with(Property::Shadow(true)))
+                .unwrap()
+                .dress(shape);
+            Command::Add { shape, style }
+        };
+        let arrow = Shape::Arrow {
+            from: PointF { x: 4.0, y: 4.0 },
+            to: PointF { x: 40.0, y: 30.0 },
+        };
+        let rect = |fill| Shape::Rect {
+            rect: RectF {
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 10.0,
+            },
+            fill,
+        };
+        let mut history = History::new(Document::new(Arc::new(image)));
+        history.apply(shadowed(arrow, Fill::Hollow)).unwrap();
+        history
+            .apply(shadowed(rect(Fill::Solid), Fill::Solid))
+            .unwrap();
+        history
+            .apply(shadowed(rect(Fill::Hollow), Fill::Hollow))
+            .unwrap();
+        let image_of = |previews: &ShadowPreviews, id: ShapeId| match &previews.previews[&id].image
+        {
+            Some((_, image)) => Arc::clone(image),
+            None => panic!("a shadow image for {id:?}"),
+        };
+        let mut previews = ShadowPreviews::new(Rc::new(|_| {}));
+        previews.update(history.document());
+        let ids: Vec<_> = history
+            .document()
+            .shapes()
+            .iter()
+            .map(|entry| entry.id)
+            .collect();
+        let arrow_id = ids[0];
+        assert!(
+            !previews.previews.contains_key(&ids[1]),
+            "the solid box's shadow is GPUI's"
+        );
+        image_of(&previews, ids[2]);
+        let first = image_of(&previews, arrow_id);
+        let pen = Command::Add {
+            shape: Shape::Pen(vec![PointF { x: 1.0, y: 1.0 }]),
+            style: Style::new(history.document().shapes()[0].style.color, 2.0),
+        };
+        history.apply(pen).unwrap();
+        previews.update(history.document());
+        assert!(Arc::ptr_eq(&first, &image_of(&previews, arrow_id)));
+        let entry = history.document().shapes()[0].clone();
+        history
+            .apply(Command::Replace {
+                id: arrow_id,
+                shape: moved(&entry.shape, PointF { x: 5.0, y: 0.0 }),
+                style: entry.style,
+            })
+            .unwrap();
+        previews.update(history.document());
+        assert!(!Arc::ptr_eq(&first, &image_of(&previews, arrow_id)));
     }
 }
