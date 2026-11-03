@@ -12,7 +12,7 @@ clean, well organised, and written by a human for a human.
 - **Reads like a person wrote it.** Spoken-word names, no stock LLM phrasing, no narration
   of the edit, plain ASCII, in code, comments, workflow step names and commit messages.
 - **No new prose files.** Findings and measurements go in the commit message; decisions get
-  one row in CHARTER §11 with `Status: assumed`.
+  one row in `docs/decisions.md` with `Status: assumed`.
 - **Tests named after IDs** where they prove a criterion (`f21_never_overwrites_existing_file`).
 - **Charter in step.** A behaviour change updates `docs/CHARTER.md` in the same change set.
 - **Windows-only tests are shown red and green on GitHub Actions.** The commit message quotes
@@ -34,14 +34,15 @@ clean, well organised, and written by a human for a human.
   single break; a red's parent is its commit or any descendant on the same stack. A red
   counts only if its failing step is the test step and the named test is the one that
   fails; a red stopped earlier (formatting, clippy, build) proves nothing.
-- **Decisions log order.** Rows stay in descending D-id order, and a new row goes in its id
-  position, never at the top or the end of the table.
+- **Decisions log order.** A new row is appended at the end of `docs/decisions.md`, in fold
+  order. Ids are unique, not sequential (charter-gates checks uniqueness and Status). The file
+  merges with `merge=union`, so two branches that each append a row fold with both kept (D-104).
 - **A head conflict is the steward's to resolve.** When the only thing keeping a commit from
-  merging onto main is two new Decisions-log rows at the head, or a CHARTER checklist line both
-  sides touched, the steward rebases the commit onto main, keeps the rows in descending order
-  (charter-gates checks it), pins the rebased commit, and says so in the notes. CHANGES only when
-  the conflict touches a row's content. (Orchestrator's rule, 2026-10-31, after five round trips
-  under `decision-row-head-conflict`.)
+  merging onto main is a CHARTER checklist line both sides touched, the steward rebases the
+  commit onto main, pins the rebased commit, and says so in the notes. CHANGES only when the
+  conflict touches a row's or line's content. A union merge that keeps two edits of one row
+  shows as a duplicate id in charter-gates: CHANGES. (Orchestrator's rule, 2026-10-31; rows
+  moved out of the conflict by D-104.)
 - **`cleanshot-app/src/main.rs` stays wiring (CHARTER 5, "thin").** A commit that adds a
   pipeline there (a sequence that captures, cuts, delivers, times or asks the user, rather than
   connecting one module's event to another's call) gets a refine moving it into its own file
