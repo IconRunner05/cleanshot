@@ -3,7 +3,9 @@ use std::rc::Rc;
 
 use std::path::PathBuf;
 
-use cleanshot_core::{OptionsEntry, OptionsItem, TabDirection, Toolbar, ToolbarControl};
+use cleanshot_core::{
+    OptionsEntry, OptionsItem, Pickable, Rect, TabDirection, Toolbar, ToolbarControl,
+};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory,
@@ -19,7 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::Error;
-use crate::capture::{MonitorImage, Pickable, dpi_scale};
+use crate::capture::{MonitorImage, dpi_scale, screen_point, screen_rect};
 use crate::fade;
 use crate::palette::Palette;
 use crate::selection::{Grip, nudged};
@@ -120,7 +122,7 @@ struct Shared {
     mode: Cell<Mode>,
     /// The windows a window capture can pick, topmost first (D-100).
     pickable: Vec<Pickable>,
-    monitors: Vec<RECT>,
+    monitors: Vec<Rect>,
     windows: RefCell<Vec<HWND>>,
     /// The window that shows the toolbar and answers UI Automation for it.
     toolbar_window: Cell<Option<HWND>>,
@@ -321,7 +323,10 @@ impl Overlay {
             gesture: Cell::new(None),
             mode: Cell::new(Mode::Region),
             pickable,
-            monitors: captures.iter().map(|capture| capture.bounds).collect(),
+            monitors: captures
+                .iter()
+                .map(|capture| screen_rect(capture.bounds))
+                .collect(),
             windows: RefCell::new(Vec::with_capacity(captures.len())),
             toolbar_window: Cell::new(None),
             toolbar,
@@ -436,11 +441,9 @@ fn toolbar_monitor(captures: &[MonitorImage]) -> windows::core::Result<Option<&M
     let mut pointer = POINT::default();
     // SAFETY: `pointer` is writable.
     unsafe { GetCursorPos(&raw mut pointer) }?;
-    let found = captures.iter().find(|capture| {
-        let bounds = capture.bounds;
-        (bounds.left..bounds.right).contains(&pointer.x)
-            && (bounds.top..bounds.bottom).contains(&pointer.y)
-    });
+    let found = captures
+        .iter()
+        .find(|capture| screen_rect(capture.bounds).holds(screen_point(pointer)));
     Ok(found.or(captures.first()))
 }
 

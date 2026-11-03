@@ -19,6 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, Interface, PCWSTR, PWSTR};
 
+use crate::capture::{screen_point, screen_rect};
 use crate::palette::Palette;
 use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
@@ -151,7 +152,9 @@ pub(crate) fn layout(
     };
     let bottom = at(monitor.bottom - margin - height);
     let top = at(monitor.top + margin);
-    let covers = |pill: RECT| selected.is_some_and(|selected| overlaps(pill, selected));
+    let covers = |pill: RECT| {
+        selected.is_some_and(|selected| screen_rect(pill).overlap(screen_rect(selected)).is_some())
+    };
     let pill = if covers(bottom) && !covers(top) {
         top
     } else {
@@ -181,10 +184,6 @@ pub(crate) fn layout(
     })
 }
 
-fn overlaps(a: RECT, b: RECT) -> bool {
-    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
-}
-
 impl Layout {
     /// Where `control` sits, in screen pixels.
     pub(crate) fn area(&self, control: ToolbarControl) -> RECT {
@@ -198,9 +197,7 @@ impl Layout {
     pub(crate) fn control_at(&self, point: POINT) -> Option<ToolbarControl> {
         self.controls
             .iter()
-            .find(|(_, at)| {
-                (at.left..at.right).contains(&point.x) && (at.top..at.bottom).contains(&point.y)
-            })
+            .find(|&&(_, at)| screen_rect(at).holds(screen_point(point)))
             .map(|&(control, _)| control)
     }
 }

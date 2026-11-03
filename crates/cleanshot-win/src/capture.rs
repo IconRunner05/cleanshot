@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use cleanshot_core::RgbaImage;
+use cleanshot_core::{Point, Rect, RgbaImage, first_holding};
 pub use windows::Win32::Foundation::RECT;
 use windows::Win32::Foundation::{HMODULE, LPARAM, POINT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
@@ -35,7 +35,7 @@ mod pointer;
 mod window;
 
 pub use pointer::draw_pointer;
-pub use window::{Pick, Pickable, pickable_windows, picked};
+pub use window::pickable_windows;
 
 pub(crate) const DESKTOP_DPI: f32 = 96.0;
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
@@ -82,25 +82,38 @@ pub fn monitor_under_cursor(captures: &[MonitorImage]) -> Result<RECT, Error> {
 }
 
 fn monitor_containing(captures: &[MonitorImage], point: POINT) -> Option<RECT> {
-    first_holding(captures.iter().map(|capture| capture.bounds), point)
+    first_holding(
+        captures.iter().map(|capture| screen_rect(capture.bounds)),
+        screen_point(point),
+    )
+    .map(win32_rect)
 }
 
-fn first_holding(rectangles: impl IntoIterator<Item = RECT>, point: POINT) -> Option<RECT> {
-    rectangles.into_iter().find(|&bounds| holds(bounds, point))
+/// A Win32 rectangle as core's [`Rect`].
+#[must_use]
+pub fn screen_rect(rect: RECT) -> Rect {
+    Rect {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    }
 }
 
-fn holds(bounds: RECT, point: POINT) -> bool {
-    (bounds.left..bounds.right).contains(&point.x) && (bounds.top..bounds.bottom).contains(&point.y)
+pub(crate) fn win32_rect(rect: Rect) -> RECT {
+    RECT {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    }
 }
 
-fn overlap(a: RECT, b: RECT) -> Option<RECT> {
-    let shared = RECT {
-        left: a.left.max(b.left),
-        top: a.top.max(b.top),
-        right: a.right.min(b.right),
-        bottom: a.bottom.min(b.bottom),
-    };
-    (shared.left < shared.right && shared.top < shared.bottom).then_some(shared)
+pub(crate) fn screen_point(point: POINT) -> Point {
+    Point {
+        x: point.x,
+        y: point.y,
+    }
 }
 
 /// Physical pixels per DIP on the monitor holding `bounds`.
@@ -214,7 +227,7 @@ pub fn region(captures: &[MonitorImage], selected: RECT) -> Result<RgbaImage, Er
     let mut pixels = vec![0; row_bytes * height as usize];
     for capture in captures {
         let bounds = capture.bounds;
-        let Some(overlap) = overlap(selected, bounds) else {
+        let Some(overlap) = screen_rect(selected).overlap(screen_rect(bounds)) else {
             continue;
         };
         let source_row_bytes = capture.image.width() as usize * 4;

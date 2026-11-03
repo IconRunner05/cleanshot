@@ -11,7 +11,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ICONINFO,
 };
 
-use super::{MonitorImage, holds};
+use super::{MonitorImage, screen_point, screen_rect};
 use crate::{Error, struct_size};
 
 /// F-12 Show pointer: draws the pointer, in its shape at this moment, into the image of the
@@ -32,7 +32,7 @@ pub fn draw_pointer(monitors: &mut [MonitorImage]) -> Result<(), Error> {
     }
     let Some(monitor) = monitors
         .iter_mut()
-        .find(|monitor| holds(monitor.bounds, cursor.ptScreenPos))
+        .find(|monitor| screen_rect(monitor.bounds).holds(screen_point(cursor.ptScreenPos)))
     else {
         return Ok(());
     };

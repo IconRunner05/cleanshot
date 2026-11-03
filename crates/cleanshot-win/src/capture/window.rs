@@ -1,4 +1,5 @@
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
+use cleanshot_core::{Pickable, Rect};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWINDOWATTRIBUTE, DwmGetWindowAttribute,
 };
@@ -9,16 +10,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::BOOL;
 
-use super::{MonitorImage, first_holding, holds, overlap};
+use super::{MonitorImage, screen_rect};
 use crate::Error;
-
-/// A window a window capture can pick: its frame, DWM's extended frame bounds without the
-/// shadow, and its title for a screen reader to say (F-08, F-58).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Pickable {
-    pub frame: RECT,
-    pub title: String,
-}
 
 /// F-08 (D-100): the windows a window capture can pick, topmost first, as they are now:
 /// visible, uncloaked, unminimised top-level windows of other processes, cut to the captured
@@ -32,38 +25,21 @@ pub fn pickable_windows(captures: &[MonitorImage]) -> Result<Vec<Pickable>, Erro
     let target = LPARAM(std::ptr::from_mut(&mut listed) as isize);
     // SAFETY: the callback runs only during EnumWindows, while `listed` is borrowed here.
     unsafe { EnumWindows(Some(collect), target) }.map_err(Error::Capture)?;
-    let desktop = desktop_bounds(captures);
+    let Some(desktop) = Rect::bounding(captures.iter().map(|capture| screen_rect(capture.bounds)))
+    else {
+        return Ok(Vec::new());
+    };
     Ok(listed
         .into_iter()
         .filter(|&window| pickable(window))
         .filter_map(|window| {
-            let frame = frame(window).and_then(|frame| overlap(frame, desktop))?;
+            let frame = frame(window).and_then(|frame| screen_rect(frame).overlap(desktop))?;
             Some(Pickable {
                 frame,
                 title: title(window),
             })
         })
         .collect())
-}
-
-/// What a window capture picks (F-08, D-100).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Pick {
-    /// The window at this place in the list [`pickable_windows`] gave.
-    Window(usize),
-    /// A monitor, picked where no window is.
-    Monitor(RECT),
-}
-
-/// F-08 (D-100): what a window capture picks at `point`: the topmost of `windows`, from
-/// [`pickable_windows`], holding it, or else the monitor holding it.
-#[must_use]
-pub fn picked(windows: &[Pickable], monitors: &[RECT], point: POINT) -> Option<Pick> {
-    windows
-        .iter()
-        .position(|window| holds(window.frame, point))
-        .map(Pick::Window)
-        .or_else(|| first_holding(monitors.iter().copied(), point).map(Pick::Monitor))
 }
 
 extern "system" fn collect(window: HWND, listed: LPARAM) -> BOOL {
@@ -140,67 +116,5 @@ fn attribute<T>(
             std::ptr::from_mut(value).cast(),
             crate::struct_size::<T>(),
         )
-    }
-}
-
-fn desktop_bounds(captures: &[MonitorImage]) -> RECT {
-    captures
-        .iter()
-        .map(|capture| capture.bounds)
-        .reduce(|all, bounds| RECT {
-            left: all.left.min(bounds.left),
-            top: all.top.min(bounds.top),
-            right: all.right.max(bounds.right),
-            bottom: all.bottom.max(bounds.bottom),
-        })
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
-        RECT {
-            left,
-            top,
-            right,
-            bottom,
-        }
-    }
-
-    #[test]
-    fn f08_the_topmost_window_holding_the_pointer_is_picked_and_its_monitor_where_none_is() {
-        let windows = [
-            rect(10, 10, 50, 50),
-            rect(0, 0, 100, 100),
-            rect(200, 0, 300, 50),
-        ]
-        .map(|frame| Pickable {
-            frame,
-            title: String::new(),
-        });
-        let monitors = [rect(-400, 0, 0, 300), rect(0, 0, 400, 300)];
-        let at = |x, y| picked(&windows, &monitors, POINT { x, y });
-        assert_eq!(at(20, 20), Some(Pick::Window(0)));
-        assert_eq!(at(5, 5), Some(Pick::Window(1)));
-        assert_eq!(at(50, 50), Some(Pick::Window(1)));
-        assert_eq!(at(150, 20), Some(Pick::Monitor(monitors[1])));
-        assert_eq!(at(-1, 20), Some(Pick::Monitor(monitors[0])));
-        assert_eq!(at(0, 300), None);
-    }
-
-    #[test]
-    fn f08_a_frame_is_cut_to_the_desktop_and_a_frame_off_it_is_dropped() {
-        let desktop = rect(-1920, 0, 1920, 1080);
-        assert_eq!(
-            overlap(rect(1800, 900, 2100, 1200), desktop),
-            Some(rect(1800, 900, 1920, 1080))
-        );
-        assert_eq!(
-            overlap(rect(-2000, -10, -1900, 10), desktop),
-            Some(rect(-1920, 0, -1900, 10))
-        );
-        assert_eq!(overlap(rect(1920, 0, 2000, 100), desktop), None);
     }
 }

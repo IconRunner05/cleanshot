@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    AfterCapture, CaptureMode, Delivered, DeliveryError, Document, Output, RgbaImage, Saving,
-    delivery_notice,
+    AfterCapture, CaptureMode, Delivered, DeliveryError, Document, Output, Pickable, Rect,
+    RgbaImage, Saving, delivery_notice,
 };
 use cleanshot_win::capture::{
-    Desktop, MonitorImage, Pickable, RECT, capture_desktop, draw_pointer, monitor_under_cursor,
-    pickable_windows, region,
+    Desktop, MonitorImage, RECT, capture_desktop, draw_pointer, monitor_under_cursor,
+    pickable_windows, region, screen_rect,
 };
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
@@ -83,21 +83,19 @@ fn remembered(
     last_selection: Option<RECT>,
     monitors: impl IntoIterator<Item = RECT>,
 ) -> Option<RECT> {
-    let area = |rect: RECT| i64::from(rect.right - rect.left) * i64::from(rect.bottom - rect.top);
-    let covered = |selection: RECT| {
+    let area = |rect: Rect| i64::from(rect.right - rect.left) * i64::from(rect.bottom - rect.top);
+    // Windows reports a mirrored display as one monitor, so no two overlap and the sum is
+    // the area covered.
+    let covered = |selection: Rect| {
         monitors
             .into_iter()
-            .map(|monitor| RECT {
-                left: selection.left.max(monitor.left),
-                top: selection.top.max(monitor.top),
-                right: selection.right.min(monitor.right),
-                bottom: selection.bottom.min(monitor.bottom),
-            })
-            .filter(|shared| shared.left < shared.right && shared.top < shared.bottom)
+            .filter_map(|monitor| selection.overlap(screen_rect(monitor)))
             .map(area)
             .sum::<i64>()
     };
-    last_selection.filter(|&selection| remember && covered(selection) == area(selection))
+    last_selection.filter(|&selection| {
+        remember && covered(screen_rect(selection)) == area(screen_rect(selection))
+    })
 }
 
 // F-01, F-02: the screen is copied before any window of ours appears, then frozen on every

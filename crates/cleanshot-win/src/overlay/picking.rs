@@ -1,8 +1,8 @@
-use cleanshot_core::{HotkeyAction, TabDirection, ToolbarControl};
+use cleanshot_core::{HotkeyAction, Pick, Pickable, ToolbarControl, next_window, picked};
 use windows::Win32::Foundation::{POINT, RECT};
 
 use super::{Key, OverlayEvent, Shared};
-use crate::capture::{Pick, Pickable, picked};
+use crate::capture::{screen_point, win32_rect};
 use crate::toolbar::automation;
 
 const WINDOW_TO_CAPTURE: &str = "Window to capture";
@@ -44,7 +44,7 @@ impl Shared {
 
     /// What a press at `at` picks in window mode: its window, or else its monitor (D-100).
     pub(super) fn picked_at(&self, at: POINT) -> Option<Pick> {
-        picked(&self.pickable, &self.monitors, at)
+        picked(&self.pickable, &self.monitors, screen_point(at))
     }
 
     /// F-58: a move of the highlight is said aloud, since the overlay never takes the focus.
@@ -94,23 +94,10 @@ impl Shared {
 
     pub(super) fn frame(&self, pick: Pick) -> RECT {
         match pick {
-            Pick::Window(at) => self.window(at).frame,
-            Pick::Monitor(bounds) => bounds,
+            Pick::Window(at) => win32_rect(self.window(at).frame),
+            Pick::Monitor(bounds) => win32_rect(bounds),
         }
     }
-}
-
-/// The window `step` places along from `hovered` in a list of `count`, wrapping at either
-/// end; from a monitor or none, the first forwards and the last backwards.
-fn next_window(count: usize, hovered: Option<Pick>, direction: TabDirection) -> Option<Pick> {
-    let last = count.checked_sub(1)?;
-    let next = match (hovered, direction) {
-        (Some(Pick::Window(at)), TabDirection::Forward) => (at + 1) % count,
-        (Some(Pick::Window(at)), TabDirection::Back) => (at + last) % count,
-        (Some(Pick::Monitor(_)) | None, TabDirection::Forward) => 0,
-        (Some(Pick::Monitor(_)) | None, TabDirection::Back) => last,
-    };
-    Some(Pick::Window(next))
 }
 
 #[cfg(test)]
@@ -123,7 +110,10 @@ mod tests {
         SendMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
 
+    use cleanshot_core::TabDirection;
+
     use super::*;
+    use crate::capture::screen_rect;
     use crate::overlay::Overlay;
     use crate::overlay::tests::{monitor, press, screen};
 
@@ -132,7 +122,7 @@ mod tests {
         let pickable = frames
             .into_iter()
             .map(|frame| Pickable {
-                frame,
+                frame: screen_rect(frame),
                 title: String::new(),
             })
             .collect();
@@ -257,7 +247,7 @@ mod tests {
         };
         // One window over the whole desktop, so the pointer and Tab can only highlight it.
         let pickable = vec![Pickable {
-            frame: desktop.bounds,
+            frame: screen_rect(desktop.bounds),
             title: "Notes".to_owned(),
         }];
         let overlay = Overlay::show(&[desktop], None, pickable, None, Vec::new, |_| {})
