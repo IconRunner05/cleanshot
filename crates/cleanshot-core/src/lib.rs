@@ -13,6 +13,7 @@ mod drawing;
 mod history;
 mod keys;
 mod look;
+mod options_menu;
 mod policy;
 mod selection;
 mod settings;
@@ -41,6 +42,7 @@ pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Command, CommandError, History};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key};
 pub use look::{Look, Looks, Property, PropertyError, Setting};
+pub use options_menu::{OptionsEntry, OptionsItem, Picked, options_menu};
 pub use policy::{
     POLICY_KEY, Policy, PolicyProblem, PolicySetting, PolicyValue, Saving, SavingOff,
 };
