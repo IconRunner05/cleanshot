@@ -285,3 +285,211 @@ extern "system" fn collect_own(window: HWND, windows: LPARAM) -> BOOL {
     }
     true.into()
 }
+/// A UI Automation client for tests that hears the changes a window raises, as a screen
+/// reader does.
+#[cfg(test)]
+#[expect(
+    clippy::inline_always,
+    clippy::ref_as_ptr,
+    reason = "in the code #[implement] generates"
+)]
+pub(crate) mod listening {
+    use std::sync::mpsc::channel;
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize,
+    };
+    use windows::Win32::System::Variant::VARIANT;
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation8, IUIAutomation, IUIAutomation5, IUIAutomationElement,
+        IUIAutomationEventHandler, IUIAutomationEventHandler_Impl,
+        IUIAutomationFocusChangedEventHandler, IUIAutomationFocusChangedEventHandler_Impl,
+        IUIAutomationNotificationEventHandler, IUIAutomationNotificationEventHandler_Impl,
+        IUIAutomationPropertyChangedEventHandler, IUIAutomationPropertyChangedEventHandler_Impl,
+        IUIAutomationValuePattern, NotificationKind, NotificationProcessing, TreeScope_Subtree,
+        UIA_EVENT_ID, UIA_PROPERTY_ID, UIA_SelectionItem_ElementSelectedEventId,
+        UIA_ValuePatternId, UIA_ValueValuePropertyId,
+    };
+    use windows::core::{BSTR, Interface, Ref, Result, implement};
+
+    type Heard = Arc<Mutex<Vec<String>>>;
+
+    #[implement(
+        IUIAutomationFocusChangedEventHandler,
+        IUIAutomationEventHandler,
+        IUIAutomationPropertyChangedEventHandler,
+        IUIAutomationNotificationEventHandler
+    )]
+    struct Listener {
+        heard: Heard,
+    }
+
+    impl Listener {
+        fn note(&self, what: &str, sender: &IUIAutomationElement) -> Result<()> {
+            // SAFETY: a property read of a live element.
+            let name = unsafe { sender.CurrentName() }?;
+            self.heard
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(format!("{what} {name}"));
+            Ok(())
+        }
+    }
+
+    impl IUIAutomationFocusChangedEventHandler_Impl for Listener_Impl {
+        fn HandleFocusChangedEvent(&self, sender: Ref<IUIAutomationElement>) -> Result<()> {
+            self.note("focus", sender.ok()?)
+        }
+    }
+
+    impl IUIAutomationEventHandler_Impl for Listener_Impl {
+        fn HandleAutomationEvent(
+            &self,
+            sender: Ref<IUIAutomationElement>,
+            event: UIA_EVENT_ID,
+        ) -> Result<()> {
+            if event == UIA_SelectionItem_ElementSelectedEventId {
+                self.note("selected", sender.ok()?)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl IUIAutomationNotificationEventHandler_Impl for Listener_Impl {
+        fn HandleNotificationEvent(
+            &self,
+            _sender: Ref<IUIAutomationElement>,
+            _kind: NotificationKind,
+            _processing: NotificationProcessing,
+            spoken: &BSTR,
+            _activity: &BSTR,
+        ) -> Result<()> {
+            self.heard
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(format!("notice {spoken}"));
+            Ok(())
+        }
+    }
+
+    impl IUIAutomationPropertyChangedEventHandler_Impl for Listener_Impl {
+        fn HandlePropertyChangedEvent(
+            &self,
+            sender: Ref<IUIAutomationElement>,
+            property: UIA_PROPERTY_ID,
+            _new: &VARIANT,
+        ) -> Result<()> {
+            if property != UIA_ValueValuePropertyId {
+                return Ok(());
+            }
+            let sender = sender.ok()?;
+            // SAFETY: the element is live, and the pattern asked for is the interface cast to.
+            let value = unsafe {
+                sender
+                    .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)?
+                    .CurrentValue()
+            }?;
+            self.heard
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(format!("value {value}"));
+            Ok(())
+        }
+    }
+
+    /// What a UI Automation client heard from `window` while `act` ran, as "focus <name>",
+    /// "selected <name>", "value <value>" and "notice <spoken>". The client runs on its own thread, and `pump`
+    /// runs `window`'s messages for the time given, so the window can answer it.
+    pub(crate) fn changes_heard(
+        window: HWND,
+        act: impl FnOnce(),
+        pump: impl Fn(Duration),
+    ) -> Vec<String> {
+        let heard: Heard = Arc::default();
+        let listening = Arc::clone(&heard);
+        let (ready, is_ready) = channel();
+        let (stop, stopped) = channel::<()>();
+        let address = window.0 as usize;
+        let client = thread::spawn(move || -> Result<()> {
+            // SAFETY: COM is initialised for this thread and released below.
+            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok()?;
+            let listened = (|| -> Result<()> {
+                // SAFETY: CUIAutomation8 is the system class for IUIAutomation and its later
+                // versions; IUIAutomation5 is cast to below for notifications.
+                let automation: IUIAutomation =
+                    unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }?;
+                let listener = Listener { heard: listening };
+                let events: IUIAutomationEventHandler = listener.into();
+                // SAFETY: the window is live while the test pumps it, and every handler is
+                // removed before this thread ends.
+                unsafe {
+                    let root = automation.ElementFromHandle(HWND(address as *mut _))?;
+                    automation.AddFocusChangedEventHandler(
+                        None,
+                        &events.cast::<IUIAutomationFocusChangedEventHandler>()?,
+                    )?;
+                    automation.AddAutomationEventHandler(
+                        UIA_SelectionItem_ElementSelectedEventId,
+                        &root,
+                        TreeScope_Subtree,
+                        None,
+                        &events,
+                    )?;
+                    automation.AddPropertyChangedEventHandlerNativeArray(
+                        &root,
+                        TreeScope_Subtree,
+                        None,
+                        &events.cast::<IUIAutomationPropertyChangedEventHandler>()?,
+                        &[UIA_ValueValuePropertyId],
+                    )?;
+                    automation
+                        .cast::<IUIAutomation5>()?
+                        .AddNotificationEventHandler(
+                            &root,
+                            TreeScope_Subtree,
+                            None,
+                            &events.cast::<IUIAutomationNotificationEventHandler>()?,
+                        )?;
+                    ready.send(()).expect("the test waits for the client");
+                    stopped.recv().expect("the test stops the client");
+                    automation.RemoveAllEventHandlers()
+                }
+            })();
+            // SAFETY: balances the CoInitializeEx above, after every COM object is dropped.
+            unsafe { CoUninitialize() };
+            listened
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while is_ready.try_recv().is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "the client never started listening"
+            );
+            assert!(
+                !client.is_finished(),
+                "the client stopped before listening: {:?}",
+                client.join()
+            );
+            pump(Duration::from_millis(50));
+        }
+        act();
+        pump(Duration::from_millis(1_000));
+        stop.send(()).expect("the client is waiting");
+        while !client.is_finished() {
+            pump(Duration::from_millis(50));
+        }
+        client
+            .join()
+            .expect("the client thread ends")
+            .expect("the client listens");
+        Arc::try_unwrap(heard)
+            .expect("the client let go of what it heard")
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}

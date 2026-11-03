@@ -195,6 +195,31 @@ mod tests {
         assert!(closed.borrow().is_none(), "nothing after the panel closed");
     }
 
+    #[cfg(feature = "ui-automation-test")]
+    #[test]
+    fn f11_a_screen_reader_is_told_as_the_focus_the_mode_and_the_timer_change() {
+        use crate::accessibility::listening::changes_heard;
+
+        let _screen = screen();
+        let (panel, _closed) = shown(CapturePanel::default());
+        let heard = changes_heard(
+            panel.window,
+            || {
+                // From Capture: Cancel; then Region, Window, chosen; then Screen, Timer, pressed.
+                keys(&panel, &[VK_TAB]);
+                keys(&panel, &[VK_TAB, VK_TAB, VK_RETURN]);
+                keys(&panel, &[VK_TAB, VK_TAB, VK_RETURN]);
+            },
+            pump,
+        );
+        for change in ["focus Cancel", "selected Window", "value 3 seconds"] {
+            assert!(
+                heard.iter().any(|each| each == change),
+                "{change} unheard in {heard:?}"
+            );
+        }
+    }
+
     // Both copies are taken with the panel up and nothing else changing, so the screen under
     // it is the same; only the panel's own look differs between them.
     #[test]

@@ -26,7 +26,7 @@ use crate::capture::dpi_scale;
 use crate::palette::Palette;
 use crate::render_target::target;
 use crate::struct_size;
-use crate::toolbar::automation::{self, Mirror, Request};
+use crate::toolbar::automation::{self, Change, Mirror, Request};
 use crate::toolbar::{self, Layout, Look, Mark, Paint};
 use crate::window_state::{self, client_point};
 
@@ -76,11 +76,29 @@ impl Surface {
     }
 
     fn press(&self, window: HWND, control: ToolbarControl) {
-        let mut panel = self.panel.get();
+        let before = self.panel.get();
+        let mut panel = before;
         let outcome = panel.press(control);
         self.panel.set(panel);
         match outcome {
-            PanelOutcome::Stay => self.changed(window),
+            PanelOutcome::Stay => {
+                self.changed(window);
+                match control {
+                    ToolbarControl::Mode(_) => self.raise(window, Change::Selected(control)),
+                    ToolbarControl::Timer => self.raise(
+                        window,
+                        Change::Timer {
+                            before: before.timer(),
+                            after: panel.timer(),
+                        },
+                    ),
+                    ToolbarControl::Capture
+                    | ToolbarControl::Copy
+                    | ToolbarControl::Save
+                    | ToolbarControl::Edit
+                    | ToolbarControl::Cancel => {}
+                }
+            }
             PanelOutcome::Capture { .. } | PanelOutcome::Cancel => self.close(window, outcome),
         }
     }
@@ -88,6 +106,13 @@ impl Surface {
     fn focus(&self, window: HWND, control: ToolbarControl) {
         self.focus.set(control);
         self.changed(window);
+        self.raise(window, Change::Focus(control));
+    }
+
+    fn raise(&self, window: HWND, change: Change) {
+        // A change not raised is safe to drop: the tree already holds it for a screen reader
+        // that looks (F-11).
+        let _unraised = automation::raise(window, &self.mirror, change);
     }
 
     /// D-106: hides the panel before anything is captured, and gives the focus back.

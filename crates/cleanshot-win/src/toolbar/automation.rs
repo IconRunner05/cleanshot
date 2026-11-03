@@ -6,6 +6,7 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayPutElement};
+use windows::Win32::System::Variant::VariantClear;
 use windows::Win32::System::Variant::{
     VARENUM, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL, VT_BSTR, VT_I4,
 };
@@ -25,6 +26,11 @@ use windows::Win32::UI::Accessibility::{
     UIA_SelectionItemPatternId, UIA_TextControlTypeId, UIA_ToolBarControlTypeId,
     UIA_ValuePatternId, UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRaiseNotificationEvent,
     UiaRect, UiaReturnRawElementProvider, UiaRootObjectId,
+};
+use windows::Win32::UI::Accessibility::{
+    UIA_AutomationFocusChangedEventId, UIA_SelectionItem_ElementSelectedEventId,
+    UIA_ValueValuePropertyId, UiaClientsAreListening, UiaRaiseAutomationEvent,
+    UiaRaiseAutomationPropertyChangedEvent,
 };
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{BOOL, BSTR, Error, HRESULT, IUnknown, Interface, PCWSTR, Result, implement};
@@ -176,7 +182,7 @@ pub(crate) fn answer(
 
 /// F-58: has a screen reader say `spoken` now, from the toolbar on `window`, without the focus
 /// moving; a newer announcement replaces one not yet said.
-pub(crate) fn announce(window: HWND, mirror: &Mirror, spoken: &str) -> Result<()> {
+pub(crate) fn announce(window: HWND, mirror: &Mirror, spoken: &str, activity: &str) -> Result<()> {
     let root: IRawElementProviderSimple = ToolbarProvider {
         window,
         mirror: mirror.clone(),
@@ -189,8 +195,59 @@ pub(crate) fn announce(window: HWND, mirror: &Mirror, spoken: &str) -> Result<()
             NotificationKind_Other,
             NotificationProcessing_MostRecent,
             &BSTR::from(spoken),
-            &BSTR::from("Cleanshot.WindowToCapture"),
+            &BSTR::from(activity),
         )
+    }
+}
+
+/// A change on the toolbar a screen reader is told of as it happens, besides what it reads
+/// when it looks (F-11, F-58).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Change {
+    /// The keyboard focus moved to this control.
+    Focus(ToolbarControl),
+    /// This capture mode became the panel's mode.
+    Selected(ToolbarControl),
+    /// The panel's timer stepped from one wait to the next.
+    Timer { before: Timer, after: Timer },
+}
+
+/// Raises `change` from the toolbar on `window`, when a UI Automation client is listening.
+pub(crate) fn raise(window: HWND, mirror: &Mirror, change: Change) -> Result<()> {
+    // SAFETY: a read of whether any client listens; it touches no memory of ours.
+    if !unsafe { UiaClientsAreListening() }.as_bool() {
+        return Ok(());
+    }
+    let control = match change {
+        Change::Focus(control) | Change::Selected(control) => control,
+        Change::Timer { .. } => ToolbarControl::Timer,
+    };
+    let element: IRawElementProviderSimple = providers::button(window, mirror, control).cast()?;
+    match change {
+        // SAFETY: `element` is a live provider for this window.
+        Change::Focus(_) => unsafe {
+            UiaRaiseAutomationEvent(&element, UIA_AutomationFocusChangedEventId)
+        },
+        // SAFETY: `element` is a live provider for this window.
+        Change::Selected(_) => unsafe {
+            UiaRaiseAutomationEvent(&element, UIA_SelectionItem_ElementSelectedEventId)
+        },
+        Change::Timer { before, after } => {
+            let (mut old, mut new) = (text(&timer_value(before)), text(&timer_value(after)));
+            // SAFETY: `element` is a live provider; both values are BSTR variants made here,
+            // read during the call and cleared once after it.
+            unsafe {
+                let raised = UiaRaiseAutomationPropertyChangedEvent(
+                    &element,
+                    UIA_ValueValuePropertyId,
+                    &old,
+                    &new,
+                );
+                VariantClear(&raw mut old)?;
+                VariantClear(&raw mut new)?;
+                raised
+            }
+        }
     }
 }
 

@@ -56,7 +56,12 @@ impl Shared {
         if let (Some(pick), Some(window)) = (hovered, self.toolbar_window.get()) {
             // A failed announcement is safe to drop: the highlight has moved, and the toolbar's
             // Text element names the pick for a screen reader that looks.
-            let _unannounced = automation::announce(window, &self.mirror, &self.spoken(pick));
+            let _unannounced = automation::announce(
+                window,
+                &self.mirror,
+                &self.spoken(pick),
+                "Cleanshot.WindowToCapture",
+            );
         }
     }
 

@@ -21,7 +21,7 @@ use crate::capture::{MonitorImage, Pickable, dpi_scale};
 use crate::fade;
 use crate::palette::Palette;
 use crate::selection::{Grip, nudged};
-use crate::toolbar::automation::Mirror;
+use crate::toolbar::automation::{self, Change, Mirror};
 use crate::toolbar::{self, Layout};
 
 mod picking;
@@ -183,6 +183,19 @@ impl Shared {
     fn focus(&self, control: ToolbarControl) {
         self.focus.set(control);
         self.changed();
+        if let Some(window) = self.toolbar_window.get() {
+            // A change not raised is safe to drop: the tree already holds the focus for a
+            // screen reader that looks (F-58).
+            let _unraised = automation::raise(window, &self.mirror, Change::Focus(control));
+            // The overlay never holds the system focus (D-23), so a focus event alone may go
+            // unspoken; a notification is voiced without it.
+            let _unannounced = automation::announce(
+                window,
+                &self.mirror,
+                &format!("{}, button", toolbar::name(control)),
+                "Cleanshot.ToolbarFocus",
+            );
+        }
     }
 
     /// F-05: Cancel always closes; the others need a selection to act on.
@@ -664,6 +677,35 @@ pub(crate) mod tests {
         pump(Duration::from_millis(200));
         drop(overlay);
         assert_eq!(asked.get(), Some(screen));
+    }
+
+    #[test]
+    #[cfg(feature = "ui-automation-test")]
+    fn f58_a_screen_reader_is_told_as_tab_moves_the_toolbar_focus() {
+        use crate::accessibility::listening::changes_heard;
+
+        let _screen = screen();
+        let overlay = Overlay::show(
+            &[monitor()],
+            Some(monitor().bounds),
+            Vec::new(),
+            None,
+            |_| {},
+        )
+        .expect("the overlay opens");
+        let window = overlay.windows[0];
+        let heard = changes_heard(
+            window,
+            || press(window, Key::Focus(TabDirection::Forward)),
+            pump,
+        );
+        drop(overlay);
+        for change in ["focus Save", "notice Save, button"] {
+            assert!(
+                heard.iter().any(|each| each == change),
+                "{change} unheard in {heard:?}"
+            );
+        }
     }
 
     /// Posts the hotkey message for `key`, as Windows would on its press.
