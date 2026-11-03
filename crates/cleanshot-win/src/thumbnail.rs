@@ -394,8 +394,8 @@ mod tests {
     #[test]
     fn f09_the_thumbnail_times_out_after_five_seconds_with_the_pointer_off_it() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let thumbnail = shown(&events, no_drag());
         let start = Instant::now();
+        let thumbnail = shown(&events, no_drag());
         pump_until(Duration::from_secs(4), || !events.borrow().is_empty());
         assert!(
             events.borrow().is_empty(),
