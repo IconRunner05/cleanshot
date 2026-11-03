@@ -2,7 +2,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use cleanshot_core::RgbaImage;
+use cleanshot_core::thumbnail_layout::{
+    INSET, STAY, ThumbnailButton, button_at, buttons, centred, left_after, place, slid, window_size,
+};
+use cleanshot_core::{Rect, RgbaImage};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
@@ -22,11 +25,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, PCWSTR, w};
 
 use super::drag::{self, Dragged, Ended, left_the_press};
-use super::{
-    Button, INSET, RADIUS, STAY, Saving, ThumbnailEvent, button_at, buttons, centred, left_after,
-    place, slid, window_size,
-};
+use super::{RADIUS, Saving, ThumbnailEvent};
 use crate::Error;
+use crate::capture::{screen_point, screen_rect, win32_rect};
 use crate::palette::Palette;
 use crate::render_target::{bgra, target_and_bitmap};
 use crate::struct_size;
@@ -54,7 +55,7 @@ struct Surface {
     /// Under a policy that turns saving off, the tooltip saying why over the greyed Save.
     save_off: Option<OffTip>,
     text: TextStyle,
-    buttons: [(Button, RECT); 2],
+    buttons: [(ThumbnailButton, Rect); 2],
     rest: RECT,
     distance: i32,
     radius: f32,
@@ -111,7 +112,7 @@ impl Surface {
             if self.hovered.get() {
                 for (button, area) in self.buttons {
                     let pill = D2D1_ROUNDED_RECT {
-                        rect: rect(area),
+                        rect: rect(win32_rect(area)),
                         radiusX: (area.bottom - area.top) as f32 / 2.0,
                         radiusY: (area.bottom - area.top) as f32 / 2.0,
                     };
@@ -124,8 +125,8 @@ impl Surface {
                         None,
                     );
                     let brush = match (button, &self.save_off) {
-                        (Button::Save, Some(_)) => &self.label_off,
-                        (Button::Save | Button::Dismiss, _) => &self.label,
+                        (ThumbnailButton::Save, Some(_)) => &self.label_off,
+                        (ThumbnailButton::Save | ThumbnailButton::Dismiss, _) => &self.label,
                     };
                     self.text
                         .draw(&self.target.cast()?, button.label(), &pill.rect, brush);
@@ -239,7 +240,12 @@ pub(super) fn open_window(
     };
     let (client_width, client_height) = window_size(width, height, scale);
     let px = |dips: f32| (dips * scale).round() as i32;
-    let rest = place(work, client_width, client_height, px(INSET));
+    let rest = win32_rect(place(
+        screen_rect(work),
+        client_width,
+        client_height,
+        px(INSET),
+    ));
     let distance = if slide { px(INSET) } else { 0 };
     // SAFETY: the class is registered and every string is 'static. The process is
     // per-monitor DPI aware, so the rectangle is physical pixels.
@@ -302,11 +308,11 @@ fn surface(
         width: client.0.unsigned_abs(),
         height: client.1.unsigned_abs(),
     };
-    let framed = centred(
+    let framed = win32_rect(centred(
         client,
         i32::try_from(width).expect("open_window checked it fits"),
         i32::try_from(height).expect("open_window checked it fits"),
-    );
+    ));
     let (target, preview) = target_and_bitmap(
         &factory,
         window,
@@ -330,7 +336,7 @@ fn surface(
         Saving::Off(reason) => {
             let tip = OffTip::new(window, &reason)?;
             let [(_, save), _] = buttons;
-            tip.place(save);
+            tip.place(win32_rect(save));
             (None, Some(tip))
         }
     };
@@ -421,12 +427,14 @@ unsafe extern "system" fn window_procedure(
             if surface.pressed.take().is_none() {
                 return LRESULT(0);
             }
-            surface.send(match button_at(&surface.buttons, client_point(lparam)) {
-                Some(Button::Save) if surface.save_off.is_some() => return LRESULT(0),
-                Some(Button::Save) => ThumbnailEvent::Save,
-                Some(Button::Dismiss) => ThumbnailEvent::Dismiss,
-                None => ThumbnailEvent::Open,
-            });
+            surface.send(
+                match button_at(&surface.buttons, screen_point(client_point(lparam))) {
+                    Some(ThumbnailButton::Save) if surface.save_off.is_some() => return LRESULT(0),
+                    Some(ThumbnailButton::Save) => ThumbnailEvent::Save,
+                    Some(ThumbnailButton::Dismiss) => ThumbnailEvent::Dismiss,
+                    None => ThumbnailEvent::Open,
+                },
+            );
             LRESULT(0)
         }
         WM_TIMER => {

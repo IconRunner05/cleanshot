@@ -1,7 +1,6 @@
-use std::time::Duration;
-
 use cleanshot_core::RgbaImage;
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use cleanshot_core::thumbnail_layout::LARGEST_PREVIEW;
+use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, UpdateWindow,
 };
@@ -16,20 +15,8 @@ mod window;
 
 pub use drag::Dragged;
 
-// D-96, in device-independent pixels.
-const INSET: f32 = 16.0;
+// D-96, in device-independent pixels; the other sizes are core's thumbnail_layout.
 const RADIUS: f32 = 10.0;
-const BUTTON_HEIGHT: f32 = 24.0;
-const BUTTON_WIDTH: f32 = 64.0;
-const BUTTON_GAP: f32 = 8.0;
-const STAY: Duration = Duration::from_secs(5);
-const LARGEST_PREVIEW: (f32, f32) = (240.0, 160.0);
-/// Room for Save and Dismiss with a gap around each.
-const SMALLEST_WINDOW: (f32, f32) = (
-    2.0 * BUTTON_WIDTH + 3.0 * BUTTON_GAP,
-    BUTTON_HEIGHT + 2.0 * BUTTON_GAP,
-);
-const SLIDE: Duration = Duration::from_millis(120);
 
 /// What happened on the thumbnail, delivered inside its window's procedure. Dropping the
 /// [`Thumbnail`] during the call is sound; closing it with a fade belongs after the call.
@@ -61,22 +48,6 @@ pub enum Saving {
     /// Save shows greyed with this sentence as its tooltip and sends nothing, as the toolbar's
     /// does (D-95), and nothing drags out.
     Off(String),
-}
-
-/// A button the thumbnail shows while the pointer is on it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Button {
-    Save,
-    Dismiss,
-}
-
-impl Button {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Save => "Save",
-            Self::Dismiss => "Dismiss",
-        }
-    }
 }
 
 /// F-09: the post-capture preview, a window in the bottom-right corner of a monitor's work
@@ -178,98 +149,13 @@ fn work_area(monitor: RECT) -> windows::core::Result<RECT> {
     Ok(info.rcWork)
 }
 
-/// Where a thumbnail `width` x `height` rests: `inset` in from the bottom-right corner of
-/// `work`.
-fn place(work: RECT, width: i32, height: i32, inset: i32) -> RECT {
-    let (right, bottom) = (work.right - inset, work.bottom - inset);
-    RECT {
-        left: right - width,
-        top: bottom - height,
-        right,
-        bottom,
-    }
-}
-
-/// The thumbnail's client size for a `width` x `height` preview at `scale` physical pixels
-/// per DIP: the preview's own, but never too small for its buttons.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "the smallest window is a few hundred pixels"
-)]
-fn window_size(width: i32, height: i32, scale: f32) -> (i32, i32) {
-    let px = |dips: f32| (dips * scale).round() as i32;
-    (
-        width.max(px(SMALLEST_WINDOW.0)),
-        height.max(px(SMALLEST_WINDOW.1)),
-    )
-}
-
-/// Where a `width` x `height` preview sits in a client `window`: centred.
-fn centred((window_width, window_height): (i32, i32), width: i32, height: i32) -> RECT {
-    let (left, top) = ((window_width - width) / 2, (window_height - height) / 2);
-    RECT {
-        left,
-        top,
-        right: left + width,
-        bottom: top + height,
-    }
-}
-
-/// How far right of its resting place the thumbnail is `elapsed` into a slide of `distance`
-/// pixels, or `None` once it has arrived.
-fn slid(elapsed: Duration, distance: i32) -> Option<i32> {
-    let left = SLIDE.checked_sub(elapsed).filter(|left| !left.is_zero())?;
-    let micros = i64::try_from(left.as_micros()).expect("left <= SLIDE");
-    let slide = i64::try_from(SLIDE.as_micros()).expect("SLIDE fits");
-    Some(i32::try_from(i64::from(distance) * micros / slide).expect("at most distance"))
-}
-
-/// The time the thumbnail has left to show after `elapsed` more, or `None` once it is up.
-/// While it is `held`, by the pointer on it or a drag from it, the time stands still (D-96).
-fn left_after(left: Duration, elapsed: Duration, held: bool) -> Option<Duration> {
-    if held {
-        return Some(left);
-    }
-    left.checked_sub(elapsed).filter(|left| !left.is_zero())
-}
-
-/// The buttons on a thumbnail `width` x `height` at `scale` physical pixels per DIP, in its
-/// client pixels: Save and Dismiss side by side, centred along its bottom edge.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "the buttons are a few dozen pixels"
-)]
-fn buttons(width: i32, height: i32, scale: f32) -> [(Button, RECT); 2] {
-    let px = |dips: f32| (dips * scale).round() as i32;
-    let (button, gap) = (px(BUTTON_WIDTH), px(BUTTON_GAP));
-    let top = height - gap - px(BUTTON_HEIGHT);
-    let left = (width - 2 * button - gap) / 2;
-    let at = |left: i32| RECT {
-        left,
-        top,
-        right: left + button,
-        bottom: top + px(BUTTON_HEIGHT),
-    };
-    [
-        (Button::Save, at(left)),
-        (Button::Dismiss, at(left + button + gap)),
-    ]
-}
-
-/// The button under `point`, in client pixels, if any.
-fn button_at(buttons: &[(Button, RECT); 2], point: POINT) -> Option<Button> {
-    buttons.iter().find_map(|&(button, area)| {
-        let inside = (area.left..area.right).contains(&point.x)
-            && (area.top..area.bottom).contains(&point.y);
-        inside.then_some(button)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
+
+    use cleanshot_core::thumbnail_layout::{STAY, buttons, window_size};
 
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -279,91 +165,6 @@ mod tests {
     };
 
     use super::*;
-
-    const WORK: RECT = RECT {
-        left: 0,
-        top: 0,
-        right: 1920,
-        bottom: 1040,
-    };
-
-    #[test]
-    fn f09_the_thumbnail_rests_its_inset_in_from_the_work_areas_bottom_right_corner() {
-        assert_eq!(
-            place(WORK, 300, 200, 16),
-            RECT {
-                left: 1604,
-                top: 824,
-                right: 1904,
-                bottom: 1024,
-            }
-        );
-    }
-
-    #[test]
-    fn f09_the_slide_starts_its_distance_out_and_arrives_in_120_ms() {
-        let at = |millis| slid(Duration::from_millis(millis), 16);
-        assert_eq!(at(0), Some(16));
-        assert_eq!(at(60), Some(8));
-        assert_eq!(at(119), Some(0));
-        assert_eq!(at(120), None);
-        assert_eq!(at(500), None);
-    }
-
-    #[test]
-    fn f09_the_pointer_on_the_thumbnail_stops_its_five_seconds_running_out() {
-        let second = Duration::from_secs(1);
-        assert_eq!(left_after(STAY, second, true), Some(STAY));
-        assert_eq!(
-            left_after(STAY, second, false),
-            Some(Duration::from_secs(4))
-        );
-        assert_eq!(left_after(second, second, false), None);
-        assert_eq!(left_after(second, STAY, true), Some(second));
-    }
-
-    #[test]
-    fn f09_a_preview_too_small_for_the_buttons_sits_centred_in_a_window_they_fit() {
-        assert_eq!(window_size(30, 20, 1.0), (152, 40));
-        assert_eq!(window_size(30, 20, 1.5), (228, 60));
-        assert_eq!(window_size(200, 1, 1.0), (200, 40), "a sliver is no strip");
-        assert_eq!(window_size(240, 160, 1.0), (240, 160));
-        assert_eq!(
-            centred((152, 40), 30, 20),
-            RECT {
-                left: 61,
-                top: 10,
-                right: 91,
-                bottom: 30
-            }
-        );
-        for (_, area) in buttons(152, 40, 1.0) {
-            assert!(area.left >= 0 && area.top >= 0, "{area:?}");
-            assert!(area.right <= 152 && area.bottom <= 40, "{area:?}");
-        }
-    }
-
-    #[test]
-    fn f09_save_and_dismiss_sit_side_by_side_along_the_bottom_and_nothing_else_is_a_button() {
-        let placed = buttons(300, 200, 1.0);
-        let [(Button::Save, save), (Button::Dismiss, dismiss)] = placed else {
-            panic!("Save then Dismiss: {placed:?}");
-        };
-        assert_eq!((save.bottom, dismiss.bottom), (192, 192));
-        assert_eq!(dismiss.left - save.right, 8);
-        assert_eq!(save.left, 300 - dismiss.right);
-        let point = |x, y| POINT { x, y };
-        assert_eq!(
-            button_at(&placed, point(save.left, save.top)),
-            Some(Button::Save)
-        );
-        assert_eq!(
-            button_at(&placed, point(dismiss.right - 1, dismiss.bottom - 1)),
-            Some(Button::Dismiss)
-        );
-        assert_eq!(button_at(&placed, point(150, 20)), None);
-        assert_eq!(button_at(&placed, point(save.right + 1, save.top)), None);
-    }
 
     fn preview() -> RgbaImage {
         let (width, height) = (120, 80);
