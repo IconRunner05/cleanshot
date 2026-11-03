@@ -26,6 +26,7 @@ mod text_edit;
 mod timer;
 mod tool;
 mod toolbar;
+mod window_pick;
 
 pub use bubble::{BUBBLE_PADDING, Bubble};
 pub use capture_mode::CaptureMode;
@@ -70,3 +71,4 @@ pub use text_edit::{
 pub use timer::Timer;
 pub use tool::Tool;
 pub use toolbar::{TabDirection, Toolbar, ToolbarControl};
+pub use window_pick::{Pick, Pickable, next_window, picked};
