@@ -27,6 +27,7 @@ pub mod tray;
 mod tray_icon;
 mod window_state;
 
+pub use toolbar::hover_time;
 use windows::Win32::Foundation::{ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;

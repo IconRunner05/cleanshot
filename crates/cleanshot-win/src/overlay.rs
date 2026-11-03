@@ -453,8 +453,7 @@ pub(crate) mod tests {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, EnumThreadWindows, IsWindow, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
-        SPI_GETMOUSEHOVERTIME, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW,
-        SystemParametersInfoW, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        SendMessageW, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
     use windows::core::BOOL;
 
@@ -865,18 +864,8 @@ pub(crate) mod tests {
                 "Cancel (Esc)",
             ]
         );
-        let mut hover = 0_u32;
-        // SAFETY: SPI_GETMOUSEHOVERTIME writes one u32 to `hover`.
-        unsafe {
-            SystemParametersInfoW(
-                SPI_GETMOUSEHOVERTIME,
-                0,
-                Some((&raw mut hover).cast()),
-                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-            )
-        }
-        .expect("the hover time reads");
-        assert_eq!(delay, isize::try_from(hover).expect("ms fit"));
+        let hover = crate::hover_time().expect("the hover time reads");
+        assert_eq!(delay, isize::try_from(hover.as_millis()).expect("ms fit"));
     }
 
     #[test]

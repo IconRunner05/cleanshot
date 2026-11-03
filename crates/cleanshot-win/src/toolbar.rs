@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::time::Duration;
 
 use cleanshot_core::{CaptureMode, Toolbar, ToolbarControl};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
@@ -244,6 +245,25 @@ impl Layout {
 /// D-117: tooltips over a window's buttons, one per button, each shown after the system's
 /// hover time. They belong to the window that shows the buttons, which destroys them with
 /// itself.
+/// D-117: how long the pointer rests on a control before its tooltip shows, as set in Windows.
+///
+/// # Errors
+///
+/// The Windows error if the setting cannot be read.
+pub fn hover_time() -> Result<Duration, windows::core::Error> {
+    let mut hover = 0_u32;
+    // SAFETY: SPI_GETMOUSEHOVERTIME writes one u32 to `hover`.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETMOUSEHOVERTIME,
+            0,
+            Some((&raw mut hover).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }?;
+    Ok(Duration::from_millis(hover.into()))
+}
+
 pub(crate) struct Tips {
     window: HWND,
     owner: HWND,
@@ -305,17 +325,8 @@ impl Tips {
                 return Err(windows::core::Error::from_thread());
             }
         }
-        let mut hover = 0_u32;
-        // SAFETY: SPI_GETMOUSEHOVERTIME writes one u32 to `hover`.
-        unsafe {
-            SystemParametersInfoW(
-                SPI_GETMOUSEHOVERTIME,
-                0,
-                Some((&raw mut hover).cast()),
-                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-            )
-        }?;
-        let hover = isize::try_from(hover).expect("a hover time in ms fits an isize");
+        let hover = isize::try_from(hover_time()?.as_millis())
+            .expect("a hover time read as a u32 of ms fits an isize");
         tips.send(TTM_SETDELAYTIME, TTDT_INITIAL as usize, hover);
         Ok(tips)
     }
