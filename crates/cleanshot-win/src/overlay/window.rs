@@ -9,12 +9,11 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, WM_DESTROY, WM_GETOBJECT, WM_HOTKEY,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, PCWSTR, w};
 
@@ -26,7 +25,6 @@ use crate::palette::Palette;
 use crate::render_target::{bgra, target_and_bitmap};
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
-use crate::struct_size;
 use crate::toolbar::automation::{self, Request};
 use cleanshot_core::Toolbar;
 
@@ -236,16 +234,7 @@ impl Surface {
 }
 
 pub(super) fn register_class() -> Result<(), Error> {
-    // SAFETY: a null module name asks for this exe's own handle.
-    let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
-    let class = WNDCLASSEXW {
-        cbSize: struct_size::<WNDCLASSEXW>(),
-        lpfnWndProc: Some(window_procedure),
-        hInstance: instance.into(),
-        lpszClassName: WINDOW_CLASS,
-        ..Default::default()
-    };
-    crate::register_window_class(&class)
+    crate::register_window_class(WINDOW_CLASS, window_procedure)
 }
 
 pub(super) fn open_window(

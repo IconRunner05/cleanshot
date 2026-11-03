@@ -51,6 +51,8 @@ section exists.
 
 ### Fixed
 
+- After Print Screen the pointer over the capture overlay, the capture panel and the
+  thumbnail is the arrow, not the busy cursor another app left up.
 - A crop showed in the editor only while it was being dragged, so the Crop tool looked
   as if it did nothing (F-37). Now the view fits the crop and everything outside it is
   dimmed. Copy and Save were already cropped.

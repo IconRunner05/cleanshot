@@ -10,14 +10,13 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_ESCAPE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, KillTimer, MA_NOACTIVATE, SW_HIDE,
     SW_SHOWNOACTIVATE, SetTimer, SetWindowDisplayAffinity, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
-    WM_HOTKEY, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE,
+    WM_HOTKEY, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_PAINT, WM_TIMER, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
@@ -27,7 +26,6 @@ use crate::Error;
 use crate::capture::dpi_scale;
 use crate::palette::Palette;
 use crate::render_target::target;
-use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
 use crate::toolbar;
 use crate::window_state;
@@ -197,16 +195,7 @@ fn spoken(seconds: u32) -> String {
 }
 
 fn register_class() -> Result<(), Error> {
-    // SAFETY: a null module name asks for this exe's own handle.
-    let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
-    let class = WNDCLASSEXW {
-        cbSize: struct_size::<WNDCLASSEXW>(),
-        lpfnWndProc: Some(window_procedure),
-        hInstance: instance.into(),
-        lpszClassName: WINDOW_CLASS,
-        ..Default::default()
-    };
-    crate::register_window_class(&class)
+    crate::register_window_class(WINDOW_CLASS, window_procedure)
 }
 
 fn open_window(monitor: RECT, timer: Timer, listener: Listener) -> Result<HWND, Error> {

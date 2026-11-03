@@ -14,14 +14,13 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Bitmap, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, KillTimer, MA_NOACTIVATE, SWP_NOACTIVATE,
     SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowPos, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_PAINT, WM_TIMER, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, PCWSTR, w};
 
@@ -204,16 +203,7 @@ impl Surface {
 }
 
 pub(super) fn register_class() -> Result<(), Error> {
-    // SAFETY: a null module name asks for this exe's own handle.
-    let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
-    let class = WNDCLASSEXW {
-        cbSize: struct_size::<WNDCLASSEXW>(),
-        lpfnWndProc: Some(window_procedure),
-        hInstance: instance.into(),
-        lpszClassName: WINDOW_CLASS,
-        ..Default::default()
-    };
-    crate::register_window_class(&class)
+    crate::register_window_class(WINDOW_CLASS, window_procedure)
 }
 
 /// Creates the thumbnail's window, not yet shown, at the start of its slide when `slide` is

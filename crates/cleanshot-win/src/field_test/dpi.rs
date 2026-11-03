@@ -9,7 +9,6 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, DISP_CHANGE_SUCCESSFUL, DM_PELSHEIGHT, DM_PELSWIDTH, EndPaint,
     MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint, PAINTSTRUCT, SetDIBitsToDevice, UpdateWindow,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::CF_DIBV5;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
@@ -18,7 +17,7 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, SPI_SETLOGICALDPIOVERRIDE, SPIF_SENDCHANGE,
     SPIF_UPDATEINIFILE, SW_SHOWNOACTIVATE, ShowWindow, SystemParametersInfoW, WM_PAINT,
-    WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -188,16 +187,7 @@ struct PatternWindow(HWND);
 impl PatternWindow {
     /// Shows the pattern and gives the compositor time to put it on screen.
     fn show() -> Result<Self, Error> {
-        // SAFETY: a null module name asks for this exe's own handle.
-        let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
-        let class = WNDCLASSEXW {
-            cbSize: struct_size::<WNDCLASSEXW>(),
-            lpfnWndProc: Some(paint_pattern),
-            hInstance: instance.into(),
-            lpszClassName: PATTERN_CLASS,
-            ..Default::default()
-        };
-        crate::register_window_class(&class)?;
+        crate::register_window_class(PATTERN_CLASS, paint_pattern)?;
         // SAFETY: the class is registered and every string is 'static.
         let window = unsafe {
             CreateWindowExW(
@@ -211,7 +201,7 @@ impl PatternWindow {
                 PATTERN_SIDE,
                 None,
                 None,
-                Some(instance.into()),
+                None,
                 None,
             )
         }

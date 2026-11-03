@@ -27,12 +27,16 @@ pub mod tray;
 mod tray_icon;
 mod window_state;
 
-use windows::Win32::Foundation::{ERROR_CLASS_ALREADY_EXISTS, HWND};
+use windows::Win32::Foundation::{ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories,
 };
-use windows::Win32::UI::WindowsAndMessaging::{RegisterClassExW, WNDCLASSEXW};
+use windows::Win32::UI::WindowsAndMessaging::{
+    IDC_ARROW, LoadCursorW, RegisterClassExW, WNDCLASSEXW,
+};
+use windows::core::PCWSTR;
 
 /// C-12: every later DLL load in this process searches System32 only, never the exe's folder
 /// or the current directory. Call it first in `main`.
@@ -45,11 +49,29 @@ pub fn load_dlls_from_system32_only() -> windows::core::Result<()> {
     unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) }
 }
 
-/// Registers `class` for this process. A class registered already, by an earlier window of
-/// the same kind, counts as registered.
-pub(crate) fn register_window_class(class: &WNDCLASSEXW) -> Result<(), Error> {
-    // SAFETY: the caller's `class` is fully initialised and its strings are 'static.
-    if unsafe { RegisterClassExW(class) } != 0 {
+/// The window procedure Windows calls for every window of a class.
+pub(crate) type Procedure = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+
+/// Registers the window class `name`, whose windows `procedure` answers, for this process, with
+/// the arrow as its pointer. A class registered already, by an earlier window of the same kind,
+/// counts as registered.
+pub(crate) fn register_window_class(name: PCWSTR, procedure: Procedure) -> Result<(), Error> {
+    // SAFETY: a null module name asks for this exe's own handle.
+    let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
+    // SAFETY: the arrow is a shared system cursor, loaded with no module.
+    let arrow = unsafe { LoadCursorW(None, IDC_ARROW) }.map_err(Error::Window)?;
+    let class = WNDCLASSEXW {
+        cbSize: struct_size::<WNDCLASSEXW>(),
+        lpfnWndProc: Some(procedure),
+        hInstance: instance.into(),
+        // A class with no cursor leaves the pointer as the last window set it, which after a
+        // hotkey is often another app's busy cursor.
+        hCursor: arrow,
+        lpszClassName: name,
+        ..Default::default()
+    };
+    // SAFETY: `class` is fully initialised and `name` is 'static.
+    if unsafe { RegisterClassExW(&raw const class) } != 0 {
         return Ok(());
     }
     let error = windows::core::Error::from_thread();

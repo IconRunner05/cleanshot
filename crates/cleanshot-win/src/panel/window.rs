@@ -10,15 +10,13 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_SPACE, VK_TAB,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetForegroundWindow, SW_HIDE, SW_SHOW,
     SetForegroundWindow, SetWindowDisplayAffinity, ShowWindow, WDA_EXCLUDEFROMCAPTURE, WM_DESTROY,
-    WM_GETOBJECT, WM_KEYDOWN, WM_LBUTTONDOWN, WM_PAINT, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    WM_GETOBJECT, WM_KEYDOWN, WM_LBUTTONDOWN, WM_PAINT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, PCWSTR, w};
 
@@ -27,7 +25,6 @@ use crate::Error;
 use crate::capture::dpi_scale;
 use crate::palette::Palette;
 use crate::render_target::target;
-use crate::struct_size;
 use crate::toolbar::automation::{self, Change, Mirror, Request};
 use crate::toolbar::{self, Layout, Look, Mark, Paint, Tips, options, toolbar_tips};
 use crate::window_state::{self, desktop_point};
@@ -206,16 +203,7 @@ fn look(panel: CapturePanel, control: ToolbarControl) -> Look {
 }
 
 pub(super) fn register_class() -> Result<(), Error> {
-    // SAFETY: a null module name asks for this exe's own handle.
-    let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
-    let class = WNDCLASSEXW {
-        cbSize: struct_size::<WNDCLASSEXW>(),
-        lpfnWndProc: Some(window_procedure),
-        hInstance: instance.into(),
-        lpszClassName: WINDOW_CLASS,
-        ..Default::default()
-    };
-    crate::register_window_class(&class)
+    crate::register_window_class(WINDOW_CLASS, window_procedure)
 }
 
 /// Opens the panel on `monitor`, shown, with the keyboard focus on Capture (D-106).

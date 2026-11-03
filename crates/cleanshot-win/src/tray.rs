@@ -3,7 +3,6 @@ use std::rc::Rc;
 
 use cleanshot_core::{Hotkey, HotkeyAction, Key, Modifiers};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
@@ -19,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, PostMessageW, RegisterWindowMessageW, SetForegroundWindow, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -108,17 +107,7 @@ impl Tray {
         hotkeys: &[(Request, Hotkey)],
         on_request: impl FnMut(Request) + 'static,
     ) -> Result<Self, Error> {
-        // SAFETY: a null module name asks for this exe's own handle, which lives as long as
-        // the process.
-        let instance = unsafe { GetModuleHandleW(None) }.map_err(Error::Window)?;
-        let class = WNDCLASSEXW {
-            cbSize: struct_size::<WNDCLASSEXW>(),
-            lpfnWndProc: Some(window_procedure),
-            hInstance: instance.into(),
-            lpszClassName: WINDOW_CLASS,
-            ..Default::default()
-        };
-        crate::register_window_class(&class)?;
+        crate::register_window_class(WINDOW_CLASS, window_procedure)?;
 
         // F-50: not HWND_MESSAGE, which misses TaskbarCreated when Explorer restarts.
         // SAFETY: the class was registered above and every string is 'static.
@@ -134,7 +123,7 @@ impl Tray {
                 0,
                 None,
                 None,
-                Some(instance.into()),
+                None,
                 None,
             )
         }

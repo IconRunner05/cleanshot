@@ -889,6 +889,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_overlay_shows_the_arrow_whatever_pointer_was_up_before_it() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GCLP_HCURSOR, GetClassLongPtrW, IDC_ARROW, LoadCursorW,
+        };
+
+        let _screen = screen();
+        let overlay = Overlay::show(&[monitor()], Opening::default(), Vec::new, |_| {})
+            .expect("the overlay opens");
+        // SAFETY: reads the class of a window this thread owns; the arrow is a shared cursor.
+        let (pointer, arrow) = unsafe {
+            (
+                GetClassLongPtrW(overlay.windows[0], GCLP_HCURSOR),
+                LoadCursorW(None, IDC_ARROW).expect("the arrow loads"),
+            )
+        };
+        drop(overlay);
+        assert_eq!(pointer, arrow.0 as usize);
+    }
+
+    #[test]
     fn f57_tab_and_shift_tab_move_the_toolbar_focus_past_save_while_saving_is_off() {
         let _screen = screen();
         let chosen = Rc::new(RefCell::new(Vec::new()));
