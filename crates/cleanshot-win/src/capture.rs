@@ -205,6 +205,12 @@ pub struct Devices {
 }
 
 impl Devices {
+    /// P-04: lets every kept device go, with what its driver holds, so the next copy makes its
+    /// own.
+    pub fn release(&mut self) {
+        self.kept.clear();
+    }
+
     fn take(&mut self, adapter: LUID) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
         let at = self.kept.iter().position(|(kept, _, _)| *kept == adapter)?;
         let (_, device, context) = self.kept.swap_remove(at);
@@ -1135,6 +1141,23 @@ mod tests {
             first_made,
             "{:?}",
             second.adapters
+        );
+    }
+
+    #[test]
+    fn p04_released_devices_are_let_go_and_the_next_copy_makes_its_own() {
+        let _screen = screen();
+        let mut devices = Devices::default();
+        capture_desktop(&mut devices).expect("the desktop is copied");
+        devices.release();
+        let again = capture_desktop(&mut devices).expect("the desktop is copied again");
+        assert!(
+            again
+                .adapters
+                .iter()
+                .all(|adapter| adapter.device != Device::Kept),
+            "{:?}",
+            again.adapters
         );
     }
 

@@ -334,19 +334,44 @@ impl Session {
 
     /// After a capture finishes: if no capture starts in the next [`GRAPHICS_IDLE`], lets go
     /// of the Direct2D factory the capture windows shared, which frees its device once the
-    /// thumbnail closes (P-04), and under --log samples memory after use.
+    /// thumbnail closes, and of the kept capture devices (P-04); under --log samples memory
+    /// after use.
     fn after_use(self: &Rc<Self>, defer: &dyn Fn(Duration, Box<dyn FnOnce()>)) {
         let started = self.captures_started.get();
         let session = Rc::clone(self);
         defer(
             GRAPHICS_IDLE,
             Box::new(move || {
-                if session.captures_started.get() == started {
-                    cleanshot_win::release_factory();
+                if session.captures_started.get() != started {
+                    return;
+                }
+                let before = session.private_bytes();
+                cleanshot_win::release_factory();
+                session.devices.borrow_mut().release();
+                if let (Some(before), Some(after)) = (before, session.private_bytes()) {
+                    session.perf(|_| {
+                        format!(
+                            "P-04 graphics_released private_before={before} private_after={after}"
+                        )
+                    });
                 }
             }),
         );
         self.sample_after_use(defer);
+    }
+
+    /// Under --log, the private working set now; None without it, or if it cannot be read.
+    fn private_bytes(&self) -> Option<usize> {
+        self.log.borrow().as_ref()?;
+        usage()
+            .inspect_err(|error| {
+                self.warn(Warning::Failed(
+                    "Logging could not sample memory after use",
+                    error,
+                ));
+            })
+            .ok()
+            .map(|held| held.private_working_set_bytes)
     }
 
     /// Under --log, logs the P-04 private working set 10 s from now if no capture starts
@@ -363,19 +388,8 @@ impl Session {
                 if session.captures_started.get() != started {
                     return;
                 }
-                match usage() {
-                    Ok(held) => session.perf(|_| {
-                        format!(
-                            "P-04 private_working_set_bytes={}",
-                            held.private_working_set_bytes
-                        )
-                    }),
-                    Err(error) => {
-                        session.warn(Warning::Failed(
-                            "Logging could not sample memory after use",
-                            &error,
-                        ));
-                    }
+                if let Some(held) = session.private_bytes() {
+                    session.perf(|_| format!("P-04 private_working_set_bytes={held}"));
                 }
             }),
         );
