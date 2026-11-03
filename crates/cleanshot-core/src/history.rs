@@ -17,9 +17,25 @@ pub enum Command {
         shape: Shape,
         style: Style,
     },
+    /// Moves a shape up or down the stack (D-115). A restack that leaves the shape where it is
+    /// is not an edit, and there is nothing to undo for it.
+    Restack {
+        id: ShapeId,
+        to: Restack,
+    },
     /// `None` exports the whole image (F-37).
     SetCrop(Option<RectF>),
     SetFrame(Frame),
+}
+
+/// Where [`Command::Restack`] moves a shape: past the one above or below it, or to the top or
+/// bottom of the stack (D-115).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Restack {
+    Forward,
+    Backward,
+    Front,
+    Back,
 }
 
 /// Why [`History::apply`] refused a command.
@@ -46,6 +62,7 @@ enum Edit {
     Insert { index: usize, entry: ShapeEntry },
     Remove(ShapeId),
     Replace(ShapeEntry),
+    Restack { id: ShapeId, index: usize },
     SetCrop(Option<RectF>),
     SetFrame(Frame),
 }
@@ -93,6 +110,20 @@ impl History {
             }
             Command::Remove(id) => Edit::Remove(id),
             Command::Replace { id, shape, style } => Edit::Replace(ShapeEntry { id, shape, style }),
+            Command::Restack { id, to } => {
+                let from = position(&self.document, id)?;
+                let top = self.document.shapes.len() - 1;
+                let index = match to {
+                    Restack::Forward => (from + 1).min(top),
+                    Restack::Backward => from.saturating_sub(1),
+                    Restack::Front => top,
+                    Restack::Back => 0,
+                };
+                if index == from {
+                    return Ok(());
+                }
+                Edit::Restack { id, index }
+            }
             Command::SetCrop(crop) => Edit::SetCrop(crop),
             Command::SetFrame(frame) => Edit::SetFrame(frame),
         };
@@ -153,6 +184,12 @@ impl Edit {
                     &mut document.shapes[index],
                     entry,
                 )))
+            }
+            Edit::Restack { id, index } => {
+                let from = position(document, id)?;
+                let entry = document.shapes.remove(from);
+                document.shapes.insert(index, entry);
+                Ok(Edit::Restack { id, index: from })
             }
             Edit::SetCrop(crop) => {
                 if let Some(rect) = crop
@@ -257,6 +294,57 @@ mod tests {
         assert_eq!(history.document(), &empty);
         assert!(history.redo().unwrap());
         assert_eq!(history.document(), &added);
+    }
+
+    #[test]
+    fn d115_a_restack_moves_a_shape_a_step_or_to_an_end_and_undoes_to_where_it_was() {
+        let mut history = history();
+        let ids: Vec<_> = [0.0, 1.0, 2.0, 3.0]
+            .into_iter()
+            .map(|x| add(&mut history, rect(x)))
+            .collect();
+        let mut restack = |index: usize, to| {
+            history
+                .apply(Command::Restack { id: ids[index], to })
+                .unwrap();
+            xs(&history)
+        };
+        assert_eq!(restack(1, Restack::Forward), [0.0, 2.0, 1.0, 3.0]);
+        assert_eq!(restack(1, Restack::Front), [0.0, 2.0, 3.0, 1.0]);
+        assert_eq!(restack(2, Restack::Backward), [2.0, 0.0, 3.0, 1.0]);
+        assert_eq!(restack(1, Restack::Back), [1.0, 2.0, 0.0, 3.0]);
+        assert!(history.undo().unwrap());
+        assert_eq!(xs(&history), [2.0, 0.0, 3.0, 1.0]);
+        assert!(history.undo().unwrap());
+        assert!(history.undo().unwrap());
+        assert!(history.undo().unwrap());
+        assert_eq!(xs(&history), [0.0, 1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn d115_a_restack_that_moves_nothing_leaves_nothing_to_undo() {
+        let mut history = history();
+        let bottom = add(&mut history, rect(0.0));
+        let top = add(&mut history, rect(1.0));
+        add(&mut history, rect(2.0));
+        assert!(history.undo().unwrap());
+        for (id, to) in [
+            (top, Restack::Forward),
+            (top, Restack::Front),
+            (bottom, Restack::Backward),
+            (bottom, Restack::Back),
+        ] {
+            history.apply(Command::Restack { id, to }).unwrap();
+        }
+        assert_eq!(xs(&history), [0.0, 1.0]);
+        assert!(
+            history.redo().unwrap(),
+            "the undone add can still be redone"
+        );
+        assert_eq!(xs(&history), [0.0, 1.0, 2.0]);
+        assert!(history.undo().unwrap());
+        assert!(history.undo().unwrap());
+        assert_eq!(xs(&history), [0.0], "no restack was left to undo");
     }
 
     #[test]

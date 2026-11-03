@@ -243,6 +243,11 @@ impl EditorView {
                 self.selected = None;
                 self.tool = Tool::Select;
             }
+            KeyAction::Restack(to) => {
+                if let Some(id) = self.selected {
+                    self.apply(Command::Restack { id, to });
+                }
+            }
             KeyAction::PickTool(tool) => self.tool = tool,
             KeyAction::FitView => self.placement = None,
             KeyAction::HoldToPan => self.space_held = true,

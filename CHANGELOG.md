@@ -9,6 +9,12 @@ section exists.
 
 ## [Unreleased]
 
+### Added
+
+- Ctrl+] and Ctrl+[ move the selected shape in front of or behind its neighbour, and
+  Ctrl+Shift+] and Ctrl+Shift+[ move it to the front or back. Each move can be undone
+  (F-38).
+
 ### Changed
 
 - The editor opens sized round the capture at 100%, with the toolbar above it, instead of

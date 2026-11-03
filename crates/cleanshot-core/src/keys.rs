@@ -1,4 +1,4 @@
-use crate::{CaretMove, Modifiers, Output, Tool};
+use crate::{CaretMove, Modifiers, Output, Restack, Tool};
 
 /// What a key press asks the editor to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -8,6 +8,9 @@ pub enum KeyAction {
     RemoveSelected,
     /// Esc: the Select tool, with nothing selected (D-111).
     BackToSelect,
+    /// Ctrl+] and Ctrl+[ move the selected shape one step, with Shift to the front or back
+    /// (D-115).
+    Restack(Restack),
     PickTool(Tool),
     /// Back to the view that fits the image in the window (F-39).
     FitView,
@@ -120,6 +123,12 @@ fn idle_action(key: &str, modifiers: Modifiers) -> Option<KeyAction> {
             "z" => Some(KeyAction::Undo),
             "y" => Some(KeyAction::Redo),
             "0" => Some(KeyAction::FitView),
+            "]" if modifiers.shift => Some(KeyAction::Restack(Restack::Front)),
+            "}" => Some(KeyAction::Restack(Restack::Front)),
+            "]" => Some(KeyAction::Restack(Restack::Forward)),
+            "[" if modifiers.shift => Some(KeyAction::Restack(Restack::Back)),
+            "{" => Some(KeyAction::Restack(Restack::Back)),
+            "[" => Some(KeyAction::Restack(Restack::Backward)),
             "c" => Some(KeyAction::Deliver(Output::Copy)),
             "s" if modifiers.shift => Some(KeyAction::SaveAs),
             "s" => Some(KeyAction::Deliver(Output::Save)),
@@ -184,6 +193,29 @@ mod tests {
             action_for_key("escape", NONE, Activity::Idle),
             Some(KeyAction::BackToSelect)
         );
+    }
+
+    #[test]
+    fn d115_ctrl_brackets_move_the_shape_a_step_and_with_shift_to_the_front_or_back() {
+        let ctrl_shift = Modifiers {
+            shift: true,
+            ..CTRL
+        };
+        for (key, modifiers, to) in [
+            ("]", CTRL, Restack::Forward),
+            ("[", CTRL, Restack::Backward),
+            ("]", ctrl_shift, Restack::Front),
+            ("}", ctrl_shift, Restack::Front),
+            ("[", ctrl_shift, Restack::Back),
+            ("{", ctrl_shift, Restack::Back),
+        ] {
+            assert_eq!(
+                action_for_key(key, modifiers, Activity::Idle),
+                Some(KeyAction::Restack(to)),
+                "{key} with {modifiers:?}"
+            );
+        }
+        assert_eq!(action_for_key("]", NONE, Activity::Idle), None);
     }
 
     #[test]

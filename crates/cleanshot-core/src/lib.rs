@@ -43,7 +43,7 @@ pub use document::{
 };
 pub use drag::{Drag, Press, Start};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
-pub use history::{Command, CommandError, History};
+pub use history::{Command, CommandError, History, Restack};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key};
 pub use look::{Look, Looks, Property, PropertyError, Setting};
 pub use options_menu::{OptionsEntry, OptionsItem, Picked, options_menu};

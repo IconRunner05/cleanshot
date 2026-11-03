@@ -136,7 +136,7 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 | F-35 | Highlighter | H | M2 | Translucent yellow, multiply blend. |
 | F-36 | Redact | X | M2 | Pixelate (default) or blur; destructive on export (C-22); a test asserts that original pixels are absent from the output. |
 | F-37 | Crop | C | M2 | Non-destructive in the document; applied on export. The editor dims what the crop leaves out and fits the view to the crop (D-113). With the Crop tool picked, the view shows the whole image and the crop can be moved and resized by its handles (D-118). |
-| F-38 | Undo / redo | Ctrl+Z / Ctrl+Y | M2 | Unlimited within the session; every edit is a command. |
+| F-38 | Undo / redo | Ctrl+Z / Ctrl+Y | M2 | Unlimited within the session; every edit is a command. Ctrl+] and Ctrl+[ move the selected shape forward or back one step, with Shift to the front or back, each an edit to undo (D-115). |
 | F-39 | Zoom / pan | Ctrl+wheel, Space-drag, Ctrl+0 fit | M2 | Smooth on a 4K image. |
 | F-40 | Copy / save from editor | Ctrl+C, Ctrl+S | M2 | Uses F-24's pipeline. |
 | F-41 | Numbered step | N | M4 | Auto-increments 1, 2, 3…; renumbers when one is deleted. |
@@ -246,7 +246,7 @@ The types live in `crates/cleanshot-core`; read them there. All coordinates are 
 
 - **Document**: the frozen capture, its shapes in z-order and an optional crop. Changed only through `History`.
 - **Shape**: one annotation (arrow, line, rectangle, ellipse, pen, text, highlight, redact), drawn with a `Style`. Step, bubble and spotlight arrive with M4.
-- **Command**: one edit (add, remove, replace a shape, set the crop). Every edit is a command (F-38).
+- **Command**: one edit (add, remove, replace or restack a shape, set the crop). Every edit is a command (F-38).
 - **History**: a document with its edits, undoable and redoable without limit. It issues shape ids (D-26).
 - **Settings**: what `cleanshot.toml` holds, read field by field so a bad value keeps its default (F-54, D-30).
 
