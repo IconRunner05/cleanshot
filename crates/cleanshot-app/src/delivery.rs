@@ -118,14 +118,11 @@ pub(crate) fn save_to(
         Saving::Allowed { .. } => {}
     }
     let image = flattened(document)?;
-    // F-57: ForcePng wins over the typed extension.
-    let format = match saving {
-        Saving::Allowed { png_only: true, .. } => SaveFormat::Png,
-        Saving::Allowed { .. } | Saving::Off(_) => {
-            typed_format(path).unwrap_or(settings.save_format)
-        }
-    };
-    let (format, _) = encoding(format);
+    let typed = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(SaveFormat::from_extension);
+    let (format, _) = encoding(saving.format(typed, settings.save_format));
     let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
     let folder = path.parent().unwrap_or(path);
     match save::replace(path, &bytes) {
@@ -145,15 +142,6 @@ pub(crate) fn save_to(
         Err(error @ SaveError::UnknownField(_)) => {
             panic!("save::replace expands no file-name template: {error}")
         }
-    }
-}
-
-fn typed_format(path: &Path) -> Option<SaveFormat> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "png" => Some(SaveFormat::Png),
-        "jpg" | "jpeg" => Some(SaveFormat::Jpg),
-        "bmp" => Some(SaveFormat::Bmp),
-        _ => None,
     }
 }
 
