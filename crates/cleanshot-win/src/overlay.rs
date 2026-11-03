@@ -7,8 +7,6 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory,
 };
 use windows::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow};
-use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, UnregisterHotKey,
     VIRTUAL_KEY, VK_DOWN, VK_E, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_S, VK_SPACE, VK_TAB,
@@ -19,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::Error;
-use crate::capture::{MonitorImage, Pickable};
+use crate::capture::{MonitorImage, Pickable, dpi_scale};
 use crate::fade;
 use crate::palette::Palette;
 use crate::selection::{Grip, nudged};
@@ -35,7 +33,6 @@ pub(crate) use window::WINDOW_CLASS;
 pub(crate) use window::{bgra, target_and_bitmap};
 use window::{open_window, register_class};
 
-const DESKTOP_DPI: f32 = 96.0;
 const SHIFT_NUDGE: i32 = 10;
 
 /// What happened on the overlay, delivered on its thread's message loop.
@@ -363,22 +360,6 @@ fn toolbar_monitor(captures: &[MonitorImage]) -> windows::core::Result<Option<&M
             && (bounds.top..bounds.bottom).contains(&pointer.y)
     });
     Ok(found.or(captures.first()))
-}
-
-/// Physical pixels per DIP on the monitor holding `bounds`.
-#[expect(clippy::cast_precision_loss, reason = "a DPI is a few hundred")]
-pub(crate) fn dpi_scale(bounds: RECT) -> windows::core::Result<f32> {
-    let (mut x, mut y) = (0, 0);
-    // SAFETY: both outputs are writable locals; MonitorFromRect always returns a monitor here.
-    unsafe {
-        GetDpiForMonitor(
-            MonitorFromRect(&raw const bounds, MONITOR_DEFAULTTONEAREST),
-            MDT_EFFECTIVE_DPI,
-            &raw mut x,
-            &raw mut y,
-        )
-    }?;
-    Ok(x as f32 / DESKTOP_DPI)
 }
 
 #[cfg(test)]

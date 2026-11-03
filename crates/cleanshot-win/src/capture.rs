@@ -20,8 +20,10 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors, GetDC, GetMonitorInfoW, HDC,
-    HMONITOR, MONITORINFO, ReleaseDC, SRCCOPY, SelectObject,
+    HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, ReleaseDC, SRCCOPY,
+    SelectObject,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::core::{BOOL, Interface};
 
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
@@ -33,6 +35,7 @@ mod window;
 
 pub use window::{Pick, Pickable, pickable_windows, picked};
 
+pub(crate) const DESKTOP_DPI: f32 = 96.0;
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// How the desktop is copied (CHARTER 5 runtime model: the M0 spike picks one).
@@ -96,6 +99,22 @@ fn overlap(a: RECT, b: RECT) -> Option<RECT> {
         bottom: a.bottom.min(b.bottom),
     };
     (shared.left < shared.right && shared.top < shared.bottom).then_some(shared)
+}
+
+/// Physical pixels per DIP on the monitor holding `bounds`.
+#[expect(clippy::cast_precision_loss, reason = "a DPI is a few hundred")]
+pub(crate) fn dpi_scale(bounds: RECT) -> windows::core::Result<f32> {
+    let (mut x, mut y) = (0, 0);
+    // SAFETY: both outputs are writable locals; MonitorFromRect always returns a monitor here.
+    unsafe {
+        GetDpiForMonitor(
+            MonitorFromRect(&raw const bounds, MONITOR_DEFAULTTONEAREST),
+            MDT_EFFECTIVE_DPI,
+            &raw mut x,
+            &raw mut y,
+        )
+    }?;
+    Ok(x as f32 / DESKTOP_DPI)
 }
 
 /// What the hotkey path copied (D-28), and what each output's duplication did, for `--log`.

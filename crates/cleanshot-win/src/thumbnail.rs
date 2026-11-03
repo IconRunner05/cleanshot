@@ -108,7 +108,7 @@ impl Thumbnail {
     ) -> Result<Self, Error> {
         window::register_class()?;
         let work = work_area(monitor).map_err(Error::Monitor)?;
-        let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Monitor)?;
+        let scale = crate::capture::dpi_scale(monitor).map_err(Error::Monitor)?;
         let slide = fade::animations_on().map_err(Error::Window)?;
         let window = window::open_window(preview, work, scale, slide, saving, Box::new(on_event))?;
         // SAFETY: `window` was created above on this thread; D-96 shows it without activation.
@@ -128,7 +128,7 @@ impl Thumbnail {
     ///
     /// [`Error::Monitor`] if the monitor's DPI cannot be read.
     pub fn largest_preview(monitor: RECT) -> Result<(u32, u32), Error> {
-        let scale = crate::overlay::dpi_scale(monitor).map_err(Error::Monitor)?;
+        let scale = crate::capture::dpi_scale(monitor).map_err(Error::Monitor)?;
         let px = |dips: f32| {
             // F-09: a few hundred pixels at any scale Windows offers.
             #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -543,7 +543,7 @@ mod tests {
             &events,
             Saving::Off(String::from("Your organisation has turned saving off.")),
         );
-        let scale = crate::overlay::dpi_scale(RECT::default()).expect("the primary monitor's dpi");
+        let scale = crate::capture::dpi_scale(RECT::default()).expect("the primary monitor's dpi");
         let (width, height) = window_size(120, 80, scale);
         let [(_, save), _] = buttons(width, height, scale);
         let at = |x: i32, y: i32| isize::try_from((y << 16) | x).expect("a client point fits");

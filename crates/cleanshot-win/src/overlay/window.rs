@@ -21,9 +21,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, PCWSTR, w};
 
-use super::{DESKTOP_DPI, Gesture, KEYS, Mode, OverlayEvent, Shared, dpi_scale};
+use super::{Gesture, KEYS, Mode, OverlayEvent, Shared};
 use crate::Error;
 use crate::capture::MonitorImage;
+use crate::capture::{DESKTOP_DPI, dpi_scale};
 use crate::loupe;
 use crate::palette::Palette;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
