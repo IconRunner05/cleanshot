@@ -30,7 +30,7 @@ use crate::render_target::target;
 use crate::struct_size;
 use crate::toolbar::automation::{self, Change, Mirror, Request};
 use crate::toolbar::{self, Layout, Look, Mark, Paint, options};
-use crate::window_state::{self, client_point};
+use crate::window_state::{self, desktop_point};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotCapturePanel");
 
@@ -352,12 +352,11 @@ unsafe extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
-            let client = client_point(lparam);
-            let at = POINT {
-                x: client.x + surface.layout.pill.left,
-                y: client.y + surface.layout.pill.top,
+            let origin = POINT {
+                x: surface.layout.pill.left,
+                y: surface.layout.pill.top,
             };
-            if let Some(control) = surface.layout.control_at(at)
+            if let Some(control) = surface.layout.control_at(desktop_point(lparam, origin))
                 && !surface.closed.get()
             {
                 surface.focus(window, control);
