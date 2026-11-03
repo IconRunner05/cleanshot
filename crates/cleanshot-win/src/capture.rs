@@ -31,8 +31,10 @@ use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use crate::Error;
 use crate::struct_size;
 
+mod pointer;
 mod window;
 
+pub use pointer::draw_pointer;
 pub use window::{Pick, Pickable, pickable_windows, picked};
 
 pub(crate) const DESKTOP_DPI: f32 = 96.0;

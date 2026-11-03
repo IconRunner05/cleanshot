@@ -7,8 +7,8 @@ use cleanshot_core::{
     delivery_notice,
 };
 use cleanshot_win::capture::{
-    Desktop, MonitorImage, Pickable, RECT, capture_desktop, monitor_under_cursor, pickable_windows,
-    region,
+    Desktop, MonitorImage, Pickable, RECT, capture_desktop, draw_pointer, monitor_under_cursor,
+    pickable_windows, region,
 };
 use cleanshot_win::overlay::{Overlay, OverlayEvent};
 
@@ -97,13 +97,13 @@ pub(super) fn capture(
     session.captures_started.update(|started| started + 1);
     let defer: Rc<Defer> = Rc::new(defer);
     let pass_on: Rc<PassOn> = Rc::new(pass_on);
-    let Desktop {
+    let Some(Desktop {
         monitors: captures,
         copied,
         outputs,
-    } = match capture_desktop() {
-        Ok(desktop) => desktop,
-        Err(error) => return session.warn(&format!("The screen could not be captured: {error}.")),
+    }) = copy_screen(session)
+    else {
+        return;
     };
     let under_pointer = || match monitor_under_cursor(&captures) {
         Ok(monitor) => Some(monitor),
@@ -187,6 +187,26 @@ pub(super) fn capture(
     }
     // P-01: the black-share pass runs after the overlay is visible.
     session.log_capture(&copied, &outputs, &captures);
+}
+
+/// Copies every monitor, with the pointer drawn in when Show pointer is on (F-12), so the
+/// overlay shows what is copied or saved. Warns and gives nothing if the copy fails.
+fn copy_screen(session: &Session) -> Option<Desktop> {
+    let mut desktop = match capture_desktop() {
+        Ok(desktop) => desktop,
+        Err(error) => {
+            session.warn(&format!("The screen could not be captured: {error}."));
+            return None;
+        }
+    };
+    if session.settings.borrow().show_pointer
+        && let Err(error) = draw_pointer(&mut desktop.monitors)
+    {
+        session.warn(&format!(
+            "The pointer could not be drawn into the capture: {error}."
+        ));
+    }
+    Some(desktop)
 }
 
 /// The windows a window capture can pick from `captures`, with how many and how long the
