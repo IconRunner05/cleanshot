@@ -1,4 +1,4 @@
-use std::cell::OnceCell;
+use std::cell::RefCell;
 
 use cleanshot_core::RgbaImage;
 use windows::Win32::Foundation::HWND;
@@ -20,21 +20,28 @@ const FORMAT: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT {
 };
 
 thread_local! {
-    static FACTORY: OnceCell<ID2D1Factory> = const { OnceCell::new() };
+    static FACTORY: RefCell<Option<ID2D1Factory>> = const { RefCell::new(None) };
 }
 
-/// P-01: this thread's Direct2D factory, made on first use and kept, so every window's render
-/// target shares the device Direct2D made for the first one instead of making its own.
+/// P-01: this thread's Direct2D factory, made on first use and kept until
+/// [`release_factory`], so every window's render target shares the device Direct2D made for
+/// the first one instead of making its own.
 pub(crate) fn factory() -> windows::core::Result<ID2D1Factory> {
-    FACTORY.with(|kept| {
-        if let Some(factory) = kept.get() {
+    FACTORY.with_borrow_mut(|kept| {
+        if let Some(factory) = kept {
             return Ok(factory.clone());
         }
         // SAFETY: D2D1CreateFactory has no preconditions.
         let factory: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }?;
-        Ok(kept.get_or_init(|| factory).clone())
+        Ok(kept.insert(factory).clone())
     })
+}
+
+/// P-04: lets go of this thread's Direct2D factory, so the device it keeps is freed once no
+/// window holds a render target from it; the next window makes both afresh.
+pub fn release_factory() {
+    FACTORY.set(None);
 }
 
 /// A render target for `window`, `target` physical pixels.
@@ -114,5 +121,17 @@ mod tests {
         let first = factory().expect("Direct2D starts");
         let second = factory().expect("Direct2D starts");
         assert_eq!(first.as_raw(), second.as_raw());
+    }
+
+    #[test]
+    fn p04_a_released_factory_is_let_go_and_the_next_window_makes_another() {
+        let first = factory().expect("Direct2D starts");
+        release_factory();
+        assert!(
+            FACTORY.with_borrow(Option::is_none),
+            "the thread keeps no factory"
+        );
+        let second = factory().expect("Direct2D starts again");
+        assert_ne!(first.as_raw(), second.as_raw());
     }
 }

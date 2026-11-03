@@ -332,6 +332,23 @@ impl Session {
         });
     }
 
+    /// After a capture finishes: if no capture starts in the next [`GRAPHICS_IDLE`], lets go
+    /// of the Direct2D factory the capture windows shared, which frees its device once the
+    /// thumbnail closes (P-04), and under --log samples memory after use.
+    fn after_use(self: &Rc<Self>, defer: &dyn Fn(Duration, Box<dyn FnOnce()>)) {
+        let started = self.captures_started.get();
+        let session = Rc::clone(self);
+        defer(
+            GRAPHICS_IDLE,
+            Box::new(move || {
+                if session.captures_started.get() == started {
+                    cleanshot_win::release_factory();
+                }
+            }),
+        );
+        self.sample_after_use(defer);
+    }
+
     /// Under --log, logs the P-04 private working set 10 s from now if no capture starts
     /// before then; normal running starts no timer (P-05).
     fn sample_after_use(self: &Rc<Self>, defer: &dyn Fn(Duration, Box<dyn FnOnce()>)) {
@@ -622,6 +639,9 @@ fn save_chosen(
 
 const IDLE_SAMPLE: Duration = Duration::from_secs(10);
 const AFTER_USE_SAMPLE: Duration = Duration::from_secs(10);
+/// P-01 against P-04: captures this close together share one Direct2D device; after a
+/// longer pause it is let go, before [`AFTER_USE_SAMPLE`] measures what stays.
+const GRAPHICS_IDLE: Duration = Duration::from_secs(5);
 
 fn open_log() -> Result<Log, String> {
     let settings = settings_path().map_err(|error| error.to_string())?;

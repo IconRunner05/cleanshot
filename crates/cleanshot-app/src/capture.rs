@@ -164,7 +164,7 @@ pub(super) fn capture(
     ) {
         None => {
             session.log_capture(&copied, &adapters, &outputs, &captures);
-            return session.sample_after_use(&*defer);
+            return session.after_use(&*defer);
         }
         Some(Plan::Overlay(selected)) => (selected, false),
         Some(Plan::PickWindow) => (None, true),
@@ -173,7 +173,7 @@ pub(super) fn capture(
                 thumbnail::show(session, image, selected, &defer, &pass_on);
             }
             session.log_capture(&copied, &adapters, &outputs, &captures);
-            return session.sample_after_use(&*defer);
+            return session.after_use(&*defer);
         }
     };
     // F-08: listed before the overlay opens, so the list never holds it.
@@ -264,7 +264,7 @@ fn overlay_listener(
                         thumbnail::show(&closing, image, selected, &sampling, &pass_on);
                     }
                 }
-                closing.sample_after_use(&*sampling);
+                closing.after_use(&*sampling);
             }),
         );
     }
