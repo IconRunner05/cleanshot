@@ -20,7 +20,10 @@ pub(super) fn open_settings(cx: &mut cleanshot_editor::App, session: &Rc<Session
         session.policy.clone(),
         apply,
         starts_with_windows(session),
-        set_start_with_windows,
+        {
+            let logging = Rc::clone(session);
+            move |on| set_start_with_windows(&logging, on)
+        },
     );
     if let Err(error) = opened {
         session.warn(&format!("The settings window did not open: {error}."));
@@ -30,7 +33,7 @@ pub(super) fn open_settings(cx: &mut cleanshot_editor::App, session: &Rc<Session
 /// F-56 (D-93): whether the Run value starts this exe. One Windows cannot read counts as off,
 /// and is logged under --log.
 fn starts_with_windows(session: &Session) -> bool {
-    let Some(exe) = exe_path() else {
+    let Some(exe) = exe_path(session) else {
         return false;
     };
     match run_value() {
@@ -43,21 +46,33 @@ fn starts_with_windows(session: &Session) -> bool {
 }
 
 /// F-56 (D-93): adds this exe's Run value, or removes it.
-fn set_start_with_windows(on: bool) -> Result<(), StartupEntryError> {
+fn set_start_with_windows(session: &Session, on: bool) -> Result<(), StartupEntryError> {
     if !on {
         return remove_run_value();
     }
-    let exe = exe_path().ok_or(StartupEntryError::NoExePath)?;
+    let exe = exe_path(session).ok_or(StartupEntryError::NoExePath)?;
     set_run_value(&run_command(&exe))
 }
 
-/// This exe's full path, or None when Windows cannot give it or it is not Unicode text.
-fn exe_path() -> Option<String> {
-    std::env::current_exe()
-        .ok()?
-        .into_os_string()
-        .into_string()
-        .ok()
+/// This exe's full path, or None when Windows cannot give it or it is not Unicode text. Why
+/// goes to the log, never the path itself, which can hold the user's name.
+fn exe_path(session: &Session) -> Option<String> {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            session.log_line("startup", |_| {
+                format!("exe_path unreadable {:?} {error}", error.kind())
+            });
+            return None;
+        }
+    };
+    match exe.into_os_string().into_string() {
+        Ok(exe) => Some(exe),
+        Err(_unlogged_path) => {
+            session.log_line("startup", |_| String::from("exe_path not_unicode"));
+            None
+        }
+    }
 }
 
 /// F-55 (D-81): moves each changed hotkey, keeps the old key of one another program holds,
