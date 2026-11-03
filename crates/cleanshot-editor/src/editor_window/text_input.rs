@@ -35,7 +35,7 @@ impl BoxInput {
     }
 
     fn change(&self, cx: &mut App, change: impl FnOnce(&mut TextEdit)) {
-        // Err only means the window closed, and with it the box being typed into.
+        // Err only means a late event reached the view as its window closed: nothing is left to change.
         let _ = self.view.update(cx, |view, cx| {
             if let Some(text_box) = &mut view.text_box {
                 change(text_box.edit_mut());

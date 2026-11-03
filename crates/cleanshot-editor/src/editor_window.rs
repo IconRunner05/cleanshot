@@ -445,7 +445,7 @@ impl EditorView {
     fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
         let setter = view.clone();
         let on_set = move |property, window: &mut Window, cx: &mut App| {
-            // Err only means the window closed, and with it what the strip could change.
+            // Err only means a late event reached the view as its window closed: nothing is left to change.
             let _ = setter.update(cx, |view, cx| {
                 view.set_property(property);
                 if view.text_box.is_some() {
@@ -456,7 +456,7 @@ impl EditorView {
         };
         let framer = view.clone();
         let on_frame = move |frame, _: &mut Window, cx: &mut App| {
-            // Err only means the window closed, and with it the frame there was to change.
+            // Err only means a late event reached the view as its window closed: nothing is left to change.
             let _ = framer.update(cx, |view, cx| {
                 view.apply(Command::SetFrame(frame));
                 cx.notify();
@@ -487,7 +487,7 @@ impl Render for EditorView {
         let picker = view.clone();
         let restacker = view.clone();
         let on_pick = move |tool, window: &mut Window, cx: &mut App| {
-            // Err only means the window closed, and with it the tool there was to pick.
+            // Err only means a late event reached the view as its window closed: nothing is left to change.
             let _ = picker.update(cx, |view, cx| {
                 view.close_text_box(window);
                 view.tool = tool;
@@ -496,7 +496,7 @@ impl Render for EditorView {
         };
         let replayer = view.clone();
         let on_replay = move |replay: Replay, window: &mut Window, cx: &mut App| {
-            // Err only means the window closed, and with it the history to replay.
+            // Err only means a late event reached the view as its window closed: nothing is left to change.
             let _ = replayer.update(cx, |view, cx| {
                 view.close_text_box(window);
                 view.undo_or_redo(replay);
@@ -506,7 +506,7 @@ impl Render for EditorView {
         let strip = self.strip(&view, theme);
         let input = view.clone();
         let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {
-            // Err only means the window closed, and with it everything the pointer could change.
+            // Err only means a late event reached the view as its window closed: nothing is left to change.
             let _ = view.update(cx, |view, cx| view.pointer(pointer, window, cx));
         });
         let overlay = match &self.text_box {
@@ -577,7 +577,7 @@ impl Render for EditorView {
             )
             .children(self.menu.as_ref().map(|menu| {
                 menu.element(&self.document, theme, move |picked, window, cx| {
-                    // Err only means the window closed, and with it the menu.
+                    // Err only means a late event reached the view as its window closed: nothing is left to change.
                     let _ = restacker.update(cx, |view, cx| view.close_menu(picked, window, cx));
                 })
             }))
