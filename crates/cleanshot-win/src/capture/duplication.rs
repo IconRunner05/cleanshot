@@ -490,16 +490,16 @@ struct DesktopFrameInfo {
     pointer_only_frames: u32,
 }
 
-/// The first frame of a new `duplication` that carries a desktop image, still acquired. A
-/// frame with no accumulated desktop update holds only the pointer; its texture was never
-/// given the desktop, so it is released and the next is awaited, up to
-/// [`FIRST_FRAME_TIMEOUT`] in all.
 /// Whether a duplicated frame was given the desktop. A frame that holds only a pointer update
 /// has a texture that was never written, which reads as black.
 fn holds_desktop_image(info: &DXGI_OUTDUPL_FRAME_INFO) -> bool {
     info.AccumulatedFrames > 0
 }
 
+/// The first frame of a new `duplication` that carries a desktop image, still acquired. A
+/// frame with no accumulated desktop update holds only the pointer; its texture was never
+/// given the desktop, so it is released and the next is awaited, up to
+/// [`FIRST_FRAME_TIMEOUT`] in all.
 fn desktop_frame(
     duplication: &IDXGIOutputDuplication,
 ) -> Result<(DesktopFrameInfo, IDXGIResource), Error> {
