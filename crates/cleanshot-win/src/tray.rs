@@ -14,11 +14,11 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    FindWindowW, GetCursorPos, MB_ICONWARNING, MB_OK, MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING,
-    MessageBoxW, PostMessageW, RegisterWindowMessageW, SetForegroundWindow, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    FindWindowW, GetCursorPos, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_TOPMOST,
+    MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING, MessageBoxW, PostMessageW, RegisterWindowMessageW,
+    SetForegroundWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE,
+    WM_CONTEXTMENU, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL,
+    WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -288,7 +288,8 @@ pub fn message_box(title: &str, text: &str) -> windows::core::Result<()> {
             None,
             &HSTRING::from(text),
             &HSTRING::from(title),
-            MB_OK | MB_ICONWARNING,
+            // With no owner the box would open behind whatever has focus.
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST,
         )
     };
     if pressed.0 == 0 {
