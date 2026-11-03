@@ -20,7 +20,7 @@ use cleanshot_win::capture::{
     AdapterReport, Copied, MonitorImage, OutputReport, RECT, black_share, monitor_of,
 };
 use cleanshot_win::instance::Launch;
-use cleanshot_win::log::{Log, Usage, os_code, since_start, usage};
+use cleanshot_win::log::{Log, LogError, Usage, os_code, since_start, usage};
 use cleanshot_win::overlay::Overlay;
 use cleanshot_win::panel::{Countdown, Panel};
 use cleanshot_win::policy::read_policy;
@@ -41,7 +41,7 @@ use delivery::{deliver, save_as_start, save_to};
 use settings_window::open_settings;
 
 fn main() {
-    let entered = since_start().ok();
+    let entered = since_start();
     cleanshot_win::load_dlls_from_system32_only().expect("the DLL search path is restricted");
     let instance = match Launch::claim().expect("the single-instance mutex opens") {
         Launch::First(instance) => instance,
@@ -68,12 +68,12 @@ fn main() {
     let (hotkeys, fallback) = tray_hotkeys(&settings);
     let log = Rc::new(RefCell::new(log));
     cleanshot_editor::run(move |cx| {
-        let gpui_started = since_start().ok();
+        let gpui_started = since_start();
         // D-76: prewarm on the overlay thread before the tray is ready.
         let unwarmed = Overlay::prewarm()
             .err()
             .map(|error| format!("The capture overlay could not be prepared: {error}."));
-        let prewarmed = since_start().ok();
+        let prewarmed = since_start();
         let app = cx.to_async();
         let session = Rc::new_cyclic(|session: &Weak<Session>| {
             let (session, closing_log) = (session.clone(), Rc::clone(&log));
@@ -158,7 +158,7 @@ fn started(
     session: Rc<Session>,
     policy_problems: Vec<PolicyProblem>,
     earlier: [Option<String>; 4],
-    marks: [(&str, Option<Duration>); 3],
+    marks: [(&str, Result<Duration, LogError>); 3],
 ) {
     for problem in policy_problems {
         session.log_line("policy", |_| format!("problem {problem}"));
@@ -180,8 +180,9 @@ fn started(
         });
     }
     for (stage, at) in marks {
-        if let Some(at) = at {
-            session.perf(|_| format!("P-03 {stage}_ms={}", at.as_millis()));
+        match at {
+            Ok(at) => session.perf(|_| format!("P-03 {stage}_ms={}", at.as_millis())),
+            Err(error) => session.log_failure("perf", "clock_unread", &error),
         }
     }
     session.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
