@@ -1,9 +1,12 @@
 use crate::bubble::Bubble;
-use crate::document::{Document, PointF, Shape, ShapeEntry, ShapeId};
+use crate::document::{Document, PointF, RectF, Shape, ShapeEntry, ShapeId};
 use crate::drawing::{snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::look::Look;
-use crate::selection::{BoxHandle, Handle, handle_at, handles, moved, resized, shape_at};
+use crate::selection::{
+    BoxHandle, Handle, box_handle_at, handle_at, handles, inside, moved, resized, resized_box,
+    shape_at,
+};
 use crate::text::TextBlock;
 use crate::text_edit::{TextFrame, TextOrigin};
 use crate::tool::Tool;
@@ -29,6 +32,15 @@ pub enum Drag {
     Resize {
         original: ShapeEntry,
         handle: Handle,
+        to: PointF,
+    },
+    /// The crop tool moving the crop, pressed inside it, or dragging one of its handles
+    /// (D-118). The crop stays inside `image`, the whole image.
+    Recrop {
+        original: RectF,
+        handle: Option<BoxHandle>,
+        image: RectF,
+        from: PointF,
         to: PointF,
     },
 }
@@ -92,6 +104,23 @@ impl Drag {
                 })),
             };
         }
+        if tool == Tool::Crop
+            && let Some(crop) = document.crop()
+        {
+            let handle = box_handle_at(crop, at, tolerance);
+            if handle.is_some() || inside(crop, at) {
+                return Press {
+                    selected: None,
+                    start: Some(Start::Drag(Self::Recrop {
+                        original: crop,
+                        handle,
+                        image: document.image_area(),
+                        from: at,
+                        to: at,
+                    })),
+                };
+            }
+        }
         let start = match tool {
             Tool::Select => None,
             Tool::Text => Some(Start::Type(text_origin(hit, at, look, TextFrame::Plain))),
@@ -153,7 +182,7 @@ impl Drag {
     pub fn extend(&mut self, at: PointF) {
         match self {
             Self::Draw { path, .. } => path.push(at),
-            Self::Move { to, .. } | Self::Resize { to, .. } => *to = at,
+            Self::Move { to, .. } | Self::Resize { to, .. } | Self::Recrop { to, .. } => *to = at,
         }
     }
 
@@ -171,17 +200,10 @@ impl Drag {
         };
         match self {
             Self::Draw { tool, look, path } => tool.command(path, constrained, look),
-            Self::Move { original, from, to } => {
-                let (mut x, mut y) = (to.x - from.x, to.y - from.y);
-                if constrained {
-                    if x.abs() < y.abs() {
-                        x = 0.0;
-                    } else {
-                        y = 0.0;
-                    }
-                }
-                replace(original, moved(&original.shape, PointF { x, y }))
-            }
+            Self::Move { original, from, to } => replace(
+                original,
+                moved(&original.shape, offset(*from, *to, constrained)),
+            ),
             Self::Resize {
                 original,
                 handle,
@@ -194,7 +216,57 @@ impl Drag {
                 };
                 replace(original, resized(&original.shape, *handle, to))
             }
+            Self::Recrop {
+                original,
+                handle,
+                image,
+                from,
+                to,
+            } => {
+                let crop = match handle {
+                    Some(handle) => overlap(resized_box(*original, *handle, *to), *image)?,
+                    None => kept_inside(*original, offset(*from, *to, constrained), *image),
+                };
+                (crop != *original).then_some(Command::SetCrop(Some(crop)))
+            }
         }
+    }
+}
+
+/// How far a move from `from` to `to` goes; `constrained`, only along its longer axis.
+fn offset(from: PointF, to: PointF, constrained: bool) -> PointF {
+    let (x, y) = (to.x - from.x, to.y - from.y);
+    match (constrained, x.abs() < y.abs()) {
+        (false, _) => PointF { x, y },
+        (true, true) => PointF { x: 0.0, y },
+        (true, false) => PointF { x, y: 0.0 },
+    }
+}
+
+/// The part `a` shares with `b`, if it has an area.
+fn overlap(a: RectF, b: RectF) -> Option<RectF> {
+    let (left, top) = (a.x.max(b.x), a.y.max(b.y));
+    let (right, bottom) = (
+        (a.x + a.width).min(b.x + b.width),
+        (a.y + a.height).min(b.y + b.height),
+    );
+    (left < right && top < bottom).then_some(RectF {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
+/// `rect` moved by `offset`, but no further than keeps it inside `within`.
+fn kept_inside(rect: RectF, offset: PointF, within: RectF) -> RectF {
+    let along = |at: f32, by: f32, size: f32, start: f32, length: f32| {
+        (at + by).clamp(start, (start + length - size).max(start))
+    };
+    RectF {
+        x: along(rect.x, offset.x, rect.width, within.x, within.width),
+        y: along(rect.y, offset.y, rect.height, within.y, within.height),
+        ..rect
     }
 }
 
@@ -282,7 +354,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::document::{Fill, RectF, RgbaImage, Style};
+    use crate::document::{Fill, RgbaImage, Style};
     use crate::history::History;
     use crate::text::{DEFAULT_TEXT_SIZE, TextBlock};
 
@@ -679,5 +751,53 @@ mod tests {
         held.extend(point(130.0, 160.0));
         assert!(held.command(false).is_some());
         assert_eq!(held.typed_on_click(Tool::Bubble), None);
+    }
+
+    #[test]
+    fn d118_the_crop_tool_moves_and_resizes_the_crop_inside_the_image_and_draws_anywhere_else() {
+        let (document, _, _) = document();
+        let mut history = History::new(document);
+        let crop = rect(50.0, 50.0, 100.0, 80.0);
+        history.apply(Command::SetCrop(Some(crop))).unwrap();
+        let document = history.document();
+        let dragged = |tool, from, to| {
+            let mut drag =
+                match Drag::press(document, tool, Look::default_for(tool), None, from, 4.0).start {
+                    Some(Start::Drag(drag)) => drag,
+                    other => panic!("{tool:?} at {from:?} starts {other:?}"),
+                };
+            drag.extend(to);
+            drag
+        };
+        let recrop = |from, to| match dragged(Tool::Crop, from, to) {
+            drag @ Drag::Recrop { .. } => drag.command(false),
+            other => panic!("the crop tool at {from:?} starts {other:?}"),
+        };
+        assert_eq!(
+            recrop(point(100.0, 90.0), point(120.0, 80.0)),
+            Some(Command::SetCrop(Some(rect(70.0, 40.0, 100.0, 80.0))))
+        );
+        assert_eq!(
+            recrop(point(100.0, 90.0), point(300.0, 90.0)),
+            Some(Command::SetCrop(Some(rect(100.0, 50.0, 100.0, 80.0))))
+        );
+        assert_eq!(
+            recrop(point(150.0, 130.0), point(180.0, 170.0)),
+            Some(Command::SetCrop(Some(rect(50.0, 50.0, 130.0, 120.0))))
+        );
+        assert_eq!(
+            recrop(point(150.0, 130.0), point(250.0, 260.0)),
+            Some(Command::SetCrop(Some(rect(50.0, 50.0, 150.0, 150.0))))
+        );
+        assert_eq!(recrop(point(100.0, 90.0), point(100.0, 90.0)), None);
+        for (tool, at) in [
+            (Tool::Crop, point(10.0, 180.0)),
+            (Tool::Rectangle, point(100.0, 90.0)),
+        ] {
+            assert!(
+                matches!(dragged(tool, at, at), Drag::Draw { .. }),
+                "{tool:?} at {at:?}"
+            );
+        }
     }
 }

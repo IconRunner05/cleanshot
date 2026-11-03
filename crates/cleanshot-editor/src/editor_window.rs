@@ -469,11 +469,13 @@ impl Render for EditorView {
             Some(text_box) => Overlay {
                 preview: Some(text_box.preview(window)),
                 selected: None,
+                crop_handles: false,
                 over: Some(paint_text_box(text_box.clone(), input, self.focus.clone())),
             },
             None => Overlay {
                 preview: self.drag.as_ref().and_then(|drag| drag.command(self.shift)),
                 selected: self.selected,
+                crop_handles: self.tool == Tool::Crop,
                 over: None,
             },
         };

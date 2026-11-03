@@ -60,17 +60,23 @@ impl Document {
 
     /// The part of the base image an export keeps: the crop, or else all of it (F-37).
     #[must_use]
+    pub fn kept_area(&self) -> RectF {
+        self.crop.unwrap_or(self.image_area())
+    }
+
+    /// The whole base image, in image pixels.
+    #[must_use]
     #[expect(
         clippy::cast_precision_loss,
         reason = "image sides are far below 2^24, where f32 stops being exact"
     )]
-    pub fn kept_area(&self) -> RectF {
-        self.crop.unwrap_or(RectF {
+    pub fn image_area(&self) -> RectF {
+        RectF {
             x: 0.0,
             y: 0.0,
             width: self.base.width() as f32,
             height: self.base.height() as f32,
-        })
+        }
     }
 
     /// The border and shadow an export draws around the image (F-44).

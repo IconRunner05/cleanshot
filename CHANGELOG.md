@@ -17,6 +17,9 @@ section exists.
 - A colour picked on the property strip is now the colour every tool draws in next, not
   only the tool it was picked for. Stroke width, fill, redaction and text size are still
   kept for each tool.
+- With the crop tool picked, the editor shows the whole capture with the crop's handles:
+  drag inside the crop to move it, or a handle to resize it (F-37). A press outside it
+  still starts a new crop.
 - Each drawing tool can now select, move and resize the shapes it draws without
   switching to Select (F-30): for example, drag a speech bubble's tail with the bubble
   tool. A press anywhere else still draws a new shape, and a click on a text or bubble

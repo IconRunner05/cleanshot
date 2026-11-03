@@ -135,7 +135,7 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 | F-34 | Text | T | M2 | Multi-line, IME works, Ctrl+A/Backspace behave like a text box. |
 | F-35 | Highlighter | H | M2 | Translucent yellow, multiply blend. |
 | F-36 | Redact | X | M2 | Pixelate (default) or blur; destructive on export (C-22); a test asserts that original pixels are absent from the output. |
-| F-37 | Crop | C | M2 | Non-destructive in the document; applied on export. The editor dims what the crop leaves out and fits the view to the crop (D-113). |
+| F-37 | Crop | C | M2 | Non-destructive in the document; applied on export. The editor dims what the crop leaves out and fits the view to the crop (D-113). With the Crop tool picked, the view shows the whole image and the crop can be moved and resized by its handles (D-118). |
 | F-38 | Undo / redo | Ctrl+Z / Ctrl+Y | M2 | Unlimited within the session; every edit is a command. |
 | F-39 | Zoom / pan | Ctrl+wheel, Space-drag, Ctrl+0 fit | M2 | Smooth on a 4K image. |
 | F-40 | Copy / save from editor | Ctrl+C, Ctrl+S | M2 | Uses F-24's pipeline. |

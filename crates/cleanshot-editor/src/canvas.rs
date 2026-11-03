@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Bubble, Color, Command, Document, Fill, Frame, Label, PointF, RectF, RedactMode, RgbaImage,
-    SPOTLIGHT_DIM, Shape, ShapeId, Style, areas_outside, arrow_head, dimmed_areas, handles,
-    step_numbers, text_on,
+    SPOTLIGHT_DIM, Shape, ShapeId, Style, areas_outside, arrow_head, box_handles, dimmed_areas,
+    handles, step_numbers, text_on,
 };
 use cleanshot_render::{Redacted, redacted};
 use gpui::{
@@ -190,10 +190,12 @@ pub(crate) type OnPointer = Rc<dyn Fn(Pointer, &mut Window, &mut App)>;
 pub(crate) type PaintOver = Box<dyn FnOnce(&Fit, &mut Window, &mut App)>;
 
 /// What is drawn over the document: the edit a drag or the text box would make, the selected
-/// shape's handles, and last `over`, given where the image is (the text box's caret and input).
+/// shape's handles, the crop's handles while `crop_handles` (D-118), and last `over`, given
+/// where the image is (the text box's caret and input).
 pub(crate) struct Overlay {
     pub preview: Option<Command>,
     pub selected: Option<ShapeId>,
+    pub crop_handles: bool,
     pub over: Option<PaintOver>,
 }
 
@@ -219,9 +221,14 @@ pub(crate) fn document_canvas(
         move |bounds, hitbox, window, cx| {
             let image = document.base();
             let scale_factor = window.scale_factor();
-            let placement = placement.unwrap_or_else(|| {
-                Placement::fitted(bounds.size, document.kept_area(), scale_factor)
-            });
+            // D-118: while the crop is being changed, the view shows what it can grow into.
+            let shown = if overlay.crop_handles {
+                document.image_area()
+            } else {
+                document.kept_area()
+            };
+            let placement =
+                placement.unwrap_or_else(|| Placement::fitted(bounds.size, shown, scale_factor));
             let fit = Fit::new(bounds, image, placement, scale_factor);
             paint_frame(document.frame(), fit.image_bounds, fit.scale, window);
             // Fails only if the GPU cannot allocate the atlas texture; the shapes still draw.
@@ -274,8 +281,18 @@ pub(crate) fn document_canvas(
                     window,
                 );
             }
-            if let Some(Command::SetCrop(Some(crop))) = &overlay.preview {
+            let new_crop = if let Some(Command::SetCrop(Some(crop))) = &overlay.preview {
                 paint_outline(fit.bounds(*crop), window);
+                Some(*crop)
+            } else {
+                None
+            };
+            if overlay.crop_handles
+                && let Some(crop) = new_crop.or(document.crop())
+            {
+                for (_, at) in box_handles(crop) {
+                    paint_handle(fit.point(at), window);
+                }
             }
             if let Some(shape) = selected_shape {
                 for (_, at) in handles(shape) {

@@ -41,7 +41,7 @@ Start from a release candidate exe downloaded from its GitHub pre-release, with 
 - [ ] F-43: Add a spotlight (S). Everything outside it dims.
 - [ ] F-44: Turn on Border and Shadow in the property strip. The exported image gains them, outside the capture's pixels.
 - [ ] F-36: Redact (X) some text, copy, and paste into Paint. The text cannot be read.
-- [ ] F-37: Crop (C): when you let go, the view fits the cropped part and everything outside it is dimmed. Copy: only the cropped part is pasted. Ctrl+Z: the dimming goes and the whole capture is shown again.
+- [ ] F-37: Crop (C): when you let go, everything outside the crop is dimmed and the crop shows eight handles. Drag inside the crop to move it and a corner handle to resize it; it stops at the capture's edges. Press V: the view fits the cropped part. Copy: only the cropped part is pasted. Ctrl+Z: the dimming goes and the whole capture is shown again.
 - [ ] F-38, F-39: Ctrl+Z and Ctrl+Y undo and redo each step. Ctrl+wheel zooms, Space-drag pans, Ctrl+0 fits.
 - [ ] F-40, F-24: Ctrl+C and Ctrl+S in the editor copy and save the marked-up image.
 - [ ] F-58: Switch Windows between light and dark: the editor follows. Every editor control can be reached with Tab.

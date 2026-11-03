@@ -355,7 +355,7 @@ fn grown(rect: RectF, by: f32) -> RectF {
     }
 }
 
-fn inside(rect: RectF, point: PointF) -> bool {
+pub(crate) fn inside(rect: RectF, point: PointF) -> bool {
     rect.width >= 0.0
         && rect.height >= 0.0
         && (rect.x..=rect.x + rect.width).contains(&point.x)
