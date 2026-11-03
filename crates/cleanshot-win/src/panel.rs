@@ -10,7 +10,10 @@ use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetCursorPos};
 use crate::Error;
 use crate::struct_size;
 
+mod countdown;
 mod window;
+
+pub use countdown::{Countdown, CountdownEvent};
 
 /// What happened on the capture panel.
 #[derive(Debug)]
