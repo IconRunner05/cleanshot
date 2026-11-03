@@ -208,7 +208,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use cleanshot_core::{
-        Color, Command, History, PointF, RectF, RedactMode, RgbaImage, Shape, Style, TextBlock,
+        Color, Command, History, PointF, RectF, RedactMode, RedactStrength, RgbaImage, Shape,
+        Style, TextBlock,
     };
 
     use cleanshot_core::SavingOff;
@@ -253,6 +254,7 @@ mod tests {
                         height: 16.0,
                     },
                     mode: RedactMode::Pixelate,
+                    strength: RedactStrength::Fine,
                 },
                 style: Style::new(
                     Color {

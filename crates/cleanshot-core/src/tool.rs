@@ -1,4 +1,4 @@
-use crate::document::{Fill, PointF, RedactMode, Shape};
+use crate::document::{Fill, PointF, RedactMode, RedactStrength, Shape};
 use crate::drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::look::Look;
@@ -110,6 +110,7 @@ impl Tool {
                 add(Shape::Redact {
                     rect: area,
                     mode: RedactMode::Pixelate,
+                    strength: RedactStrength::Fine,
                 })
             }),
             Self::Spotlight => has_area.then(|| add(Shape::Spotlight(area))),
@@ -221,7 +222,8 @@ mod tests {
             added(Tool::Redact, &path, false),
             Shape::Redact {
                 rect: area,
-                mode: RedactMode::Pixelate
+                mode: RedactMode::Pixelate,
+                strength: RedactStrength::Fine,
             }
         );
         assert_eq!(

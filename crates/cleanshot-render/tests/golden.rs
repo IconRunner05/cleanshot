@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Color, Command, Document, Fill, GlyphMask, History, Look, PointF, Property, RectF, RedactMode,
-    RgbaImage, Shape, Style, TextBlock, TextMasks, Tool,
+    RedactStrength, RgbaImage, Shape, Style, TextBlock, TextMasks, Tool,
 };
 use cleanshot_render::Format;
 
@@ -258,6 +258,7 @@ fn redact() -> Vec<Command> {
             Shape::Redact {
                 rect: rect(6.0, 6.0, 38.5, 52.0),
                 mode: RedactMode::Pixelate,
+                strength: RedactStrength::Fine,
             },
             WHITE,
             1.0,
@@ -266,6 +267,7 @@ fn redact() -> Vec<Command> {
             Shape::Redact {
                 rect: rect(52.0, 6.0, 38.0, 52.0),
                 mode: RedactMode::Blur,
+                strength: RedactStrength::Fine,
             },
             WHITE,
             1.0,
@@ -354,6 +356,7 @@ fn text_redact_crop() -> Vec<Step> {
                 Shape::Redact {
                     rect: rect(20.0, 15.0, 30.0, 30.0),
                     mode: RedactMode::Pixelate,
+                    strength: RedactStrength::Fine,
                 },
                 WHITE,
                 1.0,

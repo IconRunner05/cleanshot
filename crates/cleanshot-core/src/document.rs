@@ -254,6 +254,7 @@ pub enum Shape {
     Redact {
         rect: RectF,
         mode: RedactMode,
+        strength: RedactStrength,
     },
     /// Dims the image outside it (F-43).
     Spotlight(RectF),
@@ -273,6 +274,29 @@ pub enum Fill {
 pub enum RedactMode {
     Pixelate,
     Blur,
+}
+
+/// How coarse a redaction is (D-123). The finest is the strength C-22 was set at, so the
+/// control only strengthens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RedactStrength {
+    Fine,
+    Medium,
+    Coarse,
+    Coarsest,
+}
+
+impl RedactStrength {
+    /// The side of a pixelation cell in image pixels, which is also the blur radius.
+    #[must_use]
+    pub const fn cell(self) -> usize {
+        match self {
+            Self::Fine => 16,
+            Self::Medium => 24,
+            Self::Coarse => 32,
+            Self::Coarsest => 48,
+        }
+    }
 }
 
 /// What a spotlight lays over the image outside it (F-43, D-78).

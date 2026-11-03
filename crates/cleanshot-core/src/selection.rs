@@ -144,9 +144,14 @@ pub fn moved(shape: &Shape, offset: PointF) -> Shape {
         Shape::Bubble(bubble) => Shape::Bubble(bubble.moved_by(offset)),
         Shape::Highlight(rect) => Shape::Highlight(shift_rect(*rect)),
         Shape::Spotlight(rect) => Shape::Spotlight(shift_rect(*rect)),
-        Shape::Redact { rect, mode } => Shape::Redact {
+        Shape::Redact {
+            rect,
+            mode,
+            strength,
+        } => Shape::Redact {
             rect: shift_rect(*rect),
             mode: *mode,
+            strength: *strength,
         },
     }
 }
@@ -180,8 +185,12 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF, measure: impl Fn(&str)
         (Shape::Spotlight(_), Handle::Box(handle)) => {
             new_bounds(handle).map_or_else(|| shape.clone(), Shape::Spotlight)
         }
-        (Shape::Redact { mode, .. }, Handle::Box(handle)) => match new_bounds(handle) {
-            Some(rect) => Shape::Redact { rect, mode: *mode },
+        (Shape::Redact { mode, strength, .. }, Handle::Box(handle)) => match new_bounds(handle) {
+            Some(rect) => Shape::Redact {
+                rect,
+                mode: *mode,
+                strength: *strength,
+            },
             None => shape.clone(),
         },
         (Shape::Pen(points), Handle::Box(handle)) => match (bounds(shape), new_bounds(handle)) {

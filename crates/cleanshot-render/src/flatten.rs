@@ -201,7 +201,11 @@ pub(crate) fn draw(
             skia_rect(*rect).map(PathBuilder::from_rect),
             &self::paint(entry.style.color, BlendMode::Multiply),
         ),
-        Shape::Redact { rect, mode } => redact(pixmap, *rect, *mode),
+        Shape::Redact {
+            rect,
+            mode,
+            strength,
+        } => redact(pixmap, *rect, *mode, *strength),
         // F-43: flatten dims around every spotlight before it draws any shape.
         Shape::Spotlight(_) => {}
         Shape::Text(_) => text(pixmap, entry.id, masks, entry.style.color)?,
@@ -743,6 +747,7 @@ mod tests {
                 height: 2.0,
             },
             mode: cleanshot_core::RedactMode::Pixelate,
+            strength: cleanshot_core::RedactStrength::Fine,
         };
         for shape in [spotlight, redaction] {
             history.apply(Command::Add { shape, style }).unwrap();

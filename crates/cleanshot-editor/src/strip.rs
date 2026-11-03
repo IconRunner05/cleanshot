@@ -40,6 +40,7 @@ pub(crate) fn property_strip(
             | Setting::StrokeWidth
             | Setting::Fill
             | Setting::Redact
+            | Setting::RedactStrength
             | Setting::TextSize => {
                 let choices = setting.choices().iter().map(|&(property, name)| {
                     let on_set = on_set.clone();
@@ -177,5 +178,9 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
             .text_xs()
             .text_color(theme.text)
             .child(format!("{size}")),
+        Property::RedactStrength(strength) => div()
+            .text_xs()
+            .text_color(theme.text)
+            .child(format!("{}", strength.cell())),
     }
 }

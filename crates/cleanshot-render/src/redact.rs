@@ -1,18 +1,16 @@
 use std::ops::Range;
 
-use cleanshot_core::{RectF, RedactMode, RgbaImage};
+use cleanshot_core::{RectF, RedactMode, RedactStrength, RgbaImage};
 use tiny_skia::{IntSize, Pixmap};
 
 use crate::flatten::{covered_pixels, premultiplied, straight};
 use crate::{Error, Patch};
 
-/// The side of a pixelation cell in image pixels. Cells are spread evenly over the area, so
-/// none is much smaller than this unless the area itself is.
-const CELL: usize = 16;
-
-/// Replaces every pixel `rect` touches (C-22). Pixelate sets each cell to its average; blur
-/// pixelates first and then smooths the cells, so neither keeps more than the cell averages.
-pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode) {
+/// Replaces every pixel `rect` touches (C-22). Pixelate sets each cell, `strength`'s side, to its
+/// average; blur pixelates first and then smooths the cells over the same radius, so neither
+/// keeps more than the cell averages (D-123).
+pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode, strength: RedactStrength) {
+    let cell = strength.cell();
     let Some((columns, rows)) = covered_pixels(rect, pixmap.width(), pixmap.height()) else {
         return;
     };
@@ -22,8 +20,8 @@ pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode) {
         stride: pixmap.width() as usize,
         data: pixmap.data_mut(),
     };
-    for cell_rows in cells(rows.clone()) {
-        for cell_columns in cells(columns.clone()) {
+    for cell_rows in cells(rows.clone(), cell) {
+        for cell_columns in cells(columns.clone(), cell) {
             let pixels: Vec<_> = cell_rows
                 .clone()
                 .flat_map(|y| cell_columns.clone().map(move |x| (x, y)))
@@ -39,13 +37,13 @@ pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode) {
         RedactMode::Blur => {
             for y in rows.clone() {
                 let line: Vec<_> = columns.clone().map(|x| area.pixel(x, y)).collect();
-                for (x, pixel) in columns.clone().zip(box_blur(&line)) {
+                for (x, pixel) in columns.clone().zip(box_blur(&line, cell)) {
                     area.set_pixel(x, y, pixel);
                 }
             }
             for x in columns {
                 let line: Vec<_> = rows.clone().map(|y| area.pixel(x, y)).collect();
-                for (y, pixel) in rows.clone().zip(box_blur(&line)) {
+                for (y, pixel) in rows.clone().zip(box_blur(&line, cell)) {
                     area.set_pixel(x, y, pixel);
                 }
             }
@@ -53,7 +51,7 @@ pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode) {
     }
 }
 
-/// The pixels a redaction of `rect` in `mode` leaves of `image`, exactly as an export draws
+/// The pixels a redaction of `rect` in `mode` at `strength` leaves of `image`, exactly as an export draws
 /// them where no shape is under it (C-22, F-36); `None` if `rect` covers no pixel.
 ///
 /// # Errors
@@ -63,7 +61,12 @@ pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode) {
     clippy::cast_precision_loss,
     reason = "an image side is far below 2^24, where f32 stops being exact"
 )]
-pub fn redacted(image: &RgbaImage, rect: RectF, mode: RedactMode) -> Result<Option<Patch>, Error> {
+pub fn redacted(
+    image: &RgbaImage,
+    rect: RectF,
+    mode: RedactMode,
+    strength: RedactStrength,
+) -> Result<Option<Patch>, Error> {
     let Some((columns, rows)) = covered_pixels(rect, image.width(), image.height()) else {
         return Ok(None);
     };
@@ -87,7 +90,7 @@ pub fn redacted(image: &RgbaImage, rect: RectF, mode: RedactMode) -> Result<Opti
         width: width as f32,
         height: height as f32,
     };
-    redact(&mut pixmap, whole, mode);
+    redact(&mut pixmap, whole, mode, strength);
     let pixels = RgbaImage::new(width, height, straight(&pixmap)).map_err(Error::Output)?;
     Ok(Some(Patch {
         left: columns.start,
@@ -119,9 +122,10 @@ impl Area<'_> {
     }
 }
 
-/// `span` split into the fewest near-equal runs no longer than [`CELL`].
-fn cells(span: Range<usize>) -> impl Iterator<Item = Range<usize>> {
-    let count = span.len().div_ceil(CELL);
+/// `span` split into the fewest near-equal runs no longer than `cell`, so none is much shorter
+/// than `cell` unless `span` itself is.
+fn cells(span: Range<usize>, cell: usize) -> impl Iterator<Item = Range<usize>> {
+    let count = span.len().div_ceil(cell);
     (0..count).map(move |index| {
         span.start + index * span.len() / count..span.start + (index + 1) * span.len() / count
     })
@@ -140,14 +144,15 @@ fn average(pixels: impl Iterator<Item = [u8; 4]>) -> [u8; 4] {
     sums.map(|sum| channel((sum + count / 2) / count.max(1)))
 }
 
-/// Each pixel becomes the mean of the [`CELL`] pixels either side of it, repeating the edge
+/// Each pixel becomes the mean of the `radius` pixels either side of it, repeating the edge
 /// pixel past either end.
-fn box_blur(line: &[[u8; 4]]) -> Vec<[u8; 4]> {
+fn box_blur(line: &[[u8; 4]], radius: usize) -> Vec<[u8; 4]> {
     let last = line.len() - 1;
     (0..line.len())
         .map(|index| {
             average(
-                (0..=2 * CELL).map(|offset| line[(index + offset).saturating_sub(CELL).min(last)]),
+                (0..=2 * radius)
+                    .map(|offset| line[(index + offset).saturating_sub(radius).min(last)]),
             )
         })
         .collect()
@@ -178,11 +183,11 @@ mod tests {
     const GREEN: [u8; 4] = [0, 255, 0, 255];
 
     /// No average of two or more of these pixels equals either of them. `phase` 1 swaps the colours.
-    fn checkerboard(phase: u32) -> RgbaImage {
+    fn checkerboard(phase: u32, square: u32) -> RgbaImage {
         let mut pixels = Vec::new();
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                pixels.extend(if (x + y + phase).is_multiple_of(2) {
+                pixels.extend(if (x / square + y / square + phase).is_multiple_of(2) {
                     MAGENTA
                 } else {
                     GREEN
@@ -210,7 +215,7 @@ mod tests {
     }
 
     fn flatten_with(shapes: Vec<(Shape, Style)>) -> RgbaImage {
-        let mut history = History::new(Document::new(Arc::new(checkerboard(0))));
+        let mut history = History::new(Document::new(Arc::new(checkerboard(0, 1))));
         for (shape, style) in shapes {
             history.apply(Command::Add { shape, style }).unwrap();
         }
@@ -221,7 +226,14 @@ mod tests {
     }
 
     fn redaction(mode: RedactMode) -> (Shape, Style) {
-        (Shape::Redact { rect: AREA, mode }, style(MAGENTA))
+        (
+            Shape::Redact {
+                rect: AREA,
+                mode,
+                strength: RedactStrength::Fine,
+            },
+            style(MAGENTA),
+        )
     }
 
     fn pixels(image: &RgbaImage) -> impl Iterator<Item = (u32, u32, [u8; 4])> + '_ {
@@ -236,7 +248,7 @@ mod tests {
 
     fn assert_no_original_pixel_survives(mode: RedactMode) {
         let flat = flatten_with(vec![redaction(mode)]);
-        let base = checkerboard(0);
+        let base = checkerboard(0, 1);
         for ((x, y, pixel), (_, _, original)) in pixels(&flat).zip(pixels(&base)) {
             if in_area(x, y) {
                 assert!(
@@ -318,20 +330,21 @@ mod tests {
     }
 
     #[test]
-    fn c22_blur_keeps_nothing_finer_than_the_cell_averages() {
+    fn c22_at_the_weakest_strength_neither_mode_keeps_anything_finer_than_the_cell_averages() {
         let whole_cells = RectF {
             x: 0.0,
             y: 0.0,
             width: 32.0,
             height: 16.0,
         };
-        let blurred = |phase| {
-            let mut history = History::new(Document::new(Arc::new(checkerboard(phase))));
+        let redacted = |phase, mode| {
+            let mut history = History::new(Document::new(Arc::new(checkerboard(phase, 8))));
             history
                 .apply(Command::Add {
                     shape: Shape::Redact {
                         rect: whole_cells,
-                        mode: RedactMode::Blur,
+                        mode,
+                        strength: RedactStrength::Fine,
                     },
                     style: style(MAGENTA),
                 })
@@ -345,7 +358,42 @@ mod tests {
                 .map(|(_, _, pixel)| pixel)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(blurred(0), blurred(1));
+        for mode in [RedactMode::Pixelate, RedactMode::Blur] {
+            assert_eq!(redacted(0, mode), redacted(1, mode), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn d123_each_strength_pixelates_in_cells_of_its_own_side() {
+        let (width, height) = (96, 8);
+        let ramp = (0..height)
+            .flat_map(|_| (0..width).flat_map(|x| [u8::try_from(x * 2).unwrap(), 0, 0, 255]))
+            .collect();
+        let image = RgbaImage::new(width, height, ramp).unwrap();
+        let whole = RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 96.0,
+            height: 8.0,
+        };
+        for (strength, cells) in [
+            (RedactStrength::Fine, 6),
+            (RedactStrength::Medium, 4),
+            (RedactStrength::Coarse, 3),
+            (RedactStrength::Coarsest, 2),
+        ] {
+            let patch = redacted(&image, whole, RedactMode::Pixelate, strength)
+                .unwrap()
+                .unwrap();
+            let row = &patch.pixels.pixels()[..96 * 4];
+            let changes = row
+                .as_chunks::<4>()
+                .0
+                .windows(2)
+                .filter(|pair| pair[0] != pair[1])
+                .count();
+            assert_eq!(changes + 1, cells, "{strength:?}");
+        }
     }
 
     /// No two neighbouring pixels alike, and every other column half transparent.
@@ -380,12 +428,18 @@ mod tests {
         for mode in [RedactMode::Pixelate, RedactMode::Blur] {
             let mut history = History::new(Document::new(Arc::new(varied())));
             let command = Command::Add {
-                shape: Shape::Redact { rect, mode },
+                shape: Shape::Redact {
+                    rect,
+                    mode,
+                    strength: RedactStrength::Fine,
+                },
                 style: style(MAGENTA),
             };
             history.apply(command).unwrap();
             let export = flatten(history.document(), &TextMasks::default()).unwrap();
-            let preview = redacted(&varied(), rect, mode).unwrap().unwrap();
+            let preview = redacted(&varied(), rect, mode, RedactStrength::Fine)
+                .unwrap()
+                .unwrap();
             let size = (preview.pixels.width(), preview.pixels.height());
             assert_eq!(
                 (preview.left, preview.top, size),

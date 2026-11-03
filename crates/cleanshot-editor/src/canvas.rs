@@ -4,9 +4,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Bubble, Color, Command, Document, Fill, Frame, Label, PointF, RectF, RedactMode, RgbaImage,
-    SPOTLIGHT_DIM, Shape, ShapeEntry, ShapeId, Style, areas_outside, arrow_head, box_handles,
-    dimmed_areas, handles, step_numbers, text_on,
+    Bubble, Color, Command, Document, Fill, Frame, Label, PointF, RectF, RedactMode,
+    RedactStrength, RgbaImage, SPOTLIGHT_DIM, Shape, ShapeEntry, ShapeId, Style, areas_outside,
+    arrow_head, box_handles, dimmed_areas, handles, step_numbers, text_on,
 };
 use cleanshot_render::{Patch, redacted, shape_shadow};
 use gpui::{
@@ -71,13 +71,15 @@ struct RedactionPreviews {
 struct RedactionKey {
     rect: [u32; 4],
     mode: RedactMode,
+    strength: RedactStrength,
 }
 
 impl RedactionKey {
-    fn new(rect: RectF, mode: RedactMode) -> Self {
+    fn new(rect: RectF, mode: RedactMode, strength: RedactStrength) -> Self {
         Self {
             rect: [rect.x, rect.y, rect.width, rect.height].map(f32::to_bits),
             mode,
+            strength,
         }
     }
 }
@@ -108,17 +110,21 @@ impl RedactionPreviews {
     pub(crate) fn update(&mut self, document: &Document) {
         let mut kept = HashMap::new();
         for entry in document.shapes() {
-            let Shape::Redact { rect, mode } = entry.shape else {
+            let Shape::Redact {
+                rect,
+                mode,
+                strength,
+            } = entry.shape
+            else {
                 continue;
             };
-            let key = RedactionKey::new(rect, mode);
+            let key = RedactionKey::new(rect, mode, strength);
             if kept.contains_key(&key) {
                 continue;
             }
-            let preview = self
-                .previews
-                .remove(&key)
-                .unwrap_or_else(|| redaction_preview(document.base(), rect, mode, &*self.log));
+            let preview = self.previews.remove(&key).unwrap_or_else(|| {
+                redaction_preview(document.base(), rect, mode, strength, &*self.log)
+            });
             kept.insert(key, preview);
         }
         self.previews = kept;
@@ -129,6 +135,7 @@ impl RedactionPreviews {
         &self,
         rect: RectF,
         mode: RedactMode,
+        strength: RedactStrength,
         fit: &Fit,
         window: &mut Window,
     ) -> Option<Bounds<Pixels>> {
@@ -137,7 +144,7 @@ impl RedactionPreviews {
             window.paint_quad(fill(bounds, gpui::black()));
             Some(bounds)
         };
-        match self.previews.get(&RedactionKey::new(rect, mode)) {
+        match self.previews.get(&RedactionKey::new(rect, mode, strength)) {
             Some(RedactionPreview::Pixels { bounds, image }) => {
                 let bounds = fit.bounds(*bounds);
                 let painted =
@@ -172,9 +179,10 @@ fn redaction_preview(
     image: &RgbaImage,
     rect: RectF,
     mode: RedactMode,
+    strength: RedactStrength,
     log: &dyn Fn(&'static str),
 ) -> RedactionPreview {
-    match redacted(image, rect, mode) {
+    match redacted(image, rect, mode, strength) {
         Ok(Some(patch)) => {
             let (bounds, image) = placed(&patch);
             RedactionPreview::Pixels { bounds, image }
@@ -745,9 +753,13 @@ fn paint_shape(
             paint_polygon(window, stroke, &points, false, color)
         }
         Shape::Text(block) => paint_label(&Label::Block(block), color, fit, window, cx),
-        Shape::Redact { rect, mode } => {
+        Shape::Redact {
+            rect,
+            mode,
+            strength,
+        } => {
             // D-78: a redaction is the capture with its pixels destroyed, so it dims like the capture.
-            if let Some(painted) = redactions.paint(*rect, *mode, fit, window) {
+            if let Some(painted) = redactions.paint(*rect, *mode, *strength, fit, window) {
                 paint_dim(dimmed, painted, fit, window);
             }
             Ok(())
@@ -874,7 +886,10 @@ mod tests {
     use cleanshot_core::History;
 
     fn image_of(previews: &RedactionPreviews, rect: RectF, mode: RedactMode) -> Arc<RenderImage> {
-        match previews.previews.get(&RedactionKey::new(rect, mode)) {
+        match previews
+            .previews
+            .get(&RedactionKey::new(rect, mode, RedactStrength::Fine))
+        {
             Some(RedactionPreview::Pixels { image, .. }) => Arc::clone(image),
             Some(RedactionPreview::CoversNoPixel | RedactionPreview::Failed) | None => {
                 panic!("a preview of {rect:?}")
@@ -893,7 +908,11 @@ mod tests {
         };
         let mode = RedactMode::Blur;
         let add = || Command::Add {
-            shape: Shape::Redact { rect, mode },
+            shape: Shape::Redact {
+                rect,
+                mode,
+                strength: RedactStrength::Fine,
+            },
             style: Style::new(
                 Color {
                     r: 0,
