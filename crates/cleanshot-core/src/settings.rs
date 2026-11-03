@@ -43,6 +43,17 @@ impl SaveFormat {
             Self::Bmp => "BMP",
         }
     }
+
+    /// The format a file extension names, in any case: png, jpg or jpeg, bmp (F-22).
+    #[must_use]
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension.to_ascii_lowercase().as_str() {
+            "png" => Some(Self::Png),
+            "jpg" | "jpeg" => Some(Self::Jpg),
+            "bmp" => Some(Self::Bmp),
+            _ => None,
+        }
+    }
 }
 
 /// What happens once a region is selected.
@@ -538,6 +549,21 @@ mod tests {
             hotkeys.used_by_another(HotkeyAction::Region, hotkey("Win+W")),
             Some(HotkeyAction::Window)
         );
+    }
+
+    #[test]
+    fn f22_a_typed_extension_names_its_format_in_any_case() {
+        for (extension, format) in [
+            ("png", Some(SaveFormat::Png)),
+            ("PNG", Some(SaveFormat::Png)),
+            ("jpg", Some(SaveFormat::Jpg)),
+            ("JPEG", Some(SaveFormat::Jpg)),
+            ("Bmp", Some(SaveFormat::Bmp)),
+            ("gif", None),
+            ("", None),
+        ] {
+            assert_eq!(SaveFormat::from_extension(extension), format, "{extension}");
+        }
     }
 
     #[test]

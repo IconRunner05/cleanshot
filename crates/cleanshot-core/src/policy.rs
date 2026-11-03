@@ -75,6 +75,16 @@ impl Saving {
             Self::Off(off) => Err(*off),
         }
     }
+
+    /// The format a save uses: PNG when the policy forces it (F-57), else the format `typed`
+    /// in the file name (F-22), else `chosen` in the settings.
+    #[must_use]
+    pub fn format(&self, typed: Option<SaveFormat>, chosen: SaveFormat) -> SaveFormat {
+        match self {
+            Self::Allowed { png_only: true, .. } => SaveFormat::Png,
+            Self::Allowed { .. } | Self::Off(_) => typed.unwrap_or(chosen),
+        }
+    }
 }
 
 /// Why a policy turned saving off.
@@ -189,6 +199,29 @@ mod tests {
 
     fn text(value: &str) -> PolicyValue {
         Text(value.to_owned())
+    }
+
+    #[test]
+    fn f22_f57_a_save_uses_png_when_forced_else_the_typed_format_else_the_setting() {
+        let (allowed, _) = Policy::from_values(Missing, Missing, Missing, Missing);
+        let (png_only, _) = Policy::from_values(Missing, Missing, Number(1), Missing);
+        let typed = Some(SaveFormat::Bmp);
+        assert_eq!(
+            allowed.saving().format(typed, SaveFormat::Jpg),
+            SaveFormat::Bmp
+        );
+        assert_eq!(
+            allowed.saving().format(None, SaveFormat::Jpg),
+            SaveFormat::Jpg
+        );
+        assert_eq!(
+            png_only.saving().format(typed, SaveFormat::Jpg),
+            SaveFormat::Png
+        );
+        assert_eq!(
+            png_only.saving().format(None, SaveFormat::Jpg),
+            SaveFormat::Png
+        );
     }
 
     #[test]
