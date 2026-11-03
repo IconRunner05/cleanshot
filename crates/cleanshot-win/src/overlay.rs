@@ -457,8 +457,8 @@ pub(crate) mod tests {
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VIRTUAL_KEY, VK_ESCAPE,
-        VK_RETURN, VK_TAB,
+        HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
+        VIRTUAL_KEY, VK_E, VK_ESCAPE, VK_RETURN, VK_S, VK_TAB,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, EnumThreadWindows, IsWindow, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
@@ -663,6 +663,36 @@ pub(crate) mod tests {
             )
         };
         counted
+    }
+
+    #[test]
+    fn d117_each_overlay_shortcut_a_tooltip_names_is_a_key_the_overlay_holds() {
+        let held = |modifiers: HOT_KEY_MODIFIERS, key: VIRTUAL_KEY, does: Key| {
+            KEYS.iter().any(|&(holding, holding_key, doing)| {
+                holding.0 & !MOD_NOREPEAT.0 == modifiers.0 && holding_key == key && doing == does
+            })
+        };
+        let none = HOT_KEY_MODIFIERS(0);
+        for &control in Toolbar::Overlay.controls() {
+            let Some(named) = toolbar::shortcut(Toolbar::Overlay, control) else {
+                continue;
+            };
+            let chosen = Key::Choose(control);
+            let holds = match named {
+                "Esc" => held(none, VK_ESCAPE, chosen),
+                "Enter" => {
+                    control == toolbar::primary(Toolbar::Overlay)
+                        && held(none, VK_RETURN, Key::Press)
+                }
+                "Ctrl+S" => held(MOD_CONTROL, VK_S, chosen),
+                "E" => held(none, VK_E, chosen),
+                other => panic!("{control:?} names {other}, which this test cannot read"),
+            };
+            assert!(
+                holds,
+                "{control:?} names {named}, a key the overlay does not hold for it"
+            );
+        }
     }
 
     #[test]

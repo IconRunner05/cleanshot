@@ -43,6 +43,35 @@ pub(crate) fn name(control: ToolbarControl) -> &'static str {
     }
 }
 
+/// D-117: the key that chooses `control` on `toolbar`, as its tooltip and UI Automation's
+/// `AcceleratorKey` name it, or None when no key does.
+pub(crate) fn shortcut(toolbar: Toolbar, control: ToolbarControl) -> Option<&'static str> {
+    match (toolbar, control) {
+        (Toolbar::Panel | Toolbar::Overlay, ToolbarControl::Cancel) => Some("Esc"),
+        (Toolbar::Panel, ToolbarControl::Capture) | (Toolbar::Overlay, ToolbarControl::Copy) => {
+            Some("Enter")
+        }
+        (Toolbar::Overlay, ToolbarControl::Save) => Some("Ctrl+S"),
+        (Toolbar::Overlay, ToolbarControl::Edit) => Some("E"),
+        (
+            Toolbar::Panel,
+            ToolbarControl::Mode(_)
+            | ToolbarControl::Timer
+            | ToolbarControl::Options
+            | ToolbarControl::Copy
+            | ToolbarControl::Save
+            | ToolbarControl::Edit,
+        )
+        | (
+            Toolbar::Overlay,
+            ToolbarControl::Mode(_)
+            | ToolbarControl::Timer
+            | ToolbarControl::Options
+            | ToolbarControl::Capture,
+        ) => None,
+    }
+}
+
 /// The text drawn on a control whose label does not change.
 pub(crate) fn label(control: ToolbarControl) -> &'static str {
     match control {

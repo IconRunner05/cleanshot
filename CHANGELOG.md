@@ -20,6 +20,8 @@ section exists.
   nothing to undo or redo, and otherwise names the step, as in "Undo arrow" (F-38).
 - A speech bubble's box can be resized by its sides and corners. The text wraps inside
   it at the same size, in the editor and in the copied or saved image alike (F-42).
+- Narrator says the shortcut of each button on the capture toolbar and the capture panel
+  that has one, such as Enter for Copy and E for Edit (D-117).
 
 ### Changed
 

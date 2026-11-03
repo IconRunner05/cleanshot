@@ -18,14 +18,14 @@ use windows::Win32::UI::Accessibility::{
     IValueProvider, IValueProvider_Impl, NavigateDirection, NavigateDirection_FirstChild,
     NavigateDirection_LastChild, NavigateDirection_NextSibling, NavigateDirection_Parent,
     NavigateDirection_PreviousSibling, NotificationKind_Other, NotificationProcessing_MostRecent,
-    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ButtonControlTypeId,
-    UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED,
-    UIA_E_INVALIDOPERATION, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
-    UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
-    UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_RadioButtonControlTypeId,
-    UIA_SelectionItemPatternId, UIA_TextControlTypeId, UIA_ToolBarControlTypeId,
-    UIA_ValuePatternId, UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRaiseNotificationEvent,
-    UiaRect, UiaReturnRawElementProvider, UiaRootObjectId,
+    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_AcceleratorKeyPropertyId,
+    UIA_ButtonControlTypeId, UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE,
+    UIA_E_ELEMENTNOTENABLED, UIA_E_INVALIDOPERATION, UIA_HasKeyboardFocusPropertyId,
+    UIA_HelpTextPropertyId, UIA_InvokePatternId, UIA_IsEnabledPropertyId,
+    UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
+    UIA_RadioButtonControlTypeId, UIA_SelectionItemPatternId, UIA_TextControlTypeId,
+    UIA_ToolBarControlTypeId, UIA_ValuePatternId, UiaAppendRuntimeId, UiaHostProviderFromHwnd,
+    UiaRaiseNotificationEvent, UiaRect, UiaReturnRawElementProvider, UiaRootObjectId,
 };
 use windows::Win32::UI::Accessibility::{
     UIA_AutomationFocusChangedEventId, UIA_SelectionItem_ElementSelectedEventId,
@@ -37,7 +37,7 @@ use windows::core::{BOOL, BSTR, Error, HRESULT, IUnknown, Interface, PCWSTR, Res
 
 use cleanshot_core::{CapturePanel, SavingOff, Timer, Toolbar, ToolbarControl, saving_off_notice};
 
-use super::{Layout, name};
+use super::{Layout, name, shortcut};
 
 /// Wakes the toolbar's window to act on what UI Automation asked of it. It carries nothing,
 /// so a post from another program only makes the window re-read its own [`Mirror`].
@@ -347,13 +347,13 @@ mod providers {
         NavigateDirection_Parent, NavigateDirection_PreviousSibling, PCWSTR, POINT,
         ProviderOptions, ProviderOptions_ServerSideProvider, Request, Result, SAFEARRAY,
         SafeArrayCreateVector, SafeArrayPutElement, TOOLBAR_NAME, ToolbarControl,
-        UIA_ButtonControlTypeId, UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId,
-        UIA_HelpTextPropertyId, UIA_InvokePatternId, UIA_IsEnabledPropertyId,
-        UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
-        UIA_RadioButtonControlTypeId, UIA_SelectionItemPatternId, UIA_TextControlTypeId,
-        UIA_ToolBarControlTypeId, UIA_ValuePatternId, UiaAppendRuntimeId, UiaHostProviderFromHwnd,
-        UiaRect, VARIANT, VT_I4, implement, invalid_operation, name, none, not_enabled, number,
-        on_screen, text, timer_value, truth,
+        UIA_AcceleratorKeyPropertyId, UIA_ButtonControlTypeId, UIA_ControlTypePropertyId,
+        UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId, UIA_InvokePatternId,
+        UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId,
+        UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_RadioButtonControlTypeId, UIA_SelectionItemPatternId,
+        UIA_TextControlTypeId, UIA_ToolBarControlTypeId, UIA_ValuePatternId, UiaAppendRuntimeId,
+        UiaHostProviderFromHwnd, UiaRect, VARIANT, VT_I4, implement, invalid_operation, name, none,
+        not_enabled, number, on_screen, shortcut, text, timer_value, truth,
     };
 
     /// The toolbar, the root of the tree its window hands UI Automation.
@@ -537,6 +537,10 @@ mod providers {
                     | ToolbarControl::Cancel => number(UIA_ButtonControlTypeId.0),
                 },
                 UIA_NamePropertyId => text(name(self.control)),
+                UIA_AcceleratorKeyPropertyId => match shortcut(self.mirror.toolbar, self.control) {
+                    Some(key) => text(key),
+                    None => VARIANT::default(),
+                },
                 UIA_IsEnabledPropertyId | UIA_IsKeyboardFocusablePropertyId => {
                     truth(self.mirror.off(self.control).is_none())
                 }
@@ -763,6 +767,30 @@ mod tests {
                 .cast()?;
             Ok(timer.Value()?.to_string())
         }
+    }
+
+    fn property(mirror: &Mirror, control: ToolbarControl, id: UIA_PROPERTY_ID) -> String {
+        // SAFETY: an in-process call on a provider this test owns.
+        let value = unsafe { patterns(mirror, control).GetPropertyValue(id) }
+            .expect("a button answers every property");
+        BSTR::try_from(&value).map_or_else(|_| String::new(), |text| text.to_string())
+    }
+
+    #[test]
+    fn d117_a_screen_reader_hears_a_buttons_name_and_its_shortcut_apart() {
+        let mirror = Mirror::new(Toolbar::Overlay, None);
+        let heard = |control| {
+            (
+                property(&mirror, control, UIA_NamePropertyId),
+                property(&mirror, control, UIA_AcceleratorKeyPropertyId),
+            )
+        };
+        assert_eq!(heard(ToolbarControl::Copy), ("Copy".into(), "Enter".into()));
+        assert_eq!(heard(ToolbarControl::Edit), ("Edit".into(), "E".into()));
+        assert_eq!(
+            heard(ToolbarControl::Options),
+            ("Options".into(), String::new())
+        );
     }
 
     #[test]
