@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::cell::{Cell, RefCell};
+use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use cleanshot_core::{
 use cleanshot_editor::{AsyncApp, ask_save_path};
 use cleanshot_win::capture::{Copied, MonitorImage, OutputReport, RECT, black_share};
 use cleanshot_win::instance::Launch;
-use cleanshot_win::log::{Log, Usage, since_start, usage};
+use cleanshot_win::log::{Log, Usage, os_code, since_start, usage};
 use cleanshot_win::overlay::Overlay;
 use cleanshot_win::panel::{Countdown, Panel};
 use cleanshot_win::policy::read_policy;
@@ -162,7 +163,10 @@ fn started(
     }
     let text = start_warnings(&session.tray.borrow(), earlier);
     if !text.is_empty() {
-        session.warn(&text);
+        session.warn(Warning::Said {
+            kind: "start",
+            text: &text,
+        });
     }
     session.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
     // P-04, P-05: the working set, and the CPU time spent with the tray idle, logged once.
@@ -282,7 +286,9 @@ impl Session {
     fn idle_start(&self) -> Option<Usage> {
         self.log.borrow().as_ref()?;
         usage()
-            .inspect_err(|error| self.warn(&format!("Logging could not sample idle use: {error}.")))
+            .inspect_err(|error| {
+                self.warn(Warning::Failed("Logging could not sample idle use", error));
+            })
             .ok()
     }
 
@@ -291,7 +297,7 @@ impl Session {
         let end = match usage() {
             Ok(end) => end,
             Err(error) => {
-                return self.warn(&format!("Logging could not sample idle use: {error}."));
+                return self.warn(Warning::Failed("Logging could not sample idle use", &error));
             }
         };
         self.perf(|_| format!("P-04 working_set_bytes={}", end.working_set_bytes));
@@ -326,8 +332,9 @@ impl Session {
                         )
                     }),
                     Err(error) => {
-                        session.warn(&format!(
-                            "Logging could not sample memory after use: {error}."
+                        session.warn(Warning::Failed(
+                            "Logging could not sample memory after use",
+                            &error,
                         ));
                     }
                 }
@@ -381,16 +388,68 @@ impl Session {
         };
         if let Err(error) = written {
             drop(self.log.borrow_mut().take());
-            self.warn(&format!("Logging stopped: {error}."));
+            self.warn(Warning::Failed("Logging stopped", &error));
         }
     }
 
-    /// Shows `text` from the tray icon. The release exe has no console, so stderr is only
-    /// the last resort, for when the tray cannot show it.
-    fn warn(&self, text: &str) {
-        if let Err(error) = self.tray.borrow().warn("Cleanshot", text) {
+    /// Logs a `kind` line under `--log` for `event`, a failure not returned to a caller, from
+    /// its fixed words and `error`'s OS code only (C-23).
+    fn log_failure(&self, kind: &str, event: &'static str, error: &(dyn Error + 'static)) {
+        self.log_line(kind, |_| failure_line(event, error));
+    }
+
+    /// Shows `warning` from the tray icon and logs it under `--log`. The release exe has no
+    /// console, so stderr is only the last resort, for when the tray cannot show it.
+    fn warn(&self, warning: Warning) {
+        let (text, logged) = match warning {
+            Warning::Failed(what, error) => {
+                (format!("{what}: {error}."), failure_line(what, error))
+            }
+            Warning::Refused(error) => (
+                delivery_notice(&Err(error.clone())),
+                format!("refused {}", refused_kind(error)),
+            ),
+            Warning::Said { kind, text } => (text.to_owned(), kind.to_owned()),
+        };
+        self.log_line("warn", |_| logged);
+        if let Err(error) = self.tray.borrow().warn("Cleanshot", &text) {
             eprintln!("{text} ({error})");
         }
+    }
+}
+
+/// What [`Session::warn`] shows from the tray. Its log line is made from fixed words, a
+/// variant's name and OS codes, never from the text shown, which can hold a path and so the
+/// user's name (C-23).
+#[derive(Clone, Copy)]
+enum Warning<'a> {
+    /// `what` failed because of the error.
+    Failed(&'static str, &'a (dyn Error + 'static)),
+    /// A copy or save was refused; the tray shows [`delivery_notice`] for it.
+    Refused(&'a DeliveryError),
+    /// `text`, logged as `kind` alone.
+    Said { kind: &'static str, text: &'a str },
+}
+
+fn failure_line(event: &str, error: &(dyn Error + 'static)) -> String {
+    match os_code(error) {
+        Some(code) => format!("{event} os {code:#x}"),
+        None => event.to_owned(),
+    }
+}
+
+fn refused_kind(error: &DeliveryError) -> String {
+    match error {
+        DeliveryError::TooLarge { .. } => "TooLarge".to_owned(),
+        DeliveryError::ClipboardBusy => "ClipboardBusy".to_owned(),
+        DeliveryError::NoSaveFolder => "NoSaveFolder".to_owned(),
+        DeliveryError::SaveFolderNotFull { .. } => "SaveFolderNotFull".to_owned(),
+        DeliveryError::NoFreeName { .. } => "NoFreeName".to_owned(),
+        DeliveryError::NotWritten { .. } => "NotWritten".to_owned(),
+        DeliveryError::TextNotDrawn => "TextNotDrawn".to_owned(),
+        DeliveryError::NoSaveDialog => "NoSaveDialog".to_owned(),
+        DeliveryError::SavingOff(off) => format!("SavingOff {off:?}"),
+        DeliveryError::OutsidePolicyFolder { .. } => "OutsidePolicyFolder".to_owned(),
     }
 }
 
@@ -429,7 +488,7 @@ fn open_editor(cx: &mut cleanshot_editor::App, image: RgbaImage, session: &Rc<Se
             move |event| logging.log_line("editor", |_| event.to_owned())
         },
     ) {
-        session.warn(&format!("The editor could not open: {error}."));
+        session.warn(Warning::Failed("The editor could not open", &error));
     }
 }
 
@@ -444,6 +503,7 @@ fn editor_deliver(
             document,
             &session.saving_settings(),
             session.policy.saving(),
+            &|event, error| session.log_failure("delivery", event, error),
         )
     }
 }
@@ -465,6 +525,7 @@ fn editor_save_to(
             document,
             &session.saving_settings(),
             session.policy.saving(),
+            &|event, error| session.log_failure("delivery", event, error),
         )
     }
 }
@@ -484,7 +545,7 @@ async fn save_as(session: &Rc<Session>, image: RgbaImage, cx: &mut AsyncApp) {
     let start = save_as_start(&session.saving_settings(), session.policy.saving());
     let (folder, name) = match start {
         Ok(start) => start,
-        Err(error) => return session.warn(&delivery_notice(&Err(error))),
+        Err(error) => return session.warn(Warning::Refused(&error)),
     };
     let logging = Rc::clone(session);
     let log = move |event: &'static str| logging.log_line("capture", |_| event.to_owned());
@@ -507,9 +568,10 @@ fn save_chosen(
             &document,
             &session.saving_settings(),
             session.policy.saving(),
+            &|event, error| session.log_failure("delivery", event, error),
         )
     }) {
-        session.warn(&delivery_notice(&Err(error)));
+        session.warn(Warning::Refused(&error));
     }
 }
 
@@ -581,6 +643,42 @@ mod tests {
         assert_eq!(
             registered.map(|&(_, hotkey)| hotkey.to_string()),
             Some("Ctrl+Shift+5".to_owned())
+        );
+    }
+
+    #[test]
+    fn c23_a_warn_is_logged_with_its_os_code_and_no_part_of_a_folder_it_names() {
+        let folder = std::env::temp_dir().join(format!("cleanshot-warn-{}", std::process::id()));
+        let log = Log::open(&folder.join("settings.toml")).expect("the log opens");
+        let tray = Tray::create(&[], |_| {}).expect("the tray");
+        let session = Session::new(
+            Settings::default(),
+            Policy::default(),
+            tray,
+            Rc::new(RefCell::new(Some(log))),
+        );
+        let named = PathBuf::from(r"C:\Users\Someone Named\Pictures\Screenshots");
+        session.warn(Warning::Refused(&DeliveryError::NotWritten {
+            folder: named,
+        }));
+        let denied = std::io::Error::from_raw_os_error(5);
+        session.warn(Warning::Failed(
+            "The pointer could not be drawn into the capture",
+            &denied,
+        ));
+        drop(session);
+        let written = std::fs::read_to_string(folder.join("cleanshot.log")).expect("the log reads");
+        std::fs::remove_dir_all(&folder).expect("the test folder is removed");
+        let warns: Vec<_> = written
+            .lines()
+            .filter_map(|line| line.split_once(' ').map(|(_, event)| event))
+            .collect();
+        assert_eq!(
+            warns,
+            [
+                "warn refused NotWritten",
+                "warn The pointer could not be drawn into the capture os 0x5",
+            ]
         );
     }
 }

@@ -12,8 +12,8 @@ use cleanshot_win::capture::{
 };
 use cleanshot_win::overlay::{Frozen, Overlay, OverlayEvent};
 
-use crate::Session;
 use crate::delivery::deliver;
+use crate::{Session, Warning};
 use crate::{settings_window, thumbnail};
 
 /// Runs a job on GPUI's executor after a wait, outside any window procedure.
@@ -132,8 +132,9 @@ pub(super) fn capture(
     let under_pointer = || match monitor_under_cursor(&captures) {
         Ok(monitor) => Some(monitor),
         Err(error) => {
-            session.warn(&format!(
-                "Cleanshot could not tell which screen the pointer is on: {error}."
+            session.warn(Warning::Failed(
+                "Cleanshot could not tell which screen the pointer is on",
+                &error,
             ));
             None
         }
@@ -192,7 +193,7 @@ pub(super) fn capture(
             *session.overlay.borrow_mut() = Some(shown);
             session.perf(|_| format!("P-01 overlay_visible_ms={}", asked.elapsed().as_millis()));
         }
-        Err(error) => session.warn(&format!("The overlay could not open: {error}.")),
+        Err(error) => session.warn(Warning::Failed("The overlay could not open", &error)),
     }
     // P-01: the black-share pass runs after the overlay is visible.
     session.log_capture(&copied, &outputs, &captures);
@@ -230,7 +231,7 @@ fn overlay_listener(
                     if handoff {
                         drop(overlay);
                     } else if let Err(error) = overlay.close() {
-                        closing.warn(&format!("The overlay could not fade out: {error}."));
+                        closing.warn(Warning::Failed("The overlay could not fade out", &error));
                     }
                 }
                 match next {
@@ -252,15 +253,16 @@ fn copy_screen(session: &Session) -> Option<Desktop> {
     let mut desktop = match capture_desktop() {
         Ok(desktop) => desktop,
         Err(error) => {
-            session.warn(&format!("The screen could not be captured: {error}."));
+            session.warn(Warning::Failed("The screen could not be captured", &error));
             return None;
         }
     };
     if session.settings.borrow().show_pointer
         && let Err(error) = draw_pointer(&mut desktop.monitors)
     {
-        session.warn(&format!(
-            "The pointer could not be drawn into the capture: {error}."
+        session.warn(Warning::Failed(
+            "The pointer could not be drawn into the capture",
+            &error,
         ));
     }
     Some(desktop)
@@ -313,24 +315,24 @@ fn on_overlay_event(
             session.last_selection.set(Some(selected));
             // F-57: no Save As dialog opens when the policy turns saving off.
             if let Saving::Off(off) = session.policy.saving() {
-                session.warn(&delivery_notice(&Err(DeliveryError::SavingOff(*off))));
+                session.warn(Warning::Refused(&DeliveryError::SavingOff(*off)));
                 return Next::Nothing;
             }
             match region(frozen, selected) {
                 Ok(image) => return Next::SaveAs(image),
-                Err(error) => session.warn(&format!("The capture did not finish: {error}.")),
+                Err(error) => session.warn(Warning::Failed("The capture did not finish", &error)),
             }
         }
         OverlayEvent::Edit(selected) => match region(frozen, selected) {
             Ok(image) => pass_on(image, Handoff::Editor),
-            Err(error) => session.warn(&format!("The capture could not be edited: {error}.")),
+            Err(error) => session.warn(Warning::Failed("The capture could not be edited", &error)),
         },
         OverlayEvent::DrawFailed(error) => {
-            session.warn(&format!("The overlay could not draw: {error}."));
+            session.warn(Warning::Failed("The overlay could not draw", &error));
         }
         OverlayEvent::Options(_) => unreachable!("the overlay's listener applies Options picks"),
         OverlayEvent::OptionsFailed(error) => {
-            session.warn(&format!("The Options menu could not open: {error}."));
+            session.warn(Warning::Failed("The Options menu could not open", &error));
         }
     }
     Next::Nothing
@@ -348,7 +350,7 @@ fn finish(
     let image = match region(captures, selected) {
         Ok(image) => Arc::new(image),
         Err(error) => {
-            session.warn(&format!("The capture did not finish: {error}."));
+            session.warn(Warning::Failed("The capture did not finish", &error));
             return None;
         }
     };
@@ -357,13 +359,14 @@ fn finish(
         &Document::new(Arc::clone(&image)),
         &session.saving_settings(),
         session.policy.saving(),
+        &|event, error| session.log_failure("delivery", event, error),
     ) {
         Ok(Delivered::Copied) => {
             session.perf(|_| format!("P-02 copied_ms={}", started.elapsed().as_millis()));
         }
         Ok(Delivered::Saved(_)) => {}
         Err(error) => {
-            session.warn(&delivery_notice(&Err(error)));
+            session.warn(Warning::Refused(&error));
             return None;
         }
     }

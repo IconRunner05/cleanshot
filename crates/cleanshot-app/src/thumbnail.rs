@@ -7,9 +7,9 @@ use cleanshot_win::capture::RECT;
 use cleanshot_win::thumbnail::{self, Dragged, Thumbnail, ThumbnailEvent};
 use cleanshot_win::tray::LastCaptureItems;
 
-use crate::Session;
 use crate::capture::{Defer, Handoff, PassOn};
 use crate::delivery::{deliver, dragged};
+use crate::{Session, Warning};
 
 /// F-09: the thumbnail on screen and the capture it holds, dropped together when it closes
 /// (D-94).
@@ -32,14 +32,17 @@ pub(super) fn show(
     if !session.settings.borrow().show_thumbnail {
         return;
     }
-    let preview = Thumbnail::largest_preview(selected)
-        .map_err(|error| error.to_string())
-        .and_then(|(width, height)| {
-            cleanshot_render::thumbnail(&image, width, height).map_err(|error| error.to_string())
-        });
-    let preview = match preview {
+    let (width, height) = match Thumbnail::largest_preview(selected) {
+        Ok(size) => size,
+        Err(error) => {
+            return session.warn(Warning::Failed("The thumbnail could not be made", &error));
+        }
+    };
+    let preview = match cleanshot_render::thumbnail(&image, width, height) {
         Ok(preview) => preview,
-        Err(error) => return session.warn(&format!("The thumbnail could not be made: {error}.")),
+        Err(error) => {
+            return session.warn(Warning::Failed("The thumbnail could not be made", &error));
+        }
     };
     let saving_off = matches!(session.policy.saving(), Saving::Off(_));
     let saving = match session.policy.saving() {
@@ -75,7 +78,7 @@ pub(super) fn show(
             let items = LastCaptureItems::Shown { saving_off };
             session.tray.borrow().set_last_capture_items(items);
         }
-        Err(error) => session.warn(&format!("The thumbnail could not open: {error}.")),
+        Err(error) => session.warn(Warning::Failed("The thumbnail could not open", &error)),
     }
 }
 
@@ -105,10 +108,11 @@ pub(super) fn save_last(session: &Session) {
         &Document::new(image),
         &session.saving_settings(),
         session.policy.saving(),
+        &|event, error| session.log_failure("delivery", event, error),
     );
     fade(session, thumbnail);
     if let Err(error) = saved {
-        session.warn(&delivery_notice(&Err(error)));
+        session.warn(Warning::Refused(&error));
     }
 }
 
@@ -127,10 +131,13 @@ fn on_event(session: &Session, count: u64, event: ThumbnailEvent, pass_on: &Pass
             }
         }
         ThumbnailEvent::DragFailed(error) => {
-            session.warn(&format!("The capture could not be dragged out: {error}."));
+            session.warn(Warning::Failed(
+                "The capture could not be dragged out",
+                &error,
+            ));
         }
         ThumbnailEvent::DrawFailed(error) => {
-            session.warn(&format!("The thumbnail could not draw: {error}."));
+            session.warn(Warning::Failed("The thumbnail could not draw", &error));
         }
     }
 }
@@ -147,7 +154,7 @@ fn taken(session: &Session) -> Option<Shown> {
 
 fn fade(session: &Session, thumbnail: Thumbnail) {
     if let Err(error) = thumbnail.close() {
-        session.warn(&format!("The thumbnail could not fade out: {error}."));
+        session.warn(Warning::Failed("The thumbnail could not fade out", &error));
     }
 }
 
@@ -156,10 +163,12 @@ fn fade(session: &Session, thumbnail: Thumbnail) {
 fn drag_out(session: Weak<Session>, image: Arc<RgbaImage>) -> Box<dyn Fn() -> Option<Dragged>> {
     Box::new(move || {
         let session = session.upgrade()?;
-        match dragged(&image) {
+        match dragged(&image, &|event, error| {
+            session.log_failure("delivery", event, error);
+        }) {
             Ok(dragged) => Some(dragged),
             Err(error) => {
-                session.warn(&delivery_notice(&Err(error)));
+                session.warn(Warning::Refused(&error));
                 None
             }
         }

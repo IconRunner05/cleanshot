@@ -65,6 +65,21 @@ impl Log {
     }
 }
 
+/// Where a failure that is not returned goes: `event` is fixed words naming it, and only
+/// `error`'s OS code reaches the log, so no path or user name can (C-23).
+pub type LogFailure<'a> = &'a dyn Fn(&'static str, &(dyn std::error::Error + 'static));
+
+/// The code of the first Windows or I/O error in `error`'s chain of sources, itself first.
+#[must_use]
+pub fn os_code(error: &(dyn std::error::Error + 'static)) -> Option<i32> {
+    std::iter::successors(Some(error), |error| error.source()).find_map(|error| {
+        error
+            .downcast_ref::<windows::core::Error>()
+            .map(|error| error.code().0)
+            .or_else(|| error.downcast_ref::<std::io::Error>()?.raw_os_error())
+    })
+}
+
 /// How long ago Windows created this process, which counts the loader's work as well as
 /// `main`'s (P-03).
 ///

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use cleanshot_core::{Settings, SettingsSaveError};
 use windows::Win32::UI::Shell::{FOLDERID_RoamingAppData, KF_FLAG_DEFAULT};
 
+use crate::log::LogFailure;
 use crate::save::{SaveError, known_folder, replace};
 
 const FILE_NAME: &str = "cleanshot.toml";
@@ -58,13 +59,17 @@ pub fn read_settings(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, Setti
 }
 
 /// F-55: replaces the file at `path` with `settings`, whole or not at all, creating its folder
-/// first.
+/// first. A partial file that cannot be removed goes to `log`.
 ///
 /// # Errors
 ///
 /// [`SettingsSaveError::NotWritten`] with what Windows said, if the folder or the file could not
 /// be written.
-pub fn write_settings(path: &Path, settings: &Settings) -> Result<(), SettingsSaveError> {
+pub fn write_settings(
+    path: &Path,
+    settings: &Settings,
+    log: LogFailure,
+) -> Result<(), SettingsSaveError> {
     let not_written = |kind| SettingsSaveError::NotWritten {
         path: path.to_owned(),
         kind,
@@ -72,7 +77,7 @@ pub fn write_settings(path: &Path, settings: &Settings) -> Result<(), SettingsSa
     if let Some(folder) = path.parent() {
         fs::create_dir_all(folder).map_err(|error| not_written(error.kind()))?;
     }
-    replace(path, settings.to_toml().as_bytes()).map_err(|error| {
+    replace(path, settings.to_toml().as_bytes(), log).map_err(|error| {
         not_written(match error {
             SaveError::Write(error) => error.kind(),
             SaveError::UnsafeName(_) => ErrorKind::InvalidFilename,
@@ -124,7 +129,8 @@ mod tests {
             save_folder: Some("D:\\Shots".into()),
             ..Settings::default()
         };
-        write_settings(&path, &settings).expect("written into a folder that did not exist");
+        write_settings(&path, &settings, &|_, _| {})
+            .expect("written into a folder that did not exist");
         let bytes = read_settings(&path, cleanshot_core::MAX_SETTINGS_BYTES)
             .expect("readable")
             .expect("present");

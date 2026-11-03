@@ -6,6 +6,7 @@ use cleanshot_core::{
 };
 use cleanshot_render::{Flattened, Format, encode, flatten};
 use cleanshot_win::clipboard::copy_image;
+use cleanshot_win::log::LogFailure;
 use cleanshot_win::save::{self, FolderError, SaveError, Stamp};
 use cleanshot_win::text;
 use cleanshot_win::thumbnail::Dragged;
@@ -15,23 +16,25 @@ const FILE_NAME_TEMPLATE: &str = "Screenshot {date} {time}";
 /// Flattens `document`, redaction included (C-22), and copies it (F-20) or saves it in the
 /// configured folder and format (F-21). The overlay and the editor both finish here (D-48).
 /// A save the organisation's policy turns off is refused before anything is drawn (F-57).
+/// What Windows said of a failure goes to `log`.
 pub(crate) fn deliver(
     output: Output,
     document: &Document,
     settings: &Settings,
     saving: &Saving,
+    log: LogFailure,
 ) -> Result<Delivered, DeliveryError> {
     if let (Output::Save, Saving::Off(off)) = (output, saving) {
         return Err(DeliveryError::SavingOff(*off));
     }
-    let image = flattened(document)?;
+    let image = flattened(document, log)?;
     match output {
         Output::Copy => {
             let bitmap =
                 encode(&image, Format::ClipboardBitmap).map_err(|error| from_render(&error))?;
             let png = encode(&image, Format::Png).map_err(|error| from_render(&error))?;
             copy_image(&bitmap, &png).map_err(|cause| {
-                eprintln!("the clipboard refused the image: {cause}");
+                log("clipboard not_copied", &cause);
                 DeliveryError::ClipboardBusy
             })?;
             Ok(Delivered::Copied)
@@ -39,18 +42,27 @@ pub(crate) fn deliver(
         Output::Save => {
             let (format, extension) = encoding(settings.save_format);
             let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
-            let folder = save::save_folder(settings.save_folder.as_deref()).map_err(from_folder)?;
-            save::save(&folder, FILE_NAME_TEMPLATE, Stamp::now(), extension, &bytes)
-                .map(Delivered::Saved)
-                .map_err(|error| from_save(error, &folder))
+            let folder = save::save_folder(settings.save_folder.as_deref())
+                .map_err(|error| from_folder(error, log))?;
+            save::save(
+                &folder,
+                FILE_NAME_TEMPLATE,
+                Stamp::now(),
+                extension,
+                &bytes,
+                log,
+            )
+            .map(Delivered::Saved)
+            .map_err(|error| from_save(error, &folder, log))
         }
     }
 }
 
 /// D-94: what a drag from the thumbnail offers: `image` as a PNG named as Save names one
-/// (F-21), and as the clipboard's bitmap, made in memory.
-pub(crate) fn dragged(image: &Arc<RgbaImage>) -> Result<Dragged, DeliveryError> {
-    let image = flattened(&Document::new(Arc::clone(image)))?;
+/// (F-21), and as the clipboard's bitmap, made in memory. What Windows said of a failure goes
+/// to `log`.
+pub(crate) fn dragged(image: &Arc<RgbaImage>, log: LogFailure) -> Result<Dragged, DeliveryError> {
+    let image = flattened(&Document::new(Arc::clone(image)), log)?;
     Ok(Dragged {
         name: offered_name("png"),
         png: encode(&image, Format::Png).map_err(|error| from_render(&error))?,
@@ -58,9 +70,9 @@ pub(crate) fn dragged(image: &Arc<RgbaImage>) -> Result<Dragged, DeliveryError> 
     })
 }
 
-fn flattened(document: &Document) -> Result<Flattened, DeliveryError> {
+fn flattened(document: &Document, log: LogFailure) -> Result<Flattened, DeliveryError> {
     let masks = text::masks(document).map_err(|cause| {
-        eprintln!("DirectWrite could not draw the text: {cause}");
+        log("text not_drawn", &cause);
         DeliveryError::TextNotDrawn
     })?;
     flatten(document, &masks).map_err(|error| from_render(&error))
@@ -98,12 +110,14 @@ fn offered_name(extension: &str) -> String {
 /// F-22 (D-66): flattens `document` and writes it to `path`, the name the user confirmed in
 /// Save As, replacing a file there. The extension picks the format; any other name is written
 /// in the configured format, under exactly that name. The organisation's policy may refuse it
-/// (F-57): when saving is off, or for a path outside the policy's folder.
+/// (F-57): when saving is off, or for a path outside the policy's folder. What Windows said of
+/// a failure goes to `log`.
 pub(crate) fn save_to(
     path: &Path,
     document: &Document,
     settings: &Settings,
     saving: &Saving,
+    log: LogFailure,
 ) -> Result<Delivered, DeliveryError> {
     match saving {
         Saving::Off(off) => return Err(DeliveryError::SavingOff(*off)),
@@ -117,7 +131,7 @@ pub(crate) fn save_to(
         }
         Saving::Allowed { .. } => {}
     }
-    let image = flattened(document)?;
+    let image = flattened(document, log)?;
     let typed = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -125,16 +139,16 @@ pub(crate) fn save_to(
     let (format, _) = encoding(saving.format(typed, settings.save_format));
     let bytes = encode(&image, format).map_err(|error| from_render(&error))?;
     let folder = path.parent().unwrap_or(path);
-    match save::replace(path, &bytes) {
+    match save::replace(path, &bytes, log) {
         Ok(()) => Ok(Delivered::Saved(path.to_owned())),
         Err(SaveError::Write(cause)) => {
-            eprintln!("{} could not be written: {cause}", folder.display());
+            log("save not_written", &cause);
             Err(DeliveryError::NotWritten {
                 folder: folder.to_owned(),
             })
         }
         Err(error @ (SaveError::UnsafeName(_) | SaveError::NoFreeName(_))) => {
-            eprintln!("{} could not be written: {error}", path.display());
+            log("save not_written", &error);
             Err(DeliveryError::NotWritten {
                 folder: folder.to_owned(),
             })
@@ -159,21 +173,21 @@ fn from_render(error: &cleanshot_render::Error) -> DeliveryError {
     }
 }
 
-fn from_folder(error: FolderError) -> DeliveryError {
+fn from_folder(error: FolderError, log: LogFailure) -> DeliveryError {
     match error {
         FolderError::NoFolder(cause) => {
-            eprintln!("the screenshots folder is unknown: {cause}");
+            log("save_folder not_known", &cause);
             DeliveryError::NoSaveFolder
         }
         FolderError::RelativeFolder(configured) => DeliveryError::SaveFolderNotFull { configured },
     }
 }
 
-fn from_save(error: SaveError, folder: &Path) -> DeliveryError {
+fn from_save(error: SaveError, folder: &Path, log: LogFailure) -> DeliveryError {
     match error {
         SaveError::NoFreeName(name) => DeliveryError::NoFreeName { name },
         SaveError::Write(cause) => {
-            eprintln!("{} could not be written: {cause}", folder.display());
+            log("save not_written", &cause);
             DeliveryError::NotWritten {
                 folder: folder.to_owned(),
             }
@@ -261,7 +275,13 @@ mod tests {
         let mut copies: Vec<Duration> = (0..5)
             .map(|_| {
                 let started = Instant::now();
-                let copied = deliver(Output::Copy, &document, &Settings::default(), &NO_POLICY);
+                let copied = deliver(
+                    Output::Copy,
+                    &document,
+                    &Settings::default(),
+                    &NO_POLICY,
+                    &|_, _| {},
+                );
                 assert_eq!(copied, Ok(Delivered::Copied));
                 started.elapsed()
             })
@@ -275,7 +295,7 @@ mod tests {
     #[test]
     fn f09_a_drag_offers_the_capture_as_a_png_named_as_save_names_one_and_as_a_bitmap() {
         let image = Arc::new(RgbaImage::new(4, 2, vec![200; 4 * 2 * 4]).expect("4x2 RGBA"));
-        let offered = dragged(&image).expect("the drag's formats are made");
+        let offered = dragged(&image, &|_, _| {}).expect("the drag's formats are made");
         assert!(offered.name.starts_with("Screenshot "), "{}", offered.name);
         assert_eq!(
             Path::new(&offered.name).extension(),
@@ -285,7 +305,7 @@ mod tests {
         );
         assert!(offered.png.starts_with(b"\x89PNG"), "the PNG's signature");
         let expected = encode(
-            &flattened(&Document::new(image)).expect("flattened"),
+            &flattened(&Document::new(image), &|_, _| {}).expect("flattened"),
             Format::ClipboardBitmap,
         )
         .expect("the clipboard's bitmap");
@@ -303,7 +323,7 @@ mod tests {
         let bare = folder.join("Shot");
         let saved = [&typed, &bare].map(|path| {
             assert_eq!(
-                save_to(path, &document, &settings, &NO_POLICY),
+                save_to(path, &document, &settings, &NO_POLICY, &|_, _| {}),
                 Ok(Delivered::Saved(path.clone()))
             );
             std::fs::read(path).expect("the saved file is readable")
@@ -328,7 +348,8 @@ mod tests {
                 &folder.join(".."),
                 &redacted_document(),
                 &settings,
-                &NO_POLICY
+                &NO_POLICY,
+                &|_, _| {}
             ),
             Err(DeliveryError::NotWritten { folder })
         );
@@ -340,7 +361,8 @@ mod tests {
         std::fs::create_dir_all(&folder).expect("the test folder is created");
         let document = redacted_document();
         let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
-        let Ok(Delivered::Saved(path)) = deliver(Output::Save, &document, &settings, &NO_POLICY)
+        let Ok(Delivered::Saved(path)) =
+            deliver(Output::Save, &document, &settings, &NO_POLICY, &|_, _| {})
         else {
             panic!("the save did not deliver a file");
         };
@@ -376,7 +398,7 @@ mod tests {
             .expect("the text is added");
         let document = history.document().clone();
         let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
-        let saved = deliver(Output::Save, &document, &settings, &NO_POLICY);
+        let saved = deliver(Output::Save, &document, &settings, &NO_POLICY, &|_, _| {});
         let written = match &saved {
             Ok(Delivered::Saved(path)) => std::fs::read(path).ok(),
             _ => None,
@@ -404,7 +426,8 @@ mod tests {
                 Output::Save,
                 &document,
                 &settings_saving_to("Shots"),
-                &NO_POLICY
+                &NO_POLICY,
+                &|_, _| {}
             ),
             Err(DeliveryError::SaveFolderNotFull {
                 configured: "Shots".to_owned()
@@ -414,7 +437,7 @@ mod tests {
             std::env::temp_dir().join(format!("cleanshot-missing-{}", std::process::id()));
         let settings = settings_saving_to(missing.to_str().expect("a UTF-8 temp path"));
         assert_eq!(
-            deliver(Output::Save, &document, &settings, &NO_POLICY),
+            deliver(Output::Save, &document, &settings, &NO_POLICY, &|_, _| {}),
             Err(DeliveryError::NotWritten { folder: missing })
         );
     }
@@ -427,7 +450,7 @@ mod tests {
         let settings = settings_saving_to(folder.to_str().expect("a UTF-8 temp path"));
         let off = Saving::Off(SavingOff::ClipboardOnly);
         assert_eq!(
-            deliver(Output::Save, &document, &settings, &off),
+            deliver(Output::Save, &document, &settings, &off, &|_, _| {}),
             Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly))
         );
         assert_eq!(
@@ -436,7 +459,7 @@ mod tests {
         );
         let inside = folder.join("inside.png");
         assert_eq!(
-            save_to(&inside, &document, &settings, &off),
+            save_to(&inside, &document, &settings, &off, &|_, _| {}),
             Err(DeliveryError::SavingOff(SavingOff::ClipboardOnly))
         );
 
@@ -451,7 +474,7 @@ mod tests {
             png_only: true,
         };
         assert_eq!(
-            save_to(&inside, &document, &settings, &locked),
+            save_to(&inside, &document, &settings, &locked, &|_, _| {}),
             Err(DeliveryError::OutsidePolicyFolder {
                 folder: policy_folder
                     .to_str()
@@ -463,7 +486,7 @@ mod tests {
         std::fs::create_dir_all(&policy_folder).expect("the policy folder is created");
         let allowed = policy_folder.join("allowed.jpg");
         assert_eq!(
-            save_to(&allowed, &document, &settings, &locked),
+            save_to(&allowed, &document, &settings, &locked, &|_, _| {}),
             Ok(Delivered::Saved(allowed.clone()))
         );
         let written = std::fs::read(&allowed).expect("the saved file is readable");

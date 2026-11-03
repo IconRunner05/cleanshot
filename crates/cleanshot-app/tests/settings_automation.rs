@@ -91,7 +91,7 @@ fn main() {
             },
             Policy::default(),
             move |changed: Settings| {
-                let saved = write_settings(&file, &changed);
+                let saved = write_settings(&file, &changed, &|_, _| {});
                 *in_force
                     .lock()
                     .expect("no thread panics holding the settings") = changed;

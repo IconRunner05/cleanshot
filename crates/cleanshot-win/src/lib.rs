@@ -97,6 +97,10 @@ pub enum Error {
     MonitorTooSmall,
     #[error("another program has taken the hotkey")]
     HotkeyTaken(#[source] windows::core::Error),
+    /// The overlay's keys could not be taken back after a menu or dialog that had itself
+    /// failed with the source.
+    #[error("another program took one of the overlay's keys while a menu or dialog showed")]
+    KeysLostAfter(#[source] Box<Error>),
     #[error("Windows refused to copy the screen")]
     Capture(#[source] windows::core::Error),
     #[error("a monitor's capture has an impossible size")]

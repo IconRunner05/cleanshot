@@ -235,13 +235,11 @@ impl Shared {
             .ok_or(Error::NoCaptures)?;
         free_keys(first);
         let done = modal();
-        if let Err(retaken) = take_keys(first) {
-            if let Err(error) = &done {
-                eprintln!("the overlay's menu or dialog failed before its keys were lost: {error}");
-            }
-            return Err(retaken);
+        match (take_keys(first), done) {
+            (Ok(()), done) => done,
+            (Err(retaken), Ok(_)) => Err(retaken),
+            (Err(_), Err(failed)) => Err(Error::KeysLostAfter(Box::new(failed))),
         }
-        done
     }
 
     /// F-05: Cancel always closes; the others need a selection to act on.

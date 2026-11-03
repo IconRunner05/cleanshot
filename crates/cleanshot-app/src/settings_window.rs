@@ -9,7 +9,7 @@ use cleanshot_win::settings_file::{settings_path, write_settings};
 use cleanshot_win::startup::{remove_run_value, run_value, set_run_value};
 use cleanshot_win::tray::Request;
 
-use crate::{Session, region_hotkey};
+use crate::{Session, Warning, region_hotkey};
 
 /// F-55: opens the settings window, or brings it forward, or says in the tray why it could not.
 pub(super) fn open_settings(cx: &mut cleanshot_editor::App, session: &Rc<Session>) {
@@ -33,7 +33,7 @@ pub(super) fn open_settings(cx: &mut cleanshot_editor::App, session: &Rc<Session
         },
     );
     if let Err(error) = opened {
-        session.warn(&format!("The settings window did not open: {error}."));
+        session.warn(Warning::Failed("The settings window did not open", &error));
     }
 }
 
@@ -106,18 +106,19 @@ pub(super) fn apply_option(
                     ..current
                 },
                 Err(_unnamed) => {
-                    return session.warn(
-                        "That folder's name cannot be kept in the settings. Choose another folder.",
-                    );
+                    return session.warn(Warning::Said {
+                        kind: "folder not_kept",
+                        text: "That folder's name cannot be kept in the settings. Choose another folder.",
+                    });
                 }
             },
             Err(error) => {
-                return session.warn(&format!("The folder dialog could not open: {error}."));
+                return session.warn(Warning::Failed("The folder dialog could not open", &error));
             }
         },
     };
     if let Err(error) = apply_settings(session, changed).saved {
-        session.warn(&format!("The setting could not be saved: {error}."));
+        session.warn(Warning::Failed("The setting could not be saved", &error));
     }
 }
 
@@ -134,7 +135,10 @@ fn apply_settings(session: &Session, changed: Settings) -> Applied {
                 HotkeyAction::Region => {
                     let (hotkey, warning) = region_hotkey(hotkey);
                     if let Some(warning) = warning {
-                        session.warn(&warning);
+                        session.warn(Warning::Said {
+                            kind: "hotkey region",
+                            text: &warning,
+                        });
                     }
                     hotkey
                 }
@@ -165,7 +169,9 @@ fn apply_settings(session: &Session, changed: Settings) -> Applied {
     };
     let (kept, _) = in_force.outcome(&before, changed);
     let saved = match settings_path() {
-        Ok(path) => write_settings(&path, &kept),
+        Ok(path) => write_settings(&path, &kept, &|event, error| {
+            session.log_failure("settings", event, error);
+        }),
         Err(error) => {
             session.log_line("settings", |_| format!("not_saved {error}"));
             Err(SettingsSaveError::NoSettingsPath)

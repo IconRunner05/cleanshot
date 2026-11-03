@@ -11,6 +11,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::GUID;
 
+use crate::log::LogFailure;
+
 const RESERVED_NAMES: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
@@ -99,7 +101,7 @@ pub(crate) fn known_folder(id: GUID, flags: KNOWN_FOLDER_FLAG) -> windows::core:
 
 /// Writes `bytes` to `folder` under a name built from `template` and `extension`, never
 /// replacing an existing file (C-15), and returns the path written. The file appears whole
-/// or not at all (F-21).
+/// or not at all (F-21). A partial file that cannot be removed goes to `log`.
 ///
 /// # Errors
 ///
@@ -110,20 +112,16 @@ pub fn save(
     stamp: Stamp,
     extension: &str,
     bytes: &[u8],
+    log: LogFailure,
 ) -> Result<PathBuf, SaveError> {
-    write_new(folder, template, stamp, extension, bytes)
-}
-
-fn write_new(
-    folder: &Path,
-    template: &str,
-    stamp: Stamp,
-    extension: &str,
-    bytes: &[u8],
-) -> Result<PathBuf, SaveError> {
-    let partial = write_partial(folder, &offered_name(template, stamp, extension)?, bytes)?;
+    let partial = write_partial(
+        folder,
+        &offered_name(template, stamp, extension)?,
+        bytes,
+        log,
+    )?;
     let published = publish(folder, template, stamp, extension, &partial);
-    remove_partial(&partial);
+    remove_partial(&partial, log);
     published
 }
 
@@ -158,33 +156,36 @@ pub fn is_inside(path: &Path, folder: &Path) -> bool {
 /// F-22: writes `bytes` to `path`, replacing the file there, which the user has confirmed.
 /// The file appears whole or not at all: the bytes go to a partial file in the same folder,
 /// which `fs::rename` (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`) moves over `path`. No
-/// partial file is left behind, whether or not it works (C-21).
+/// partial file is left behind, whether or not it works (C-21); one that cannot be removed
+/// goes to `log`.
 ///
 /// # Errors
 ///
 /// [`SaveError::UnsafeName`] for a path with no folder or file name, or
 /// [`SaveError::Write`] if the file could not be written or moved into place.
-pub fn replace(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
+pub fn replace(path: &Path, bytes: &[u8], log: LogFailure) -> Result<(), SaveError> {
     let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(SaveError::UnsafeName(path.display().to_string()));
     };
-    let partial = write_partial(folder, &name.to_string_lossy(), bytes)?;
+    let partial = write_partial(folder, &name.to_string_lossy(), bytes, log)?;
     fs::rename(&partial, path).map_err(|error| {
-        remove_partial(&partial);
+        remove_partial(&partial, log);
         SaveError::Write(error)
     })
 }
 
-fn remove_partial(partial: &Path) {
+fn remove_partial(partial: &Path, log: LogFailure) {
     if let Err(error) = fs::remove_file(partial) {
-        eprintln!(
-            "the partial file {} could not be removed: {error}",
-            partial.display()
-        );
+        log("partial_file not_removed", &error);
     }
 }
 
-fn write_partial(folder: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, SaveError> {
+fn write_partial(
+    folder: &Path,
+    name: &str,
+    bytes: &[u8],
+    log: LogFailure,
+) -> Result<PathBuf, SaveError> {
     for attempt in 1..=MOST_COLLISIONS {
         let partial = folder.join(format!("{name}.partial{attempt}"));
         match OpenOptions::new()
@@ -197,7 +198,7 @@ fn write_partial(folder: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, Sav
                     Ok(()) => Ok(partial),
                     Err(error) => {
                         drop(file);
-                        remove_partial(&partial);
+                        remove_partial(&partial, log);
                         Err(SaveError::Write(error))
                     }
                 };
@@ -362,9 +363,10 @@ mod tests {
     #[test]
     fn f21_never_overwrites_existing_file() {
         let folder = empty_folder("collide");
-        let first = save(&folder, "Shot", STAMP, "png", b"first").expect("first save");
-        let second = save(&folder, "Shot", STAMP, "png", b"second").expect("second save");
-        let third = save(&folder, "Shot", STAMP, "png", b"third").expect("third save");
+        let first = save(&folder, "Shot", STAMP, "png", b"first", &|_, _| {}).expect("first save");
+        let second =
+            save(&folder, "Shot", STAMP, "png", b"second", &|_, _| {}).expect("second save");
+        let third = save(&folder, "Shot", STAMP, "png", b"third", &|_, _| {}).expect("third save");
         let names: Vec<_> = [&first, &second, &third]
             .map(|path| {
                 path.file_name()
@@ -388,7 +390,7 @@ mod tests {
         let folder = empty_folder("replace");
         let path = folder.join("Shot.png");
         fs::write(&path, b"old").expect("the original is written");
-        replace(&path, b"new").expect("the file is replaced");
+        replace(&path, b"new", &|_, _| {}).expect("the file is replaced");
         assert_eq!(fs::read(&path).expect("readable"), b"new");
         assert_eq!(
             fs::read_dir(&folder).expect("listable").count(),
@@ -410,7 +412,10 @@ mod tests {
             .share_mode(FILE_SHARE_READ)
             .open(&path)
             .expect("the original opens without delete sharing");
-        assert!(matches!(replace(&path, b"new"), Err(SaveError::Write(_))));
+        assert!(matches!(
+            replace(&path, b"new", &|_, _| {}),
+            Err(SaveError::Write(_))
+        ));
         drop(held);
         assert_eq!(fs::read(&path).expect("readable"), b"old");
         assert_eq!(
@@ -424,8 +429,9 @@ mod tests {
     #[test]
     fn f21_a_numbered_template_counts_up_instead_of_appending() {
         let folder = empty_folder("numbered");
-        save(&folder, "Shot {n}", STAMP, "png", b"a").expect("first save");
-        let second = save(&folder, "Shot {n}", STAMP, "png", b"b").expect("second save");
+        save(&folder, "Shot {n}", STAMP, "png", b"a", &|_, _| {}).expect("first save");
+        let second =
+            save(&folder, "Shot {n}", STAMP, "png", b"b", &|_, _| {}).expect("second save");
         assert_eq!(second.file_name().expect("a file"), "Shot 2.png");
         fs::remove_dir_all(&folder).expect("the test folder is removable");
     }

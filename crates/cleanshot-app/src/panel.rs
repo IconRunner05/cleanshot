@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 use cleanshot_core::{PanelOutcome, RgbaImage, Timer};
 use cleanshot_win::panel::{Countdown, CountdownEvent, Panel, PanelEvent};
 
-use crate::Session;
 use crate::capture::{Defer, Handoff, PassOn, Shot, capture};
 use crate::settings_window;
+use crate::{Session, Warning};
 
 /// F-11: shows the capture panel with the session's mode and timer (D-99), or brings it
 /// forward when it already shows. A capture or countdown under way leaves it shut.
@@ -50,7 +50,10 @@ pub(super) fn open(
                 );
             }
             PanelEvent::DrawFailed(error) => {
-                closing.warn(&format!("The capture panel could not be drawn: {error}."));
+                closing.warn(Warning::Failed(
+                    "The capture panel could not be drawn",
+                    &error,
+                ));
             }
             PanelEvent::Options(item) => {
                 let panel = closing.panel.borrow();
@@ -58,13 +61,13 @@ pub(super) fn open(
                 settings_window::apply_option(&closing, item, folder);
             }
             PanelEvent::OptionsFailed(error) => {
-                closing.warn(&format!("The Options menu could not open: {error}."));
+                closing.warn(Warning::Failed("The Options menu could not open", &error));
             }
         },
     );
     match shown {
         Ok(shown) => *session.panel.borrow_mut() = Some(shown),
-        Err(error) => session.warn(&format!("The capture panel could not open: {error}.")),
+        Err(error) => session.warn(Warning::Failed("The capture panel could not open", &error)),
     }
 }
 
@@ -76,7 +79,7 @@ fn wait(session: &Rc<Session>, shot: Shot, timer: Timer, defer: Rc<Defer>, pass_
     let ending = Rc::clone(session);
     let counted = Countdown::start(timer, move |event| {
         if let CountdownEvent::DrawFailed(error) = &event {
-            return ending.warn(&format!("The countdown could not be drawn: {error}."));
+            return ending.warn(Warning::Failed("The countdown could not be drawn", error));
         }
         let ended = Rc::clone(&ending);
         let defer_again = Rc::clone(&defer);
@@ -90,8 +93,9 @@ fn wait(session: &Rc<Session>, shot: Shot, timer: Timer, defer: Rc<Defer>, pass_
                 match event {
                     CountdownEvent::Elapsed => start(&ended, shot, &defer_again, &pass_on),
                     CountdownEvent::Cancelled | CountdownEvent::DrawFailed(_) => {}
-                    CountdownEvent::TimerFailed(error) => ended.warn(&format!(
-                        "The countdown stopped, so nothing was captured: {error}."
+                    CountdownEvent::TimerFailed(error) => ended.warn(Warning::Failed(
+                        "The countdown stopped, so nothing was captured",
+                        &error,
                     )),
                 }
             }),
@@ -99,7 +103,7 @@ fn wait(session: &Rc<Session>, shot: Shot, timer: Timer, defer: Rc<Defer>, pass_
     });
     match counted {
         Ok(counted) => *session.countdown.borrow_mut() = Some(counted),
-        Err(error) => session.warn(&format!("The countdown could not start: {error}.")),
+        Err(error) => session.warn(Warning::Failed("The countdown could not start", &error)),
     }
 }
 
