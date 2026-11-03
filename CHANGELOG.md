@@ -24,6 +24,8 @@ section exists.
 
 - Closing the settings window or the editor when no other Cleanshot window was open quit
   Cleanshot too. It now closes only that window, and Cleanshot stays in the tray (F-55).
+- On a laptop with two graphics chips, a capture no longer wakes the one that drives no
+  screen, which made the overlay take a second or more to appear (P-01).
 
 ## [1.0.0-rc.1] - 2026-11-03
 

@@ -146,6 +146,8 @@ pub struct Desktop {
 /// no device was made.
 #[derive(Debug)]
 pub struct AdapterReport {
+    /// Its place in DXGI's list, as two adapters can share a name.
+    pub index: u32,
     pub adapter: String,
     pub vendor: u32,
     pub device: Option<Duration>,
@@ -164,6 +166,8 @@ pub enum Copied {
 /// One output as DXGI described it, and the first frame its duplication gave, if any.
 #[derive(Debug)]
 pub struct OutputReport {
+    /// The [`AdapterReport::index`] of its adapter.
+    pub adapter_index: u32,
     pub adapter: String,
     pub vendor: u32,
     pub output: String,
@@ -400,7 +404,7 @@ fn duplicate_all() -> Duplicates {
     for adapter_index in 0.. {
         // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
         match unsafe { factory.EnumAdapters1(adapter_index) } {
-            Ok(adapter) => duplicate_adapter(&adapter, &mut duplicates),
+            Ok(adapter) => duplicate_adapter(&adapter, adapter_index, &mut duplicates),
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
             Err(error) => {
                 duplicates.results.push(Err(Error::Capture(error)));
@@ -411,12 +415,25 @@ fn duplicate_all() -> Duplicates {
     duplicates
 }
 
-fn duplicate_adapter(adapter: &IDXGIAdapter1, duplicates: &mut Duplicates) {
+fn duplicate_adapter(adapter: &IDXGIAdapter1, index: u32, duplicates: &mut Duplicates) {
     // SAFETY: a read of the adapter's own description.
     let (name, vendor) = match unsafe { adapter.GetDesc1() } {
         Ok(description) => (wide(&description.Description), description.VendorId),
         Err(error) => return duplicates.results.push(Err(Error::Capture(error))),
     };
+    let listed = list_outputs(adapter, index, &name, vendor, duplicates);
+    // P-01: a device wakes a sleeping GPU, so an adapter showing no screen gets none.
+    if !listed.iter().any(|(_, report)| report.attached) {
+        duplicates.adapters.push(AdapterReport {
+            index,
+            adapter: name,
+            vendor,
+            device: None,
+        });
+        return duplicates
+            .reports
+            .extend(listed.into_iter().map(|(_, report)| report));
+    }
     let mut device = None;
     let mut context = None;
     let making = Instant::now();
@@ -436,27 +453,64 @@ fn duplicate_adapter(adapter: &IDXGIAdapter1, duplicates: &mut Duplicates) {
         )
     };
     duplicates.adapters.push(AdapterReport {
-        adapter: name.clone(),
+        index,
+        adapter: name,
         vendor,
         device: created.is_ok().then(|| making.elapsed()),
     });
     if let Err(error) = created {
+        duplicates
+            .reports
+            .extend(listed.into_iter().map(|(_, report)| report));
         return duplicates.results.push(Err(Error::Capture(error)));
     }
     let device: ID3D11Device = device.expect("D3D11CreateDevice returned a device on success");
     let context: ID3D11DeviceContext =
         context.expect("D3D11CreateDevice returned a context on success");
+    for (output, report) in listed {
+        duplicate_listed(&device, &context, &output, report, duplicates);
+    }
+}
+
+/// Each output of `adapter` with its report, before any duplication; an output that fails to
+/// list or describe itself adds its error to `duplicates` instead.
+fn list_outputs(
+    adapter: &IDXGIAdapter1,
+    index: u32,
+    name: &str,
+    vendor: u32,
+    duplicates: &mut Duplicates,
+) -> Vec<(IDXGIOutput, OutputReport)> {
+    let mut listed = Vec::new();
     for output_index in 0.. {
         // SAFETY: an index past the last output returns DXGI_ERROR_NOT_FOUND.
-        match unsafe { adapter.EnumOutputs(output_index) } {
-            Ok(output) => duplicate_listed(&device, &context, &output, &name, vendor, duplicates),
+        let output = match unsafe { adapter.EnumOutputs(output_index) } {
+            Ok(output) => output,
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
             Err(error) => {
                 duplicates.results.push(Err(Error::Capture(error)));
                 break;
             }
+        };
+        // SAFETY: a read of the output's own description.
+        match unsafe { output.GetDesc() } {
+            Ok(description) => listed.push((
+                output,
+                OutputReport {
+                    adapter_index: index,
+                    adapter: name.to_owned(),
+                    vendor,
+                    output: wide(&description.DeviceName),
+                    attached: description.AttachedToDesktop.as_bool(),
+                    bounds: description.DesktopCoordinates,
+                    rotation: description.Rotation.0,
+                    frame: None,
+                },
+            )),
+            Err(error) => duplicates.results.push(Err(Error::Capture(error))),
         }
     }
+    listed
 }
 
 /// D-28: the duplicated frames when every output gave one, otherwise why GDI copies every
@@ -472,28 +526,12 @@ fn duplicate_listed(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
     output: &IDXGIOutput,
-    adapter: &str,
-    vendor: u32,
+    mut report: OutputReport,
     duplicates: &mut Duplicates,
 ) {
-    // SAFETY: a read of the output's own description.
-    let description = match unsafe { output.GetDesc() } {
-        Ok(description) => description,
-        Err(error) => return duplicates.results.push(Err(Error::Capture(error))),
-    };
-    let report = OutputReport {
-        adapter: adapter.to_owned(),
-        vendor,
-        output: wide(&description.DeviceName),
-        attached: description.AttachedToDesktop.as_bool(),
-        bounds: description.DesktopCoordinates,
-        rotation: description.Rotation.0,
-        frame: None,
-    };
     if !report.attached {
         return duplicates.reports.push(report);
     }
-    let mut report = report;
     let image = output
         .cast::<IDXGIOutput1>()
         .map_err(Error::Capture)
@@ -697,6 +735,7 @@ mod tests {
     use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_UNSUPPORTED};
 
     use super::*;
+    use crate::overlay::tests::screen;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
         RECT {
@@ -901,6 +940,7 @@ mod tests {
 
     #[test]
     fn d28_a_duplicated_desktop_reports_each_output_and_its_first_frame() {
+        let _screen = screen();
         let desktop = capture_desktop().expect("the desktop is copied");
         assert!(matches!(desktop.copied, Copied::Duplication), "{desktop:?}");
         assert_eq!(desktop.outputs.len(), desktop.monitors.len());
@@ -925,6 +965,33 @@ mod tests {
             "the duplicating adapter says how long its device took: {:?}",
             desktop.adapters
         );
+    }
+
+    #[test]
+    fn p01_only_an_adapter_showing_the_desktop_gets_a_device() {
+        let _screen = screen();
+        let desktop = capture_desktop().expect("the desktop is copied");
+        let showing: Vec<u32> = desktop
+            .outputs
+            .iter()
+            .filter(|output| output.attached)
+            .map(|output| output.adapter_index)
+            .collect();
+        assert!(
+            desktop
+                .adapters
+                .iter()
+                .any(|adapter| !showing.contains(&adapter.index)),
+            "this machine lists an adapter that shows nothing, such as the Basic Render Driver: {:?}",
+            desktop.adapters
+        );
+        for adapter in &desktop.adapters {
+            assert_eq!(
+                adapter.device.is_some(),
+                showing.contains(&adapter.index),
+                "{adapter:?}"
+            );
+        }
     }
 
     #[test]
