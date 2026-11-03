@@ -325,7 +325,7 @@ impl Overlay {
             windows: RefCell::new(Vec::with_capacity(captures.len())),
             toolbar_window: Cell::new(None),
             toolbar,
-            focus: Cell::new(ToolbarControl::Copy),
+            focus: Cell::new(toolbar::primary(Toolbar::Overlay)),
             mirror: Mirror::new(Toolbar::Overlay, saving_off),
             palette: Palette::current().map_err(Error::Window)?,
             options: Box::new(options),

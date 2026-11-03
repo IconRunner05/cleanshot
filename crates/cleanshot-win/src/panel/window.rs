@@ -305,7 +305,7 @@ fn surface(
     )?;
     let paint = Paint::new(&target.cast()?, None, scale, &Palette::current()?)?;
     let mirror = Mirror::new(Toolbar::Panel, None);
-    let focus = ToolbarControl::Capture;
+    let focus = toolbar::primary(Toolbar::Panel);
     mirror.show(Some((layout.clone(), focus)));
     mirror.show_choices(panel);
     Ok(Surface {

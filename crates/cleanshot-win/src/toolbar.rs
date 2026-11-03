@@ -70,7 +70,7 @@ fn button_width(control: ToolbarControl) -> f32 {
 }
 
 /// The control filled with the accent: the one Enter presses when the toolbar opens.
-fn primary(toolbar: Toolbar) -> ToolbarControl {
+pub(crate) fn primary(toolbar: Toolbar) -> ToolbarControl {
     match toolbar {
         Toolbar::Panel => ToolbarControl::Capture,
         Toolbar::Overlay => ToolbarControl::Copy,
