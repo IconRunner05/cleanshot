@@ -400,7 +400,7 @@ mod tests {
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, EnumThreadWindows, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
+        DispatchMessageW, EnumThreadWindows, IsWindow, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
         SendMessageW, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
     use windows::core::BOOL;
@@ -745,6 +745,43 @@ mod tests {
             UnregisterHotKey(None, PROBE).expect("the probe hotkey was just registered");
         }
         false
+    }
+
+    #[test]
+    fn f01_an_overlay_dropped_by_its_listener_is_freed_only_once_the_message_returns() {
+        struct Freed(Rc<Cell<bool>>);
+        impl Drop for Freed {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let _screen = screen();
+        let freed = Rc::new(Cell::new(false));
+        let guard = Freed(Rc::clone(&freed));
+        let slot: Rc<RefCell<Option<Overlay>>> = Rc::default();
+        let freed_during = Rc::new(Cell::new(None));
+        let (closing, watching, report) = (
+            Rc::clone(&slot),
+            Rc::clone(&freed),
+            Rc::clone(&freed_during),
+        );
+        let overlay = Overlay::show(&[monitor()], None, Vec::new(), None, move |_| {
+            let Freed(_) = &guard;
+            drop(closing.borrow_mut().take());
+            report.set(Some(watching.get()));
+        })
+        .expect("the overlay opens");
+        let window = overlay.windows[0];
+        *slot.borrow_mut() = Some(overlay);
+        press(window, Key::Choose(ToolbarControl::Cancel));
+        assert_eq!(
+            freed_during.get(),
+            Some(false),
+            "freed under the running listener"
+        );
+        assert!(freed.get(), "freed once the message returned");
+        // SAFETY: IsWindow only reads whether the handle still names a window.
+        assert!(!unsafe { IsWindow(Some(window)) }.as_bool());
     }
 
     #[test]

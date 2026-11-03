@@ -264,12 +264,12 @@ pub(super) fn open_window(
         hosts_toolbar,
     ) {
         Ok(surface) => {
-            // SAFETY: `window` exists, so WM_NCDESTROY will free this Box once.
+            // SAFETY: `window` exists, so WM_NCDESTROY will give up this count once.
             unsafe {
                 SetWindowLongPtrW(
                     window,
                     GWLP_USERDATA,
-                    Box::into_raw(Box::new(surface)) as isize,
+                    Rc::into_raw(Rc::new(surface)) as isize,
                 );
             }
             Ok(window)
@@ -460,24 +460,29 @@ unsafe extern "system" fn window_procedure(
 ) -> LRESULT {
     // SAFETY: GWLP_USERDATA is 0 until open_window stores the Surface pointer, and
     // WM_NCDESTROY clears it.
-    let surface = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *mut Surface;
+    let surface = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *const Surface;
     if surface.is_null() {
         // SAFETY: forwarding an unhandled message to the default procedure.
         return unsafe { DefWindowProcW(window, message, wparam, lparam) };
     }
-    match message {
-        WM_NCDESTROY => {
-            // SAFETY: this is the window's last message; the Box is freed once and the pointer
-            // cleared.
-            unsafe {
-                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-                drop(Box::from_raw(surface));
-                DefWindowProcW(window, message, wparam, lparam)
-            }
+    if message == WM_NCDESTROY {
+        // SAFETY: this is the window's last message; the window's count is given up once and
+        // the pointer cleared. A message still running below holds its own count.
+        unsafe {
+            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            drop(Rc::from_raw(surface));
+            return DefWindowProcW(window, message, wparam, lparam);
         }
+    }
+    // SAFETY: a non-null pointer carries the window's count until WM_NCDESTROY. This message
+    // takes a count of its own, so an Overlay dropped while it runs (from its listener, during
+    // an event) frees the Surface, and the Shared it holds, only once the message returns.
+    let surface = unsafe {
+        Rc::increment_strong_count(surface);
+        Rc::from_raw(surface)
+    };
+    match message {
         WM_PAINT => {
-            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-            let surface = unsafe { &*surface };
             let mut paint = PAINTSTRUCT::default();
             // SAFETY: BeginPaint and EndPaint bracket this window's paint, as WM_PAINT needs.
             unsafe { BeginPaint(window, &raw mut paint) };
@@ -490,20 +495,14 @@ unsafe extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
-            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-            let surface = unsafe { &*surface };
             surface.pressed(window, desktop_point(lparam, surface.origin));
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-            let surface = unsafe { &*surface };
             surface.moved(window, desktop_point(lparam, surface.origin));
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-            let surface = unsafe { &*surface };
             // SAFETY: releasing a capture this thread may not hold only returns an error.
             let _ = unsafe { ReleaseCapture() };
             surface.shared.gesture.set(None);
@@ -511,16 +510,12 @@ unsafe extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_HOTKEY => {
-            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-            let surface = unsafe { &*surface };
             if let Some(&(_, _, key)) = KEYS.get(wparam.0) {
                 surface.shared.press(key);
             }
             LRESULT(0)
         }
         WM_GETOBJECT => {
-            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-            let surface = unsafe { &*surface };
             let answered = surface
                 .toolbar
                 .as_ref()
@@ -533,8 +528,7 @@ unsafe extern "system" fn window_procedure(
             LRESULT(0)
         }
         automation::WAKE => {
-            // SAFETY: a non-null pointer is live until WM_NCDESTROY.
-            let shared = &unsafe { &*surface }.shared;
+            let shared = &surface.shared;
             for request in shared.mirror.requests() {
                 match request {
                     Request::Choose(control) => shared.choose(control),

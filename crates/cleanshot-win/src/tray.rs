@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use cleanshot_core::{Hotkey, HotkeyAction, Key, Modifiers};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -138,7 +139,7 @@ impl Tray {
             )
         }
         .map_err(Error::Window)?;
-        let state = Box::new(State {
+        let state = Rc::new(State {
             on_request: RefCell::new(Box::new(on_request)),
             // SAFETY: the argument is a 'static, NUL-terminated string.
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
@@ -150,8 +151,8 @@ impl Tray {
             icon: RefCell::new(None),
         });
         // SAFETY: `window` exists, so it will get WM_NCDESTROY, where the window procedure
-        // frees this Box once.
-        unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize) };
+        // gives up this count once.
+        unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, Rc::into_raw(state) as isize) };
 
         let hotkeys = hotkeys
             .iter()
@@ -264,8 +265,8 @@ impl Tray {
     }
 
     fn state(&self) -> &State {
-        // SAFETY: Tray::create stored the State before returning, and WM_NCDESTROY frees it
-        // only when Drop destroys the window, so it lives as long as `self`.
+        // SAFETY: Tray::create stored the State before returning, and WM_NCDESTROY gives up
+        // the window's count only when Drop destroys the window, so it lives as long as `self`.
         unsafe { &*(GetWindowLongPtrW(self.window, GWLP_USERDATA) as *const State) }
     }
 }
@@ -556,17 +557,24 @@ unsafe extern "system" fn window_procedure(
         return unsafe { DefWindowProcW(window, message, wparam, lparam) };
     }
     if message == WM_NCDESTROY {
-        // SAFETY: this is the window's last message; the Box is freed once and the pointer
-        // cleared, so nothing reads it again.
+        // SAFETY: this is the window's last message; the window's count is given up once and
+        // the pointer cleared, so nothing reads it again. A message still running below holds
+        // its own count.
         unsafe {
             SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            drop(Box::from_raw(state.cast_mut()));
+            drop(Rc::from_raw(state));
         }
         // SAFETY: forwarding to the default procedure.
         return unsafe { DefWindowProcW(window, message, wparam, lparam) };
     }
-    // SAFETY: a non-null pointer is live until WM_NCDESTROY, handled above.
-    let state = unsafe { &*state };
+    // SAFETY: a non-null pointer carries the window's count until WM_NCDESTROY, handled above.
+    // This message takes a count of its own, so a Tray dropped while it runs (from its
+    // on_request, on Exit) frees the State only once the message returns.
+    let held = unsafe {
+        Rc::increment_strong_count(state);
+        Rc::from_raw(state)
+    };
+    let state: &State = &held;
 
     let request = match message {
         WM_HOTKEY => wparam
@@ -609,7 +617,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_F24;
-    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, IsWindow, MSG, PM_REMOVE, PeekMessageW, SendMessageW,
+    };
 
     use super::*;
 
@@ -686,6 +696,45 @@ mod tests {
                 Request::Capture(HotkeyAction::Region)
             ]
         );
+    }
+
+    #[test]
+    fn f07_a_tray_dropped_by_its_exit_request_is_freed_only_once_the_message_returns() {
+        struct Freed(Rc<Cell<bool>>);
+        impl Drop for Freed {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let freed = Rc::new(Cell::new(false));
+        let guard = Freed(Rc::clone(&freed));
+        let slot: Rc<RefCell<Option<Tray>>> = Rc::default();
+        let freed_during = Rc::new(Cell::new(None));
+        let (closing, watching, report) = (
+            Rc::clone(&slot),
+            Rc::clone(&freed),
+            Rc::clone(&freed_during),
+        );
+        let tray = Tray::create(&[], move |request| {
+            let Freed(_) = &guard;
+            if request == Request::Exit {
+                drop(closing.borrow_mut().take());
+                report.set(Some(watching.get()));
+            }
+        })
+        .expect("the tray window is created");
+        let window = tray.window;
+        *slot.borrow_mut() = Some(tray);
+        // SAFETY: the window belongs to this thread, so this runs its procedure right here.
+        unsafe { SendMessageW(window, WM_CLOSE, None, None) };
+        assert_eq!(
+            freed_during.get(),
+            Some(false),
+            "freed under the running request"
+        );
+        assert!(freed.get(), "freed once the message returned");
+        // SAFETY: IsWindow only reads whether the handle still names a window.
+        assert!(!unsafe { IsWindow(Some(window)) }.as_bool());
     }
 
     #[test]
