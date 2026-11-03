@@ -2,7 +2,8 @@ use std::rc::Rc;
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWLP_USERDATA, GetWindowLongPtrW, SetWindowLongPtrW, WM_NCDESTROY,
+    GWLP_USERDATA, GetSystemMetrics, GetWindowLongPtrW, SM_CXDRAG, SM_CYDRAG, SetWindowLongPtrW,
+    WM_NCDESTROY,
 };
 
 /// Stores `state` on `window`, holding one count of it until the window's `WM_NCDESTROY`.
@@ -74,6 +75,14 @@ pub(crate) fn desktop_point(lparam: LPARAM, origin: POINT) -> POINT {
         x: client.x + origin.x,
         y: client.y + origin.y,
     }
+}
+
+/// Whether the pointer at `now` has moved far enough from `start` for Windows to count a
+/// press as the start of a drag.
+pub(crate) fn left_the_press(start: POINT, now: POINT) -> bool {
+    // SAFETY: GetSystemMetrics only reads a system setting.
+    let (width, height) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+    (now.x - start.x).abs() > width / 2 || (now.y - start.y).abs() > height / 2
 }
 
 #[cfg(test)]

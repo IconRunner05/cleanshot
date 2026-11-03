@@ -24,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, PCWSTR, w};
 
-use super::drag::{self, Dragged, Ended, left_the_press};
+use super::drag::{self, Dragged, Ended};
 use super::{Export, RADIUS, ThumbnailEvent};
 use crate::Error;
 use crate::capture::{screen_point, screen_rect, win32_rect};
@@ -33,7 +33,7 @@ use crate::render_target::{bgra, target_and_bitmap};
 use crate::struct_size;
 use crate::text::{Fonts, TextStyle};
 use crate::toolbar::Tips;
-use crate::window_state::{self, client_point};
+use crate::window_state::{self, client_point, left_the_press};
 
 const WINDOW_CLASS: PCWSTR = w!("CleanshotThumbnail");
 const SLIDE_TIMER: usize = 1;

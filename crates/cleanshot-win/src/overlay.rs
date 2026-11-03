@@ -83,6 +83,9 @@ struct Gesture {
     original: Option<RECT>,
     start: POINT,
     pointer: POINT,
+    /// D-122: a press that would draw and has not yet left Windows' drag distance of `start`;
+    /// a release now is a click that picks a window.
+    clicking: bool,
 }
 
 /// What every monitor's window shares: one selection on the virtual desktop.
@@ -126,7 +129,7 @@ impl Shared {
             Mode::Window {
                 hovered: Some(pick),
             } => Some((self.spoken(pick), self.frame(pick))),
-            Mode::Window { hovered: None } | Mode::Region => None,
+            Mode::Window { hovered: None } | Mode::Region { .. } => None,
         });
         for &window in self.windows.borrow().iter() {
             // SAFETY: invalidating this thread's own window; a failure only skips one repaint.
@@ -306,7 +309,7 @@ impl Overlay {
             listener: RefCell::new(Box::new(on_event)),
             selected: Cell::new(selected),
             gesture: Cell::new(None),
-            mode: Cell::new(Mode::Region),
+            mode: Cell::new(Mode::Region { hovered: None }),
             pickable,
             monitors: captures
                 .iter()

@@ -2,7 +2,7 @@ use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::{
     DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, E_INVALIDARG,
-    E_NOTIMPL, OLE_E_ADVISENOTSUPPORTED, POINT, S_OK,
+    E_NOTIMPL, OLE_E_ADVISENOTSUPPORTED, S_OK,
 };
 use windows::Win32::System::Com::{
     DATADIR_GET, DVASPECT_CONTENT, FORMATETC, IAdviseSink, IDataObject, IDataObject_Impl,
@@ -17,7 +17,6 @@ use windows::Win32::UI::Shell::{
     CFSTR_FILECONTENTS, CFSTR_FILEDESCRIPTORW, FD_FILESIZE, FD_PROGRESSUI, FILEDESCRIPTORW,
     FILEGROUPDESCRIPTORW, SHCreateMemStream, SHCreateStdEnumFmtEtc,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXDRAG, SM_CYDRAG};
 use windows::core::{BOOL, HRESULT, Ref, implement};
 
 use crate::clipboard::{global, png_format, registered};
@@ -36,14 +35,6 @@ pub struct Dragged {
 pub(super) enum Ended {
     Dropped,
     Cancelled,
-}
-
-/// Whether the pointer at `now` has moved far enough from `start` for Windows to count a
-/// press as the start of a drag.
-pub(super) fn left_the_press(start: POINT, now: POINT) -> bool {
-    // SAFETY: GetSystemMetrics only reads a system setting.
-    let (width, height) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
-    (now.x - start.x).abs() > width / 2 || (now.y - start.y).abs() > height / 2
 }
 
 /// Runs Windows' drag loop with `dragged` until it is dropped or cancelled. The thread must

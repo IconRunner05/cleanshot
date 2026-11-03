@@ -12,7 +12,7 @@ Start from a release candidate exe downloaded from its GitHub pre-release, with 
 
 ## Capture
 
-- [ ] F-01, F-02: Press PrtSc. Every monitor dims at once, with no flicker of the overlay in the capture. Drag a rectangle: it stays bright, with an accent border, 8 handles and a `W x H` pill in physical pixels.
+- [ ] F-01, F-02: Press PrtSc. Every monitor dims at once, with no flicker of the overlay in the capture. Drag a rectangle: it stays bright, with an accent border, 8 handles and a `W x H` pill in physical pixels. Press Esc and PrtSc again, move the pointer over a window: it lights up by its frame. Click without moving: that window becomes the selection, with handles. Press Esc and PrtSc, then press and move one pixel before releasing: it is still a click, and picks the window (D-122).
 - [ ] F-04: While dragging, a loupe shows the pixels under the pointer zoomed, with a grid, the coordinates and the colour's hex value. It goes when you let go.
 - [ ] F-03: Drag a handle, drag inside the selection, and press the arrow keys (Shift for 10 px). The selection resizes, moves and nudges.
 - [ ] F-05: A frosted toolbar sits near the bottom of the monitor (at the top if the selection is there), with Copy focused. Tab moves the focus; Esc closes the overlay and nothing is copied or saved.

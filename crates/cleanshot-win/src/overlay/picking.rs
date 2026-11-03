@@ -10,11 +10,10 @@ const WINDOW_TO_CAPTURE: &str = "Window to capture";
 /// Whether the pointer draws a region or picks a window (F-08).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Mode {
-    Region,
+    /// D-122: before any selection, the frame a click would pick is highlighted.
+    Region { hovered: Option<Pick> },
     /// The frame the pointer or Tab is on, highlighted until a press picks it.
-    Window {
-        hovered: Option<Pick>,
-    },
+    Window { hovered: Option<Pick> },
 }
 
 impl Shared {
@@ -22,7 +21,7 @@ impl Shared {
     pub(super) fn press_picking(&self, key: Key, hovered: Option<Pick>) {
         match key {
             Key::SwitchMode => {
-                self.mode.set(Mode::Region);
+                self.mode.set(Mode::Region { hovered: None });
                 self.changed();
             }
             Key::Focus(direction) => {
@@ -45,6 +44,18 @@ impl Shared {
     /// What a press at `at` picks in window mode: its window, or else its monitor (D-100).
     pub(super) fn picked_at(&self, at: POINT) -> Option<Pick> {
         picked(&self.pickable, &self.monitors, screen_point(at))
+    }
+
+    /// D-122: in region mode with nothing selected, highlights what a click at `at` picks.
+    pub(super) fn hover_region(&self, at: POINT) {
+        let hovered = match self.selected.get() {
+            Some(_) => None,
+            None => self.picked_at(at),
+        };
+        let now = Mode::Region { hovered };
+        if self.mode.replace(now) != now {
+            self.changed();
+        }
     }
 
     /// F-58: a move of the highlight is said aloud, since the overlay never takes the focus.
@@ -87,7 +98,7 @@ impl Shared {
     /// Selects what `pick` names as a region, which the toolbar then acts on as any selection.
     pub(super) fn pick(&self, pick: Option<Pick>) {
         if let Some(pick) = pick {
-            self.mode.set(Mode::Region);
+            self.mode.set(Mode::Region { hovered: None });
             self.select(Some(self.frame(pick)));
         }
     }
@@ -194,6 +205,58 @@ mod tests {
         press(window, Key::Press);
         drop(overlay);
         assert_eq!(*copied.borrow(), [frame]);
+    }
+
+    /// The selections copied after a press at `down`, moves through `path` and a release at
+    /// its last point, in region mode with one window at `frame`.
+    fn copied_after(frame: RECT, down: (isize, isize), path: &[(isize, isize)]) -> Vec<RECT> {
+        let (overlay, copied) = picking(vec![frame]);
+        let window = overlay.windows[0];
+        let at = |(x, y): (isize, isize)| Some(LPARAM(y * 0x1_0000 + x));
+        let up = path.last().copied().unwrap_or(down);
+        // SAFETY: each message is handled on this thread by a window created above, and none
+        // carries a pointer.
+        unsafe {
+            SendMessageW(window, WM_LBUTTONDOWN, None, at(down));
+            for &point in path {
+                SendMessageW(window, WM_MOUSEMOVE, None, at(point));
+            }
+            SendMessageW(window, WM_LBUTTONUP, None, at(up));
+        }
+        press(window, Key::Press);
+        drop(overlay);
+        copied.take()
+    }
+
+    const FRAME: RECT = RECT {
+        left: 10,
+        top: 8,
+        right: 40,
+        bottom: 30,
+    };
+
+    #[test]
+    fn d122_a_click_in_region_mode_picks_the_window_under_the_pointer() {
+        let _screen = screen();
+        assert_eq!(copied_after(FRAME, (20, 20), &[]), [FRAME]);
+    }
+
+    #[test]
+    fn d122_a_move_within_the_drag_distance_is_still_a_click() {
+        let _screen = screen();
+        assert_eq!(copied_after(FRAME, (20, 20), &[(21, 21)]), [FRAME]);
+    }
+
+    #[test]
+    fn d122_a_drag_past_the_drag_distance_selects_a_region() {
+        let _screen = screen();
+        let region = RECT {
+            left: 20,
+            top: 20,
+            right: 35,
+            bottom: 28,
+        };
+        assert_eq!(copied_after(FRAME, (20, 20), &[(35, 28)]), [region]);
     }
 
     #[test]

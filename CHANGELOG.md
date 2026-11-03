@@ -29,6 +29,8 @@ section exists.
 
 ### Changed
 
+- In the region overlay a click picks the window under the pointer, which lights up as the
+  pointer moves until something is selected; dragging still selects a region (F-08).
 - The property strip's Border and Shadow for the whole image now sit under the label
   Image frame, apart from a shape's own Shadow (F-44).
 - The editor opens sized round the capture at 100%, with the toolbar above it, instead of
