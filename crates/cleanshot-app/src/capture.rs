@@ -133,7 +133,8 @@ pub(super) fn capture(
         copied,
         adapters,
         outputs,
-    }) = copy_screen(session)
+        ..
+    }) = copy_screen(session, &stage)
     else {
         return;
     };
@@ -271,7 +272,7 @@ fn overlay_listener(
 
 /// Copies every monitor, with the pointer drawn in when Show pointer is on (F-12), so the
 /// overlay shows what is copied or saved. Warns and gives nothing if the copy fails.
-fn copy_screen(session: &Session) -> Option<Desktop> {
+fn copy_screen(session: &Session, stage: &dyn Fn(&str)) -> Option<Desktop> {
     let mut desktop = match capture_desktop() {
         Ok(desktop) => desktop,
         Err(error) => {
@@ -279,6 +280,8 @@ fn copy_screen(session: &Session) -> Option<Desktop> {
             return None;
         }
     };
+    stage("screen_duplicated");
+    session.log_line("capture", |_| format!("factory {:?}", desktop.factory));
     if session.settings.borrow().show_pointer
         && let Err(error) = draw_pointer(&mut desktop.monitors)
     {

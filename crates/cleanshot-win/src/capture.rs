@@ -162,18 +162,21 @@ fn monitor_scale(monitor: HMONITOR) -> windows::core::Result<f32> {
 pub struct Desktop {
     pub monitors: Vec<MonitorImage>,
     pub copied: Copied,
+    /// How long the DXGI factory took to make.
+    pub factory: Duration,
     pub adapters: Vec<AdapterReport>,
     pub outputs: Vec<OutputReport>,
 }
 
-/// One adapter as DXGI listed it, and how long its Direct3D device took to make; None when
-/// no device was made.
+/// One adapter as DXGI listed it, how long listing it and its outputs took, and how long its
+/// Direct3D device took to make; None when no device was made.
 #[derive(Debug)]
 pub struct AdapterReport {
     /// Its place in DXGI's list, as two adapters can share a name.
     pub index: u32,
     pub adapter: String,
     pub vendor: u32,
+    pub listing: Duration,
     pub device: Option<Duration>,
 }
 
@@ -228,6 +231,7 @@ pub struct FrameReport {
 /// The GDI copy's error when duplication was refused and GDI failed too.
 pub fn capture_desktop() -> Result<Desktop, Error> {
     let Duplicates {
+        factory,
         adapters,
         reports: outputs,
         results,
@@ -236,12 +240,14 @@ pub fn capture_desktop() -> Result<Desktop, Error> {
         Ok(monitors) => Ok(Desktop {
             monitors,
             copied: Copied::Duplication,
+            factory,
             adapters,
             outputs,
         }),
         Err(because) => Ok(Desktop {
             monitors: capture_all(Method::GdiBitBlt)?,
             copied: Copied::Gdi { because },
+            factory,
             adapters,
             outputs,
         }),
@@ -410,6 +416,7 @@ fn bitblt(bounds: RECT) -> Result<MonitorImage, Error> {
 /// factory, adapter or output that fails before it can be duplicated.
 #[derive(Default)]
 struct Duplicates {
+    factory: Duration,
     adapters: Vec<AdapterReport>,
     reports: Vec<OutputReport>,
     results: Vec<Result<MonitorImage, Error>>,
@@ -417,8 +424,11 @@ struct Duplicates {
 
 fn duplicate_all() -> Duplicates {
     let mut duplicates = Duplicates::default();
+    let making = Instant::now();
     // SAFETY: CreateDXGIFactory1 has no preconditions.
-    let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
+    let factory: Result<IDXGIFactory1, _> = unsafe { CreateDXGIFactory1() };
+    duplicates.factory = making.elapsed();
+    let factory = match factory {
         Ok(factory) => factory,
         Err(error) => {
             duplicates.results.push(Err(Error::Capture(error)));
@@ -426,9 +436,10 @@ fn duplicate_all() -> Duplicates {
         }
     };
     for adapter_index in 0.. {
+        let listing = Instant::now();
         // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
         match unsafe { factory.EnumAdapters1(adapter_index) } {
-            Ok(adapter) => duplicate_adapter(&adapter, adapter_index, &mut duplicates),
+            Ok(adapter) => duplicate_adapter(&adapter, adapter_index, listing, &mut duplicates),
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
             Err(error) => {
                 duplicates.results.push(Err(Error::Capture(error)));
@@ -439,19 +450,26 @@ fn duplicate_all() -> Duplicates {
     duplicates
 }
 
-fn duplicate_adapter(adapter: &IDXGIAdapter1, index: u32, duplicates: &mut Duplicates) {
+fn duplicate_adapter(
+    adapter: &IDXGIAdapter1,
+    index: u32,
+    listing: Instant,
+    duplicates: &mut Duplicates,
+) {
     // SAFETY: a read of the adapter's own description.
     let (name, vendor) = match unsafe { adapter.GetDesc1() } {
         Ok(description) => (wide(&description.Description), description.VendorId),
         Err(error) => return duplicates.results.push(Err(Error::Capture(error))),
     };
     let listed = list_outputs(adapter, index, &name, vendor, duplicates);
+    let listing = listing.elapsed();
     // P-01: a device wakes a sleeping GPU, so an adapter showing no screen gets none.
     if !listed.iter().any(|(_, report)| report.attached) {
         duplicates.adapters.push(AdapterReport {
             index,
             adapter: name,
             vendor,
+            listing,
             device: None,
         });
         return duplicates
@@ -480,6 +498,7 @@ fn duplicate_adapter(adapter: &IDXGIAdapter1, index: u32, duplicates: &mut Dupli
         index,
         adapter: name,
         vendor,
+        listing,
         device: created.is_ok().then(|| making.elapsed()),
     });
     if let Err(error) = created {
