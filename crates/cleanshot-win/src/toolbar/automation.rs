@@ -27,7 +27,7 @@ use windows::Win32::UI::Accessibility::{
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{BSTR, Error, HRESULT, IUnknown, Interface, Result, implement};
 
-use cleanshot_core::ToolbarControl;
+use cleanshot_core::{Toolbar, ToolbarControl};
 
 use super::{Layout, name};
 
@@ -185,7 +185,7 @@ fn none<T>() -> Result<T> {
 }
 
 fn position(control: ToolbarControl) -> usize {
-    cleanshot_core::Toolbar::Overlay
+    Toolbar::Overlay
         .controls()
         .iter()
         .position(|&each| each == control)
@@ -251,7 +251,7 @@ mod providers {
         NavigateDirection_FirstChild, NavigateDirection_LastChild, NavigateDirection_NextSibling,
         NavigateDirection_Parent, NavigateDirection_PreviousSibling, POINT, ProviderOptions,
         ProviderOptions_ServerSideProvider, Request, Result, SAFEARRAY, SafeArrayCreateVector,
-        SafeArrayPutElement, TOOLBAR_NAME, ToolbarControl, UIA_ButtonControlTypeId,
+        SafeArrayPutElement, TOOLBAR_NAME, Toolbar, ToolbarControl, UIA_ButtonControlTypeId,
         UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
         UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
         UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_TextControlTypeId,
@@ -305,8 +305,7 @@ mod providers {
         button(
             window,
             mirror,
-            cleanshot_core::Toolbar::Overlay.controls()
-                [cleanshot_core::Toolbar::Overlay.controls().len() - 1],
+            Toolbar::Overlay.controls()[Toolbar::Overlay.controls().len() - 1],
         )
     }
 
@@ -359,7 +358,7 @@ mod providers {
                 NavigateDirection_FirstChild => Ok(button(
                     self.window,
                     &self.mirror,
-                    cleanshot_core::Toolbar::Overlay.controls()[0],
+                    Toolbar::Overlay.controls()[0],
                 )),
                 NavigateDirection_LastChild => Ok(last_child(self.window, &self.mirror)),
                 _ => none(),
@@ -450,10 +449,10 @@ mod providers {
         fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
             let at = position(self.control);
             let sibling = |index: Option<usize>| match index
-                .and_then(|index| cleanshot_core::Toolbar::Overlay.controls().get(index))
+                .and_then(|index| Toolbar::Overlay.controls().get(index))
             {
                 Some(&control) => Ok(button(self.window, &self.mirror, control)),
-                None if index == Some(cleanshot_core::Toolbar::Overlay.controls().len())
+                None if index == Some(Toolbar::Overlay.controls().len())
                     && self.mirror.picking() =>
                 {
                     Ok(picking(self.window, &self.mirror))
@@ -535,8 +534,7 @@ mod providers {
                 NavigateDirection_PreviousSibling => Ok(button(
                     self.window,
                     &self.mirror,
-                    cleanshot_core::Toolbar::Overlay.controls()
-                        [cleanshot_core::Toolbar::Overlay.controls().len() - 1],
+                    Toolbar::Overlay.controls()[Toolbar::Overlay.controls().len() - 1],
                 )),
                 _ => none(),
             }
@@ -545,8 +543,7 @@ mod providers {
         fn GetRuntimeId(&self) -> Result<*mut SAFEARRAY> {
             let id = [
                 i32::try_from(UiaAppendRuntimeId).expect("UiaAppendRuntimeId is 3"),
-                i32::try_from(cleanshot_core::Toolbar::Overlay.controls().len())
-                    .expect("four controls"),
+                i32::try_from(Toolbar::Overlay.controls().len()).expect("four controls"),
             ];
             // SAFETY: a two-element vector of VT_I4, each element written in range; the
             // caller frees the array.
