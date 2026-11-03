@@ -41,6 +41,7 @@ use delivery::{deliver, save_as_start, save_to};
 use settings_window::open_settings;
 
 fn main() {
+    let entered = since_start().ok();
     cleanshot_win::load_dlls_from_system32_only().expect("the DLL search path is restricted");
     let instance = match Launch::claim().expect("the single-instance mutex opens") {
         Launch::First(instance) => instance,
@@ -67,10 +68,12 @@ fn main() {
     let (hotkeys, fallback) = tray_hotkeys(&settings);
     let log = Rc::new(RefCell::new(log));
     cleanshot_editor::run(move |cx| {
+        let gpui_started = since_start().ok();
         // D-76: prewarm on the overlay thread before the tray is ready.
         let unwarmed = Overlay::prewarm()
             .err()
             .map(|error| format!("The capture overlay could not be prepared: {error}."));
+        let prewarmed = since_start().ok();
         let app = cx.to_async();
         let session = Rc::new_cyclic(|session: &Weak<Session>| {
             let (session, closing_log) = (session.clone(), Rc::clone(&log));
@@ -88,6 +91,11 @@ fn main() {
             session,
             policy_problems,
             [warning, log_warning, fallback, unwarmed],
+            [
+                ("main_entered", entered),
+                ("gpui_started", gpui_started),
+                ("overlay_prewarmed", prewarmed),
+            ],
         );
     })
     .expect("the Windows platform starts");
@@ -150,6 +158,7 @@ fn started(
     session: Rc<Session>,
     policy_problems: Vec<PolicyProblem>,
     earlier: [Option<String>; 4],
+    marks: [(&str, Option<Duration>); 3],
 ) {
     for problem in policy_problems {
         session.log_line("policy", |_| format!("problem {problem}"));
@@ -169,6 +178,11 @@ fn started(
             kind: "start",
             text: &text,
         });
+    }
+    for (stage, at) in marks {
+        if let Some(at) = at {
+            session.perf(|_| format!("P-03 {stage}_ms={}", at.as_millis()));
+        }
     }
     session.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
     // P-04, P-05: the working set, and the CPU time spent with the tray idle, logged once.
