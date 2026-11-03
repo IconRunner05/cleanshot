@@ -409,6 +409,9 @@ impl Drop for HeldFrame {
     fn drop(&mut self) {
         // SAFETY: the duplication holds exactly this one acquired frame.
         let released = unsafe { self.duplication.ReleaseFrame() };
+        // Safe to drop: the guard releases each frame once, so the failure is not INVALID_CALL,
+        // and whatever else fails, the duplication is released with its capture, which is what
+        // ReleaseFrame asks of a lost one.
         debug_assert!(released.is_ok(), "an acquired frame releases");
     }
 }
