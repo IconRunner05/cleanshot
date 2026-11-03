@@ -2,6 +2,7 @@
 pub mod accessibility;
 pub mod capture;
 pub mod clipboard;
+pub mod crash;
 mod fade;
 #[cfg(feature = "field-test")]
 pub mod field_test;

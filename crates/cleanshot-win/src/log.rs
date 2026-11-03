@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use windows::Win32::Foundation::FILETIME;
@@ -32,9 +33,9 @@ pub enum LogError {
 
 /// C-23: the log `--log` turns on, `cleanshot.log` beside the settings file, emptied at each
 /// start. Each line is the milliseconds since this process started, then the event.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Log {
-    file: File,
+    file: Arc<File>,
 }
 
 impl Log {
@@ -49,7 +50,7 @@ impl Log {
             fs::create_dir_all(folder).map_err(LogError::Open)?;
         }
         Ok(Self {
-            file: File::create(path).map_err(LogError::Open)?,
+            file: Arc::new(File::create(path).map_err(LogError::Open)?),
         })
     }
 
@@ -61,7 +62,7 @@ impl Log {
     /// the line cannot be written.
     pub fn write(&self, event: &str) -> Result<(), LogError> {
         let at = since_start()?.as_millis();
-        writeln!(&self.file, "{at} {event}").map_err(LogError::Write)
+        writeln!(&*self.file, "{at} {event}").map_err(LogError::Write)
     }
 }
 

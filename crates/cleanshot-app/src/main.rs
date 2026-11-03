@@ -63,6 +63,7 @@ fn main() {
         Ok(log) => (log, None),
         Err(error) => (None, Some(format!("The log could not be opened: {error}."))),
     };
+    cleanshot_win::crash::install(log.clone());
     let (settings, warning) = load_settings();
     let (policy, policy_problems) = read_policy();
     let (hotkeys, fallback) = tray_hotkeys(&settings);

@@ -20,6 +20,8 @@ section exists.
   nothing to undo or redo, and otherwise names the step, as in "Undo arrow" (F-38).
 - A speech bubble's box can be resized by its sides and corners. The text wraps inside
   it at the same size, in the editor and in the copied or saved image alike (F-42).
+- If Cleanshot hits an internal error, it says so in a message before it closes, instead
+  of disappearing (D-120).
 - Hovering a button on the capture panel, the capture toolbar or the thumbnail shows its
   name and its shortcut, such as "Copy (Enter)", or why it is off (D-117).
 - Narrator says the shortcut of each button on the capture toolbar and the capture panel
