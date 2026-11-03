@@ -5,7 +5,7 @@ Crate licences are checked by `cargo deny`.
 
 | Asset | Version | Licence | Source | Used for |
 | --- | --- | --- | --- | --- |
-| Lucide icons: circle, crop, highlighter, minus, mouse-pointer-2, move-up-right, pencil, square, square-dashed, type | lucide-static 1.65.0 | ISC; circle, minus and square also MIT (Feather) | https://lucide.dev, files in `crates/cleanshot-editor/icons/`, stroke width set to 2.25 (1.5 px at 16 px, CHARTER 4) | Editor toolbar |
+| Lucide icons: circle, crop, focus, highlighter, list-ordered, message-square, minus, mouse-pointer-2, move-up-right, pencil, redo-2, square, square-dashed, type, undo-2 | lucide-static 1.65.0 | ISC; circle, minus and square also MIT (Feather) | https://lucide.dev, files in `crates/cleanshot-editor/icons/`, stroke width set to 2.25 (1.5 px at 16 px, CHARTER 4) | Editor toolbar |
 | Inter Semi Bold (`Inter-SemiBold.ttf`, from the release's `extras/ttf`) | Inter 4.1 (release zip SHA-256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e) | OFL-1.1 | https://github.com/rsms/inter, file in `crates/cleanshot-core/fonts/` | Text shapes, on screen and in exports (F-34) |
 
 ## Lucide licence

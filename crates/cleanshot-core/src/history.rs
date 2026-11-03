@@ -1,6 +1,7 @@
 use std::mem;
 
 use crate::document::{Document, Frame, RectF, Shape, ShapeEntry, ShapeId, Style};
+use crate::tool::Tool;
 
 /// One edit to a document (F-38: every edit is a command).
 #[derive(Clone, Debug, PartialEq)]
@@ -69,8 +70,17 @@ pub enum CommandError {
 pub struct History {
     document: Document,
     next_id: u64,
-    undo: Vec<Edit>,
-    redo: Vec<Edit>,
+    undo: Vec<(Change, Edit)>,
+    redo: Vec<(Change, Edit)>,
+}
+
+/// What an edit changed, so the editor can name the step to undo or redo (D-116): a shape,
+/// by the tool that draws it, the crop or the image frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    Shape(Tool),
+    Crop,
+    Frame,
 }
 
 /// A change that, applied, returns the change that reverts it.
@@ -116,29 +126,38 @@ impl History {
     /// [`CommandError::CropOutsideImage`] for a crop that is empty or reaches outside the image.
     /// The document is then unchanged.
     pub fn apply(&mut self, command: Command) -> Result<(), CommandError> {
-        let edit = match command {
+        let shape_of = |id| {
+            let index = position(&self.document, id)?;
+            Ok(Change::Shape(Tool::drawing(
+                &self.document.shapes[index].shape,
+            )))
+        };
+        let (change, edit) = match command {
             Command::Add { shape, style } => {
                 let id = ShapeId(self.next_id);
                 self.next_id += 1;
-                Edit::Insert {
-                    index: self.document.shapes.len(),
-                    entry: ShapeEntry { id, shape, style },
-                }
+                let change = Change::Shape(Tool::drawing(&shape));
+                let index = self.document.shapes.len();
+                let entry = ShapeEntry { id, shape, style };
+                (change, Edit::Insert { index, entry })
             }
-            Command::Remove(id) => Edit::Remove(id),
-            Command::Replace { id, shape, style } => Edit::Replace(ShapeEntry { id, shape, style }),
+            Command::Remove(id) => (shape_of(id)?, Edit::Remove(id)),
+            Command::Replace { id, shape, style } => (
+                Change::Shape(Tool::drawing(&shape)),
+                Edit::Replace(ShapeEntry { id, shape, style }),
+            ),
             Command::Restack { id, to } => {
-                position(&self.document, id)?;
+                let change = shape_of(id)?;
                 let Some(index) = to.index(&self.document, id) else {
                     return Ok(());
                 };
-                Edit::Restack { id, index }
+                (change, Edit::Restack { id, index })
             }
-            Command::SetCrop(crop) => Edit::SetCrop(crop),
-            Command::SetFrame(frame) => Edit::SetFrame(frame),
+            Command::SetCrop(crop) => (Change::Crop, Edit::SetCrop(crop)),
+            Command::SetFrame(frame) => (Change::Frame, Edit::SetFrame(frame)),
         };
         let inverse = edit.apply(&mut self.document)?;
-        self.undo.push(inverse);
+        self.undo.push((change, inverse));
         self.redo.clear();
         Ok(())
     }
@@ -161,17 +180,29 @@ impl History {
     pub fn redo(&mut self) -> Result<bool, CommandError> {
         replay(&mut self.redo, &mut self.undo, &mut self.document)
     }
+
+    /// What [`History::undo`] would change next, or `None` when there is nothing to undo.
+    #[must_use]
+    pub fn to_undo(&self) -> Option<Change> {
+        self.undo.last().map(|(change, _)| *change)
+    }
+
+    /// What [`History::redo`] would change next, or `None` when there is nothing to redo.
+    #[must_use]
+    pub fn to_redo(&self) -> Option<Change> {
+        self.redo.last().map(|(change, _)| *change)
+    }
 }
 
 fn replay(
-    from: &mut Vec<Edit>,
-    to: &mut Vec<Edit>,
+    from: &mut Vec<(Change, Edit)>,
+    to: &mut Vec<(Change, Edit)>,
     document: &mut Document,
 ) -> Result<bool, CommandError> {
-    let Some(edit) = from.pop() else {
+    let Some((change, edit)) = from.pop() else {
         return Ok(false);
     };
-    to.push(edit.apply(document)?);
+    to.push((change, edit.apply(document)?));
     Ok(true)
 }
 
@@ -376,6 +407,45 @@ mod tests {
         assert_eq!(offered(bottom), [Some(1), Some(2), None, None]);
         assert_eq!(offered(middle), [Some(2), Some(2), Some(0), Some(0)]);
         assert_eq!(offered(top), [None, None, Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn d116_the_next_step_to_undo_or_redo_names_what_it_changed() {
+        let mut history = history();
+        assert_eq!((history.to_undo(), history.to_redo()), (None, None));
+        let id = add(&mut history, rect(0.0));
+        let rectangle = Some(Change::Shape(Tool::Rectangle));
+        assert_eq!((history.to_undo(), history.to_redo()), (rectangle, None));
+        let crop = RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        history.apply(Command::SetCrop(Some(crop))).unwrap();
+        assert_eq!(history.to_undo(), Some(Change::Crop));
+        assert!(history.undo().unwrap());
+        assert_eq!(
+            (history.to_undo(), history.to_redo()),
+            (rectangle, Some(Change::Crop))
+        );
+        history
+            .apply(Command::SetFrame(Frame {
+                border: true,
+                shadow: false,
+            }))
+            .unwrap();
+        assert_eq!(
+            (history.to_undo(), history.to_redo()),
+            (Some(Change::Frame), None)
+        );
+        history.apply(Command::Remove(id)).unwrap();
+        assert!(history.undo().unwrap());
+        assert_eq!(
+            history.to_redo(),
+            rectangle,
+            "a removal names the shape it took away"
+        );
     }
 
     #[test]

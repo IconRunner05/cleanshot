@@ -27,7 +27,7 @@ use crate::strip::property_strip;
 use crate::text::{line_width, register_inter};
 use crate::text_box::TextBox;
 use crate::theme::Theme;
-use crate::toolbar::toolbar;
+use crate::toolbar::{Replay, toolbar};
 use crate::{Error, Log};
 use text_input::paint_text_box;
 
@@ -373,7 +373,7 @@ impl EditorView {
         }
     }
 
-    fn undo_or_redo(&mut self, change: fn(&mut History) -> Result<bool, CommandError>) {
+    fn undo_or_redo(&mut self, change: Replay) {
         match change(&mut self.history) {
             Ok(true) => self.refresh(),
             Ok(false) => {}
@@ -491,6 +491,15 @@ impl Render for EditorView {
                 cx.notify();
             });
         };
+        let replayer = view.clone();
+        let on_replay = move |replay: Replay, window: &mut Window, cx: &mut App| {
+            // Err only means the window closed, and with it the history to replay.
+            let _ = replayer.update(cx, |view, cx| {
+                view.close_text_box(window);
+                view.undo_or_redo(replay);
+                cx.notify();
+            });
+        };
         let strip = self.strip(&view, theme);
         let input = view.clone();
         let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {
@@ -555,7 +564,7 @@ impl Render for EditorView {
                     .flex_col()
                     .items_center()
                     .gap(px(8.0))
-                    .child(toolbar(self.tool, theme, on_pick))
+                    .child(toolbar(self.tool, &self.history, theme, on_pick, on_replay))
                     .child(strip),
             )
             .children(
