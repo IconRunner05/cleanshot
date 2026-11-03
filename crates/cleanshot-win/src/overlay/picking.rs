@@ -115,7 +115,7 @@ mod tests {
     use super::*;
     use crate::capture::screen_rect;
     use crate::overlay::tests::{monitor, press, screen};
-    use crate::overlay::{Frozen, Overlay};
+    use crate::overlay::{Opening, Overlay};
 
     /// An overlay on `monitor()` picking from `pickable`, and the selections it copies.
     fn picking(frames: Vec<RECT>) -> (Overlay, Rc<RefCell<Vec<RECT>>>) {
@@ -129,10 +129,10 @@ mod tests {
         let copied = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&copied);
         let overlay = Overlay::show(
-            Frozen {
-                captures: &[monitor()],
+            &[monitor()],
+            Opening {
                 pickable,
-                ..Frozen::default()
+                ..Opening::default()
             },
             Vec::new,
             move |event| {
@@ -259,10 +259,10 @@ mod tests {
             title: "Notes".to_owned(),
         }];
         let overlay = Overlay::show(
-            Frozen {
-                captures: &[desktop],
+            &[desktop],
+            Opening {
                 pickable,
-                ..Frozen::default()
+                ..Opening::default()
             },
             Vec::new,
             |_| {},

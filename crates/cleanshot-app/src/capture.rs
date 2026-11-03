@@ -10,7 +10,7 @@ use cleanshot_win::capture::{
     Desktop, MonitorImage, RECT, capture_desktop, draw_pointer, monitor_under_cursor,
     pickable_windows, region, screen_rect,
 };
-use cleanshot_win::overlay::{Frozen, Overlay, OverlayEvent};
+use cleanshot_win::overlay::{Opening, Overlay, OverlayEvent};
 
 use crate::delivery::deliver;
 use crate::{Session, Warning};
@@ -176,8 +176,8 @@ pub(super) fn capture(
     };
     let options = settings_window::options_for(session);
     let shown = Overlay::show(
-        Frozen {
-            captures: &captures,
+        &captures,
+        Opening {
             selected,
             pickable,
             saving_off,
