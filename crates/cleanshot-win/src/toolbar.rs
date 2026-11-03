@@ -325,8 +325,10 @@ impl Tips {
                 return Err(windows::core::Error::from_thread());
             }
         }
-        let hover = isize::try_from(hover_time()?.as_millis())
-            .expect("a hover time read as a u32 of ms fits an isize");
+        // A delay is the message's low word; -1 restores the default for one that does not fit.
+        let hover = u16::try_from(hover_time()?.as_millis()).map_or(-1, |delay| {
+            isize::try_from(delay).expect("a u16 fits the isize of a 32- or 64-bit target")
+        });
         tips.send(TTM_SETDELAYTIME, TTDT_INITIAL as usize, hover);
         Ok(tips)
     }
