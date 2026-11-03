@@ -17,6 +17,7 @@ use cleanshot_win::field_test::{
     d3d11_feature_level, drive_tray, exit_running_tray, monitors, open_and_cancel_overlays,
     rendering_params, windows_version,
 };
+use cleanshot_win::log::since_start;
 
 use budgets::Machine;
 
@@ -39,23 +40,16 @@ const START_SETTLE: Duration = Duration::from_secs(3);
 const AFTER_USE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long one copy may take to be logged (P-02) before it counts as failed.
 const COPY_TIMEOUT: Duration = Duration::from_secs(2);
+/// How many times `--start-split` starts this exe.
+const SPLIT_STARTS: u32 = 5;
 
 fn main() {
     let report_path = match std::env::args().collect::<Vec<_>>().as_slice() {
         [_, flag, path] if flag == "--report" => path.clone(),
         [_, flag, inputs @ ..] if flag == "--budgets" => std::process::exit(judge(inputs)),
-        [_, flag, log] if flag == "--exit" => {
-            if let Err(error) =
-                exit_running_tray(EXIT_TIMEOUT, || icon_removal_logged(Path::new(log)))
-            {
-                eprintln!("FAIL F-50: {error}");
-                std::process::exit(1);
-            }
-            println!(
-                "F-50: Cleanshot exited from its tray and logged that the shell removed its icon"
-            );
-            return;
-        }
+        [_, flag, log] if flag == "--exit" => std::process::exit(exit_from_tray(Path::new(log))),
+        [_, flag] if flag == "--entered" => std::process::exit(print_entered()),
+        [_, flag] if flag == "--start-split" => std::process::exit(start_split()),
         [_, flag, log] if flag == "--overlays" => {
             if let Err(error) = open_overlays_after_start(Path::new(log)) {
                 eprintln!("{error}");
@@ -110,6 +104,7 @@ fn main() {
         _ => {
             eprintln!(
                 "usage: cleanshot-fieldtest --report PATH | --overlays LOG | --exit LOG \
+                 | --start-split \
                  | --budgets [--runner] [--exe EXE] [--idle LOG] [--overlays LOG] \
                  [--copy P02_OUTPUT] [--bench REPORT] \
                  | --set-scale WIDTH HEIGHT STEP DPI | --copy-at-scale WIDTH HEIGHT DPI LOG \
@@ -192,6 +187,75 @@ fn judge(inputs: &[String]) -> i32 {
 
 /// The text at `path`, or no text when it cannot be read: each budget it holds then fails as
 /// missing, and the reason is printed.
+/// F-50: exits the running Cleanshot from its tray and checks its log says the shell removed
+/// its icon. Returns the exit code: 0 when it did, 1 otherwise.
+fn exit_from_tray(log: &Path) -> i32 {
+    if let Err(error) = exit_running_tray(EXIT_TIMEOUT, || icon_removal_logged(log)) {
+        eprintln!("FAIL F-50: {error}");
+        return 1;
+    }
+    println!("F-50: Cleanshot exited from its tray and logged that the shell removed its icon");
+    0
+}
+
+/// Prints how many microseconds this process took to reach `main`, for `--start-split`.
+fn print_entered() -> i32 {
+    match since_start() {
+        Ok(entered) => {
+            println!("{}", entered.as_micros());
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+/// P-03: starts this exe with `--entered` [`SPLIT_STARTS`] times and prints, for each, how
+/// long it took to reach `main` by its own clock and how long the start took to exit as seen
+/// from here, beside which cleanshot.exe's `main_entered_ms` says what is the exe and what is
+/// the machine. Returns the exit code: 0 when every start answered, 1 otherwise.
+fn start_split() -> i32 {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            eprintln!("P-03 split: this exe's path is not known: {error}");
+            return 1;
+        }
+    };
+    let mut failed = 0;
+    for start in 1..=SPLIT_STARTS {
+        let spawned = Instant::now();
+        let output = std::process::Command::new(&exe).arg("--entered").output();
+        let exited = spawned.elapsed();
+        let entered = match &output {
+            Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<u64>()
+                .map_err(|error| error.to_string()),
+            Ok(output) => Err(format!(
+                "{}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(error) => Err(error.to_string()),
+        };
+        match entered {
+            Ok(micros) => println!(
+                "P-03 split start {start}: fieldtest main_entered_ms={:.1} spawn_to_exit_ms={:.1}",
+                Duration::from_micros(micros).as_secs_f64() * 1000.0,
+                exited.as_secs_f64() * 1000.0
+            ),
+            Err(error) => {
+                failed += 1;
+                println!("P-03 split start {start}: failed: {error}");
+            }
+        }
+    }
+    i32::from(failed > 0)
+}
+
 fn log_text(path: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|error| {
         eprintln!("{path}: {error}");

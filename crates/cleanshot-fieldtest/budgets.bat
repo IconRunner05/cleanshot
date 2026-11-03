@@ -16,7 +16,7 @@ echo It opens and closes the capture overlay and an editor window, and it replac
 echo what is on the clipboard.
 pause
 
-del /q cleanshot.toml cleanshot.log idle.log p01.log overlays.txt p02.txt probe.md sac.txt results.txt 2>nul
+del /q cleanshot.toml cleanshot.log idle.log p01.log overlays.txt p02.txt probe.md sac.txt split.txt results.txt 2>nul
 
 echo Smart App Control state: > sac.txt
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState >> sac.txt 2>&1
@@ -54,14 +54,16 @@ p02.exe p02_ --nocapture > p02.txt 2>&1
 
 echo [4/4] Probe and editor bench: P-07, P-08, monitors and scaling
 cleanshot-fieldtest.exe --report probe.md >nul 2>&1
+rem P-03: another exe's time to main beside Cleanshot's says what is the exe and what is this PC.
+cleanshot-fieldtest.exe --start-split > split.txt 2>&1
 
 cleanshot-fieldtest.exe --budgets --exe cleanshot.exe --idle idle.log --overlays p01.log --copy p02.txt --bench probe.md > results.txt 2>&1
-for %%F in (sac.txt probe.md overlays.txt p02.txt idle.log p01.log) do (
+for %%F in (sac.txt probe.md split.txt overlays.txt p02.txt idle.log p01.log) do (
     >> results.txt echo.
     >> results.txt echo ===== %%F
     if exist %%F (type %%F >> results.txt) else (>> results.txt echo missing)
 )
-del /q cleanshot.toml cleanshot.log idle.log p01.log overlays.txt p02.txt probe.md sac.txt 2>nul
+del /q cleanshot.toml cleanshot.log idle.log p01.log overlays.txt p02.txt probe.md sac.txt split.txt 2>nul
 
 echo.
 echo Done. Attach this file to a GitHub issue:

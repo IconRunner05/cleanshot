@@ -236,6 +236,7 @@ jobs:
         run: |
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --report probe.md
           cat probe.md >> "$GITHUB_STEP_SUMMARY"
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --start-split
 
       - name: Release exe meets P-01 over the probe's hotkeys, judged from its own --log lines (D-62)
         shell: bash
