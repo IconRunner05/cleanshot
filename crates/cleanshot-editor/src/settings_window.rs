@@ -224,8 +224,12 @@ impl SettingsView {
                     Err(SettingsNotice::NoFolderDialog)
                 }
             };
-            // Err only means the window closed while the dialog was open, with nothing to change.
-            let _ = view.update(cx, |view, cx| view.folder_chosen(chosen, cx));
+            if view
+                .update(cx, |view, cx| view.folder_chosen(chosen, cx))
+                .is_err()
+            {
+                log("folder_dialog window_closed");
+            }
         }));
     }
 

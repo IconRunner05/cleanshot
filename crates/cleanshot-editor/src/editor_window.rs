@@ -355,11 +355,16 @@ impl EditorView {
             }
         };
         let log = Rc::clone(&self.log);
+        let closed = Rc::clone(&self.log);
         let dialog = ask_save_path(cx, &folder, &name, move |event| log(event));
         self.save_as = Some(cx.spawn_in(window, async move |view, cx| {
             let chosen = dialog.await;
-            // Err only means the window closed while the dialog was open, with nothing to save.
-            let _ = view.update(cx, |view, cx| view.save_to(chosen, cx));
+            if view
+                .update(cx, |view, cx| view.save_to(chosen, cx))
+                .is_err()
+            {
+                closed("save_as window_closed");
+            }
         }));
     }
 
