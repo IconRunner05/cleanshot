@@ -133,6 +133,16 @@ impl RedactionPreviews {
     clippy::cast_precision_loss,
     reason = "image sides are far below 2^24, where f32 stops being exact"
 )]
+fn placed(patch: &Patch) -> (RectF, Arc<RenderImage>) {
+    let bounds = RectF {
+        x: patch.left as f32,
+        y: patch.top as f32,
+        width: patch.pixels.width() as f32,
+        height: patch.pixels.height() as f32,
+    };
+    (bounds, render_image(&patch.pixels))
+}
+
 fn redaction_preview(
     image: &RgbaImage,
     rect: RectF,
@@ -140,15 +150,10 @@ fn redaction_preview(
     log: &dyn Fn(&'static str),
 ) -> RedactionPreview {
     match redacted(image, rect, mode) {
-        Ok(Some(Patch { left, top, pixels })) => RedactionPreview::Pixels {
-            bounds: RectF {
-                x: left as f32,
-                y: top as f32,
-                width: pixels.width() as f32,
-                height: pixels.height() as f32,
-            },
-            image: render_image(&pixels),
-        },
+        Ok(Some(patch)) => {
+            let (bounds, image) = placed(&patch);
+            RedactionPreview::Pixels { bounds, image }
+        }
         Ok(None) => RedactionPreview::CoversNoPixel,
         Err(_) => {
             log("redaction_preview not_made");
@@ -220,10 +225,6 @@ impl ShadowPreviews {
     }
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "image sides are far below 2^24, where f32 stops being exact"
-)]
 fn shadow_image(
     entry: &ShapeEntry,
     width: u32,
@@ -231,15 +232,7 @@ fn shadow_image(
     log: &dyn Fn(&'static str),
 ) -> Option<(RectF, Arc<RenderImage>)> {
     match shape_shadow(entry, width, height) {
-        Ok(Some(Patch { left, top, pixels })) => {
-            let bounds = RectF {
-                x: left as f32,
-                y: top as f32,
-                width: pixels.width() as f32,
-                height: pixels.height() as f32,
-            };
-            Some((bounds, render_image(&pixels)))
-        }
+        Ok(Some(patch)) => Some(placed(&patch)),
         Ok(None) => None,
         Err(_) => {
             log("shadow_preview not_made");
