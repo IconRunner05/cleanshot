@@ -235,7 +235,12 @@ impl Shared {
             .ok_or(Error::NoCaptures)?;
         free_keys(first);
         let done = modal();
-        take_keys(first)?;
+        if let Err(retaken) = take_keys(first) {
+            if let Err(error) = &done {
+                eprintln!("the overlay's menu or dialog failed before its keys were lost: {error}");
+            }
+            return Err(retaken);
+        }
         done
     }
 
