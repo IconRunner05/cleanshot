@@ -1,20 +1,25 @@
-use cleanshot_core::{Color, RectF, RgbaImage};
+use cleanshot_core::{Color, HighlightStrength, RectF, RgbaImage};
 
 use crate::flatten::{Covered, highlight};
 use crate::{Error, Patch};
 
-/// The pixels a highlight of `rect` in `color` leaves of `image`, exactly as an export draws
+/// The pixels a highlight of `rect` in `color` at `strength` leaves of `image`, exactly as an export draws
 /// them where no shape is under it (F-35, D-125); `None` if `rect` covers no pixel.
 ///
 /// # Errors
 ///
 /// [`Error::TooLarge`] if the covered area exceeds the renderer's size limit.
-pub fn highlighted(image: &RgbaImage, rect: RectF, color: Color) -> Result<Option<Patch>, Error> {
+pub fn highlighted(
+    image: &RgbaImage,
+    rect: RectF,
+    color: Color,
+    strength: HighlightStrength,
+) -> Result<Option<Patch>, Error> {
     let Some(mut covered) = Covered::of(image, rect)? else {
         return Ok(None);
     };
     let local = covered.local(rect);
-    highlight(&mut covered.pixmap, local, color);
+    highlight(&mut covered.pixmap, local, color, strength);
     covered.into_patch().map(Some)
 }
 
@@ -52,12 +57,17 @@ mod tests {
         let mut history = History::new(Document::new(Arc::new(image.clone())));
         history
             .apply(Command::Add {
-                shape: Shape::Highlight(rect),
+                shape: Shape::Highlight {
+                    rect,
+                    strength: HighlightStrength::Strong,
+                },
                 style: Style::new(yellow, 0.0),
             })
             .unwrap();
         let export = flatten(history.document(), &TextMasks::default()).unwrap();
-        let preview = highlighted(&image, rect, yellow).unwrap().unwrap();
+        let preview = highlighted(&image, rect, yellow, HighlightStrength::Strong)
+            .unwrap()
+            .unwrap();
         let (left, top) = (preview.left, preview.top);
         assert_eq!(
             (left, top, preview.pixels.width(), preview.pixels.height()),
@@ -74,5 +84,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn d123_each_highlight_strength_tints_at_its_own_opacity() {
+        let white = RgbaImage::new(8, 8, vec![255; 8 * 8 * 4]).unwrap();
+        let rect = RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 8.0,
+        };
+        let yellow = Color {
+            r: 255,
+            g: 230,
+            b: 0,
+            a: 255,
+        };
+        let blue_left = |strength| {
+            let patch = highlighted(&white, rect, yellow, strength)
+                .unwrap()
+                .unwrap();
+            patch.pixels.pixels()[2]
+        };
+        let left: Vec<_> = [
+            HighlightStrength::Light,
+            HighlightStrength::Medium,
+            HighlightStrength::Strong,
+        ]
+        .map(blue_left)
+        .into();
+        assert_eq!(left, [166, 102, 0]);
     }
 }

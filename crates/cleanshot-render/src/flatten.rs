@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use cleanshot_core::{
-    Color, Document, Fill, GlyphMask, PointF, RectF, RgbaImage, SPOTLIGHT_DIM, Shape, ShapeEntry,
-    ShapeId, TextMasks, arrow_head, dimmed_areas, text_on,
+    Color, Document, Fill, GlyphMask, HighlightStrength, PointF, RectF, RgbaImage, SPOTLIGHT_DIM,
+    Shape, ShapeEntry, ShapeId, TextMasks, arrow_head, dimmed_areas, text_on,
 };
 use tiny_skia::{
     BlendMode, ColorU8, FillRule, IntRect, IntSize, LineCap, LineJoin, Paint, Path, PathBuilder,
@@ -267,7 +267,9 @@ pub(crate) fn draw(
             skia_rect(*rect).and_then(PathBuilder::from_oval),
             &paint,
         ),
-        Shape::Highlight(rect) => highlight(pixmap, *rect, entry.style.color),
+        Shape::Highlight { rect, strength } => {
+            highlight(pixmap, *rect, entry.style.color, *strength);
+        }
         Shape::Redact {
             rect,
             mode,
@@ -413,8 +415,18 @@ pub(crate) fn source_over(
     .expect("source over two premultiplied colours is premultiplied")
 }
 
-/// F-35: the highlighter darkens what is under it, like a marker on paper.
-pub(crate) fn highlight(pixmap: &mut Pixmap, rect: RectF, color: Color) {
+/// F-35: the highlighter darkens what is under it, like a marker on paper, at `strength`'s
+/// opacity (D-123).
+pub(crate) fn highlight(
+    pixmap: &mut Pixmap,
+    rect: RectF,
+    color: Color,
+    strength: HighlightStrength,
+) {
+    let color = Color {
+        a: strength.alpha(),
+        ..color
+    };
     fill(
         pixmap,
         skia_rect(rect).map(PathBuilder::from_rect),
@@ -520,7 +532,10 @@ mod tests {
         let mut history = history(uniform([200, 100, 50, 255]));
         history
             .apply(Command::Add {
-                shape: Shape::Highlight(whole_image()),
+                shape: Shape::Highlight {
+                    rect: whole_image(),
+                    strength: HighlightStrength::Strong,
+                },
                 style: Style::new(
                     Color {
                         r: 255,

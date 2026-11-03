@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, GlyphMask, History, Look, PointF, Property, RectF, RedactMode,
-    RedactStrength, RgbaImage, Shape, Style, TextBlock, TextMasks, Tool,
+    Color, Command, Document, Fill, GlyphMask, HighlightStrength, History, Look, PointF, Property,
+    RectF, RedactMode, RedactStrength, RgbaImage, Shape, Style, TextBlock, TextMasks, Tool,
 };
 use cleanshot_render::Format;
 
@@ -240,7 +240,14 @@ fn highlight_over_shapes() -> Vec<Command> {
             WHITE,
             6.0,
         ),
-        add(Shape::Highlight(rect(16.0, 20.0, 64.0, 24.0)), YELLOW, 1.0),
+        add(
+            Shape::Highlight {
+                rect: rect(16.0, 20.0, 64.0, 24.0),
+                strength: HighlightStrength::Strong,
+            },
+            YELLOW,
+            1.0,
+        ),
     ]
 }
 
@@ -419,7 +426,10 @@ fn shadows() -> Vec<Command> {
             Fill::Solid,
         ),
         shadowed(
-            Shape::Highlight(rect(8.0, 48.0, 32.0, 10.0)),
+            Shape::Highlight {
+                rect: rect(8.0, 48.0, 32.0, 10.0),
+                strength: HighlightStrength::Strong,
+            },
             YELLOW,
             1.0,
             Fill::Hollow,

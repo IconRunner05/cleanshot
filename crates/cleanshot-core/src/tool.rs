@@ -1,4 +1,4 @@
-use crate::document::{Fill, PointF, RedactMode, RedactStrength, Shape};
+use crate::document::{Fill, HighlightStrength, PointF, RedactMode, RedactStrength, Shape};
 use crate::drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 use crate::history::Command;
 use crate::look::Look;
@@ -34,7 +34,7 @@ impl Tool {
             Shape::Ellipse { .. } => Self::Ellipse,
             Shape::Pen(_) => Self::Pen,
             Shape::Text(_) => Self::Text,
-            Shape::Highlight(_) => Self::Highlighter,
+            Shape::Highlight { .. } => Self::Highlighter,
             Shape::Redact { .. } => Self::Redact,
             Shape::Spotlight(_) => Self::Spotlight,
             Shape::Step(_) => Self::Step,
@@ -105,7 +105,12 @@ impl Tool {
                     fill: Fill::Hollow,
                 })
             }),
-            Self::Highlighter => has_area.then(|| add(Shape::Highlight(area))),
+            Self::Highlighter => has_area.then(|| {
+                add(Shape::Highlight {
+                    rect: area,
+                    strength: HighlightStrength::Strong,
+                })
+            }),
             Self::Redact => has_area.then(|| {
                 add(Shape::Redact {
                     rect: area,
@@ -216,7 +221,10 @@ mod tests {
         };
         assert_eq!(
             added(Tool::Highlighter, &path, false),
-            Shape::Highlight(area)
+            Shape::Highlight {
+                rect: area,
+                strength: HighlightStrength::Strong
+            }
         );
         assert_eq!(
             added(Tool::Redact, &path, false),

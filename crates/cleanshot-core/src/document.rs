@@ -101,7 +101,7 @@ impl Document {
                     | Shape::Rect { .. }
                     | Shape::Ellipse { .. }
                     | Shape::Pen(_)
-                    | Shape::Highlight(_)
+                    | Shape::Highlight { .. }
                     | Shape::Redact { .. }
                     | Shape::Spotlight(_) => return None,
                 };
@@ -248,8 +248,11 @@ pub enum Shape {
     },
     Pen(Vec<PointF>),
     Text(TextBlock),
-    /// Multiplies the image under it by the style colour.
-    Highlight(RectF),
+    /// Multiplies the image under it by the style colour, at its strength (D-123).
+    Highlight {
+        rect: RectF,
+        strength: HighlightStrength,
+    },
     /// Replaces the pixels under it on export (C-22).
     Redact {
         rect: RectF,
@@ -274,6 +277,26 @@ pub enum Fill {
 pub enum RedactMode {
     Pixelate,
     Blur,
+}
+
+/// How strongly a highlight tints what is under it (D-123).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HighlightStrength {
+    Light,
+    Medium,
+    Strong,
+}
+
+impl HighlightStrength {
+    /// The opacity the highlight multiplies at, out of 255.
+    #[must_use]
+    pub const fn alpha(self) -> u8 {
+        match self {
+            Self::Light => 89,
+            Self::Medium => 153,
+            Self::Strong => 255,
+        }
+    }
 }
 
 /// How coarse a redaction is (D-123). The finest is the strength C-22 was set at, so the
@@ -593,7 +616,10 @@ mod tests {
 
     #[test]
     fn f43_only_spotlights_dim() {
-        let highlight = Shape::Highlight(rect(5.0, 4.0, 10.0, 8.0));
+        let highlight = Shape::Highlight {
+            rect: rect(5.0, 4.0, 10.0, 8.0),
+            strength: HighlightStrength::Strong,
+        };
         assert_eq!(dimmed(&[highlight]), Vec::new());
     }
 }

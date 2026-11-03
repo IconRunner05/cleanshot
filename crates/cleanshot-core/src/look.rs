@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::document::{Color, Fill, RedactMode, RedactStrength, Shape, ShapeEntry, ShapeId, Style};
+use crate::document::{
+    Color, Fill, HighlightStrength, RedactMode, RedactStrength, Shape, ShapeEntry, ShapeId, Style,
+};
 use crate::history::Command;
 use crate::text::{DEFAULT_TEXT_SIZE, TextBlock};
 use crate::text_edit::{TextFrame, TextOrigin};
@@ -27,6 +29,7 @@ pub struct Look {
     fill: Fill,
     redact: RedactMode,
     redact_strength: RedactStrength,
+    highlight_strength: HighlightStrength,
     text_size: f32,
     shadow: bool,
 }
@@ -55,6 +58,7 @@ impl Look {
             fill: Fill::Hollow,
             redact: RedactMode::Pixelate,
             redact_strength: RedactStrength::Fine,
+            highlight_strength: HighlightStrength::Strong,
             text_size: DEFAULT_TEXT_SIZE,
             shadow: false,
         }
@@ -95,6 +99,12 @@ impl Look {
         self.redact_strength
     }
 
+    /// How strongly a highlight tints what is under it (D-123).
+    #[must_use]
+    pub fn highlight_strength(&self) -> HighlightStrength {
+        self.highlight_strength
+    }
+
     /// `shape` drawn in this look: in its style, and with its fill, redaction, text size or
     /// shadow where `shape` has one. New shapes and restyled ones both take their look through
     /// here, and nothing else gives a shape a shadow (D-114).
@@ -117,6 +127,10 @@ impl Look {
                 mode: self.redact,
                 strength: self.redact_strength,
             },
+            Shape::Highlight { rect, .. } => Shape::Highlight {
+                rect,
+                strength: self.highlight_strength,
+            },
             Shape::Text(block) => Shape::Text(self.dress_text(&block)),
             Shape::Step(step) => Shape::Step(step.with_size(self.text_size)),
             Shape::Bubble(bubble) => {
@@ -125,7 +139,6 @@ impl Look {
             shape @ (Shape::Arrow { .. }
             | Shape::Line { .. }
             | Shape::Pen(_)
-            | Shape::Highlight(_)
             | Shape::Spotlight(_)) => shape,
         };
         (shape, style)
@@ -168,6 +181,10 @@ impl Look {
                 redact_strength,
                 ..self
             },
+            Property::HighlightStrength(highlight_strength) => Self {
+                highlight_strength,
+                ..self
+            },
             Property::TextSize(size) => Self {
                 text_size: positive(size)?,
                 ..self
@@ -194,6 +211,10 @@ impl Look {
                 redact_strength: *strength,
                 ..look
             },
+            Shape::Highlight { strength, .. } => Self {
+                highlight_strength: *strength,
+                ..look
+            },
             Shape::Text(block) => Self {
                 text_size: block.size(),
                 ..look
@@ -206,11 +227,7 @@ impl Look {
                 text_size: bubble.block().size(),
                 ..look
             },
-            Shape::Arrow { .. }
-            | Shape::Line { .. }
-            | Shape::Pen(_)
-            | Shape::Highlight(_)
-            | Shape::Spotlight(_) => look,
+            Shape::Arrow { .. } | Shape::Line { .. } | Shape::Pen(_) | Shape::Spotlight(_) => look,
         }
     }
 }
@@ -223,6 +240,7 @@ pub enum Property {
     Fill(Fill),
     Redact(RedactMode),
     RedactStrength(RedactStrength),
+    HighlightStrength(HighlightStrength),
     TextSize(f32),
     Shadow(bool),
 }
@@ -235,6 +253,7 @@ pub enum Setting {
     Fill,
     Redact,
     RedactStrength,
+    HighlightStrength,
     TextSize,
     /// On or off, shown as one check box, not a choice of values (D-114).
     Shadow,
@@ -270,7 +289,7 @@ impl Setting {
             Tool::Rectangle | Tool::Ellipse => {
                 &[Self::Color, Self::StrokeWidth, Self::Fill, Self::Shadow]
             }
-            Tool::Highlighter => &[Self::Color],
+            Tool::Highlighter => &[Self::Color, Self::HighlightStrength],
             Tool::Redact => &[Self::Redact, Self::RedactStrength],
             Tool::Text | Tool::Step | Tool::Bubble => &[Self::Color, Self::TextSize, Self::Shadow],
             Tool::Select | Tool::Crop | Tool::Spotlight => &[],
@@ -285,7 +304,7 @@ impl Setting {
             Self::StrokeWidth => "Stroke width",
             Self::Fill => "Fill",
             Self::Redact => "Redaction",
-            Self::RedactStrength => "Strength",
+            Self::RedactStrength | Self::HighlightStrength => "Strength",
             Self::TextSize => "Text size",
             Self::Shadow => "Shadow",
         }
@@ -301,6 +320,7 @@ impl Setting {
             Self::Fill => &FILL_CHOICES,
             Self::Redact => &REDACT_CHOICES,
             Self::RedactStrength => &REDACT_STRENGTH_CHOICES,
+            Self::HighlightStrength => &HIGHLIGHT_STRENGTH_CHOICES,
             Self::TextSize => &TEXT_SIZE_CHOICES,
             Self::Shadow => &SHADOW_CHOICES,
         }
@@ -352,6 +372,21 @@ const REDACT_STRENGTH_CHOICES: [(Property, &str); 4] = [
     (
         Property::RedactStrength(RedactStrength::Coarsest),
         "48 pixels",
+    ),
+];
+
+const HIGHLIGHT_STRENGTH_CHOICES: [(Property, &str); 3] = [
+    (
+        Property::HighlightStrength(HighlightStrength::Light),
+        "Light",
+    ),
+    (
+        Property::HighlightStrength(HighlightStrength::Medium),
+        "Medium",
+    ),
+    (
+        Property::HighlightStrength(HighlightStrength::Strong),
+        "Strong",
     ),
 ];
 
@@ -621,6 +656,40 @@ mod tests {
         assert!(
             looks.look(Tool::Redact).has(coarse),
             "the next redaction is as coarse"
+        );
+    }
+
+    #[test]
+    fn d123_a_drawn_highlight_takes_a_new_strength_and_keeps_its_colour() {
+        let mut looks = Looks::default();
+        let style = Look::default_for(Tool::Highlighter).style();
+        let drawn = entry(
+            Shape::Highlight {
+                rect: AREA,
+                strength: HighlightStrength::Strong,
+            },
+            style,
+        );
+        let light = Property::HighlightStrength(HighlightStrength::Light);
+        let Ok(Some(Command::Replace {
+            shape,
+            style: restyled,
+            ..
+        })) = looks.set(light, Tool::Select, Some(&drawn))
+        else {
+            panic!("the highlight is restyled");
+        };
+        assert_eq!(
+            shape,
+            Shape::Highlight {
+                rect: AREA,
+                strength: HighlightStrength::Light,
+            }
+        );
+        assert_eq!(restyled.color, style.color);
+        assert!(
+            looks.look(Tool::Highlighter).has(light),
+            "the next highlight is as light"
         );
     }
 

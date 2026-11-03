@@ -280,7 +280,7 @@ fn constrained_handle(shape: &Shape, handle: Handle, to: PointF) -> PointF {
         | Shape::Ellipse { .. }
         | Shape::Pen(_)
         | Shape::Text(_)
-        | Shape::Highlight(_)
+        | Shape::Highlight { .. }
         | Shape::Redact { .. }
         | Shape::Spotlight(_)
         | Shape::Step(_)
@@ -343,7 +343,7 @@ fn existing_text(entry: &ShapeEntry) -> Option<TextOrigin> {
         | Shape::Rect { .. }
         | Shape::Ellipse { .. }
         | Shape::Pen(_)
-        | Shape::Highlight(_)
+        | Shape::Highlight { .. }
         | Shape::Redact { .. }
         | Shape::Spotlight(_)
         | Shape::Step(_) => None,

@@ -46,7 +46,7 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
         Shape::Rect { .. }
         | Shape::Ellipse { .. }
         | Shape::Pen(_)
-        | Shape::Highlight(_)
+        | Shape::Highlight { .. }
         | Shape::Redact { .. }
         | Shape::Spotlight(_) => bounds(shape).map_or_else(Vec::new, |rect| {
             box_handles(rect)
@@ -142,7 +142,10 @@ pub fn moved(shape: &Shape, offset: PointF) -> Shape {
         Shape::Text(block) => Shape::Text(block.moved_to(shift(block.at()))),
         Shape::Step(step) => Shape::Step(step.moved_to(shift(step.centre()))),
         Shape::Bubble(bubble) => Shape::Bubble(bubble.moved_by(offset)),
-        Shape::Highlight(rect) => Shape::Highlight(shift_rect(*rect)),
+        Shape::Highlight { rect, strength } => Shape::Highlight {
+            rect: shift_rect(*rect),
+            strength: *strength,
+        },
         Shape::Spotlight(rect) => Shape::Spotlight(shift_rect(*rect)),
         Shape::Redact {
             rect,
@@ -179,9 +182,13 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF, measure: impl Fn(&str)
             Some(rect) => Shape::Ellipse { rect, fill: *fill },
             None => shape.clone(),
         },
-        (Shape::Highlight(_), Handle::Box(handle)) => {
-            new_bounds(handle).map_or_else(|| shape.clone(), Shape::Highlight)
-        }
+        (Shape::Highlight { strength, .. }, Handle::Box(handle)) => new_bounds(handle).map_or_else(
+            || shape.clone(),
+            |rect| Shape::Highlight {
+                rect,
+                strength: *strength,
+            },
+        ),
         (Shape::Spotlight(_), Handle::Box(handle)) => {
             new_bounds(handle).map_or_else(|| shape.clone(), Shape::Spotlight)
         }
@@ -207,7 +214,7 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF, measure: impl Fn(&str)
             Shape::Rect { .. }
             | Shape::Ellipse { .. }
             | Shape::Pen(_)
-            | Shape::Highlight(_)
+            | Shape::Highlight { .. }
             | Shape::Redact { .. }
             | Shape::Spotlight(_),
             Handle::Start | Handle::End,
@@ -253,7 +260,7 @@ pub fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
             rect,
             fill: Fill::Solid,
         }
-        | Shape::Highlight(rect)
+        | Shape::Highlight { rect, .. }
         | Shape::Redact { rect, .. } => inside(grown(*rect, reach), point),
         Shape::Ellipse {
             rect,
@@ -284,7 +291,7 @@ fn bounds(shape: &Shape) -> Option<RectF> {
     match shape {
         Shape::Rect { rect, .. }
         | Shape::Ellipse { rect, .. }
-        | Shape::Highlight(rect)
+        | Shape::Highlight { rect, .. }
         | Shape::Redact { rect, .. }
         | Shape::Spotlight(rect) => Some(*rect),
         Shape::Pen(points) => {
@@ -424,7 +431,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::document::{Color, RgbaImage, Style};
+    use crate::document::{Color, HighlightStrength, RgbaImage, Style};
     use crate::history::{Command, History};
 
     fn point(x: f32, y: f32) -> PointF {
@@ -540,14 +547,23 @@ mod tests {
 
     #[test]
     fn f30_an_edge_handle_moves_only_its_side() {
-        let shape = Shape::Highlight(rect(10.0, 10.0, 20.0, 20.0));
+        let shape = Shape::Highlight {
+            rect: rect(10.0, 10.0, 20.0, 20.0),
+            strength: HighlightStrength::Strong,
+        };
         let resized = resized(
             &shape,
             Handle::Box(BoxHandle::Right),
             point(50.0, 99.0),
             |_| 0.0,
         );
-        assert_eq!(resized, Shape::Highlight(rect(10.0, 10.0, 40.0, 20.0)));
+        assert_eq!(
+            resized,
+            Shape::Highlight {
+                rect: rect(10.0, 10.0, 40.0, 20.0),
+                strength: HighlightStrength::Strong
+            }
+        );
     }
 
     #[test]

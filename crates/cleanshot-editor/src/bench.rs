@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, History, PointF, RectF, RedactMode, RedactStrength, RgbaImage,
-    Shape, Style, TextBlock,
+    Color, Command, Document, Fill, HighlightStrength, History, PointF, RectF, RedactMode,
+    RedactStrength, RgbaImage, Shape, Style, TextBlock,
 };
 use gpui::{App, Pixels, Point, Window, point, px};
 
@@ -286,7 +286,13 @@ fn synthetic_shape(index: u32) -> Command {
             ),
             255,
         ),
-        5 => (Shape::Highlight(rect), 96),
+        5 => (
+            Shape::Highlight {
+                rect,
+                strength: HighlightStrength::Strong,
+            },
+            96,
+        ),
         6 => (
             Shape::Ellipse {
                 rect,

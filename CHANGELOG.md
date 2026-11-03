@@ -16,6 +16,8 @@ section exists.
 - Redact has a Strength setting on the property strip: 16, 24, 32 or 48 pixel blocks, for
   pixelate and blur alike. It can be changed after drawing. 16 stays the default and the
   weakest, so a redaction is never easier to read than before (F-36, C-22).
+- The highlighter has a Strength setting on the property strip: Light, Medium or Strong.
+  Strong, the default, is the highlight as it was. It can be changed after drawing (F-35).
 - Ctrl+] and Ctrl+[ move the selected shape in front of or behind its neighbour, and
   Ctrl+Shift+] and Ctrl+Shift+[ move it to the front or back. Each move can be undone
   (F-38). Right-clicking a shape opens a menu with the same four moves.
