@@ -14,15 +14,18 @@ section exists.
 - Window capture (F-08): while selecting a region, press W to pick a window instead. The
   window under the pointer is highlighted by its visible frame, without its shadow, and a
   click selects it; Tab and Enter pick one from the keyboard. A click on bare desktop selects
-  that monitor. Press W again to draw a region. Alt+PrtSc opens the capture picking a
+  that monitor. A screen reader names each window as the highlight moves to it. Press W
+  again to draw a region. Alt+PrtSc opens the capture picking a
   window from the start; change it in Settings like the other hotkeys.
 - After you copy or save a capture from the toolbar, a thumbnail of it slides in at the
-  bottom right for 5 seconds (F-09): click it to edit, drag it into any app, or use its Save
-  and Dismiss. It never takes the keyboard focus; while it shows, the tray menu also has Edit
-  last capture and Save last capture. Show thumbnail in the settings turns it off.
+  bottom right for 5 seconds (F-09): click it to edit, drag it into an app as a PNG file or an
+  image, or use its Save and Dismiss. It never takes the keyboard focus; while it shows, the
+  tray menu also has Edit last capture and Save last capture. Clearing Show a thumbnail in
+  the settings window turns it off.
 - An organisation can set Cleanshot's policy under `HKLM\SOFTWARE\Policies\Cleanshot` (F-57):
   a fixed save folder, which may be a network share and which Save As cannot leave; copying
-  only, which greys out Save and says why; PNG only; and no Settings item in the tray menu.
+  only, which greys out Save on the capture toolbar and in the tray menu and says why, and
+  makes the editor's Ctrl+S and Ctrl+Shift+S say why instead of saving; PNG only; and no Settings item in the tray menu.
   A value set wrongly makes Cleanshot stricter, never looser.
 - Numbered steps (F-41): N, or the Numbered step button, places a filled circle with its
   number where you click. Steps count 1, 2, 3 in the order they were placed, and removing
@@ -34,6 +37,9 @@ section exists.
   released beside the exe, under Computer Configuration > Administrative Templates >
   Cleanshot. Copy the `.admx` to `PolicyDefinitions` and the `.adml` to
   `PolicyDefinitions\en-US`.
+- A winget manifest for `Cleanshot.Cleanshot` (three `.yaml` files), released beside the
+  exe with the exe's SHA-256 filled in and listed in `SHA256SUMS`. It is not submitted to
+  the winget repository yet.
 
 ### Fixed
 
