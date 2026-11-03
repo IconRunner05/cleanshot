@@ -20,7 +20,7 @@ use crate::Error;
 
 /// One element of a window's UI Automation tree, as a screen reader is told it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Control {
+pub struct Element {
     pub kind: ControlKind,
     pub name: String,
     pub enabled: bool,
@@ -53,7 +53,7 @@ pub enum ContainerMissing {
         walks: u32,
         shown: Duration,
         window_seen: Option<Duration>,
-        last: Result<Vec<Control>, Error>,
+        last: Result<Vec<Element>, Error>,
     },
 }
 
@@ -77,7 +77,7 @@ pub fn wait_for_container(
     kind: ControlKind,
     start: Instant,
     shown: &Receiver<Instant>,
-) -> Result<Vec<Control>, ContainerMissing> {
+) -> Result<Vec<Element>, ContainerMissing> {
     let shown = shown
         .recv_timeout(PATIENCE)
         .map_err(ContainerMissing::NotShown)?;
@@ -121,7 +121,7 @@ pub fn wait_for_container(
 /// # Errors
 ///
 /// [`Error::Accessibility`] if COM or the walk fails.
-pub fn controls_in_own_windows() -> Result<Vec<Control>, Error> {
+pub fn controls_in_own_windows() -> Result<Vec<Element>, Error> {
     // SAFETY: COM is initialised for this thread and released below once the walk ends.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
@@ -214,7 +214,7 @@ fn find_own_control(
     Ok(None)
 }
 
-fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
+fn walk_own_windows() -> windows::core::Result<Vec<Element>> {
     // SAFETY: CUIAutomation is the system class for IUIAutomation, created in process.
     let automation: IUIAutomation =
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }?;
@@ -250,7 +250,7 @@ fn walk_own_windows() -> windows::core::Result<Vec<Control>> {
             .into_iter()
             .find_map(|(id, known)| (id == kind).then_some(known))
             .unwrap_or(ControlKind::Other(kind.0));
-            controls.push(Control {
+            controls.push(Element {
                 kind,
                 name: name.to_string(),
                 enabled,
