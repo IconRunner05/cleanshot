@@ -30,7 +30,7 @@ use crate::toolbar::automation::{self, Request};
 use cleanshot_core::ToolbarControl;
 
 use crate::toolbar::{self, Look, Mark, OffTip, Paint};
-use crate::window_state::{self, client_point};
+use crate::window_state::{self, desktop_point};
 
 pub(crate) const WINDOW_CLASS: PCWSTR = w!("CleanshotOverlay");
 const BORDER_WIDTH: f32 = 1.5;
@@ -374,15 +374,6 @@ fn surface(
     }
 }
 
-/// The desktop point of a mouse message's `lparam` on a window whose top-left is `origin`.
-fn desktop_point(lparam: LPARAM, origin: POINT) -> POINT {
-    let client = client_point(lparam);
-    POINT {
-        x: client.x + origin.x,
-        y: client.y + origin.y,
-    }
-}
-
 unsafe extern "system" fn window_procedure(
     window: HWND,
     message: u32,
@@ -454,20 +445,5 @@ unsafe extern "system" fn window_procedure(
         }
         // SAFETY: forwarding an unhandled message to the default procedure.
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn f03_a_press_on_a_monitor_left_of_and_above_the_primary_reads_in_desktop_pixels() {
-        let origin = POINT { x: -1920, y: -1080 };
-        let inside = LPARAM(20 * 0x1_0000 + 10);
-        assert_eq!(desktop_point(inside, origin), POINT { x: -1910, y: -1060 });
-        // A captured drag past the window's top-left: client x -5, y -3.
-        let past = LPARAM(0xFFFD * 0x1_0000 + 0xFFFB);
-        assert_eq!(desktop_point(past, origin), POINT { x: -1925, y: -1083 });
     }
 }

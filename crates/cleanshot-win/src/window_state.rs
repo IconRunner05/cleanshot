@@ -66,3 +66,27 @@ pub(crate) fn client_point(lparam: LPARAM) -> POINT {
         y: i32::from(i16::from_le_bytes([bytes[2], bytes[3]])),
     }
 }
+
+/// The desktop point of a mouse message's `lparam` on a window whose top-left is `origin`.
+pub(crate) fn desktop_point(lparam: LPARAM, origin: POINT) -> POINT {
+    let client = client_point(lparam);
+    POINT {
+        x: client.x + origin.x,
+        y: client.y + origin.y,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f03_a_press_on_a_monitor_left_of_and_above_the_primary_reads_in_desktop_pixels() {
+        let origin = POINT { x: -1920, y: -1080 };
+        let inside = LPARAM(20 * 0x1_0000 + 10);
+        assert_eq!(desktop_point(inside, origin), POINT { x: -1910, y: -1060 });
+        // A captured drag past the window's top-left: client x -5, y -3.
+        let past = LPARAM(0xFFFD * 0x1_0000 + 0xFFFB);
+        assert_eq!(desktop_point(past, origin), POINT { x: -1925, y: -1083 });
+    }
+}
