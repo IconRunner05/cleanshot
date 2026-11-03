@@ -15,6 +15,7 @@ mod keys;
 mod look;
 mod options_menu;
 mod policy;
+mod screen;
 mod selection;
 mod settings;
 mod settings_change;
@@ -46,6 +47,7 @@ pub use options_menu::{OptionsEntry, OptionsItem, Picked, options_menu};
 pub use policy::{
     POLICY_KEY, Policy, PolicyProblem, PolicySetting, PolicyValue, Saving, SavingOff,
 };
+pub use screen::{Point, Rect, first_holding};
 pub use selection::{
     BoxHandle, Handle, box_handle_at, box_handles, handle_at, handles, hits, moved, resized,
     resized_box, shape_at,
