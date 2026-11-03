@@ -17,6 +17,14 @@ section exists.
   that monitor. A screen reader names each window as the highlight moves to it. Press W
   again to draw a region. Alt+PrtSc opens the capture picking a
   window from the start; change it in Settings like the other hotkeys.
+- The capture panel (F-11): Ctrl+Shift+5 shows a toolbar before you capture, where you
+  choose Region, Window or Screen and a timer, then press Capture. It takes the keyboard
+  focus, gives it back when it closes, and remembers your choices until Cleanshot quits.
+  Change its hotkey in Settings like the others.
+- A capture timer (F-10): set Timer on the capture panel to 3, 5 or 10 seconds, and Capture
+  counts down in the panel's place before it takes the screen, leaving the focus where it
+  was so you can open a menu to capture. Esc stops it. Neither the panel nor the countdown
+  is ever in a capture.
 - After you copy or save a capture from the toolbar, a thumbnail of it slides in at the
   bottom right for 5 seconds (F-09): click it to edit, drag it into an app as a PNG file or an
   image, or use its Save and Dismiss. It never takes the keyboard focus; while it shows, the

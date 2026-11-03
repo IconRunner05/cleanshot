@@ -80,15 +80,17 @@ pub enum HotkeyAction {
     FullScreen,
     LastRegion,
     Window,
+    CapturePanel,
 }
 
 impl HotkeyAction {
     /// Every action, in the order the settings window lists them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Region,
         Self::FullScreen,
         Self::LastRegion,
         Self::Window,
+        Self::CapturePanel,
     ];
 
     /// The action's name, as the settings window shows it and the tray menu, for the actions
@@ -100,6 +102,7 @@ impl HotkeyAction {
             Self::FullScreen => "Capture screen",
             Self::LastRegion => "Capture last region",
             Self::Window => "Capture window",
+            Self::CapturePanel => "Capture panel",
         }
     }
 }
@@ -315,6 +318,7 @@ impl Hotkeys {
             HotkeyAction::FullScreen => self.full_screen,
             HotkeyAction::LastRegion => self.last_region,
             HotkeyAction::Window => self.window,
+            HotkeyAction::CapturePanel => self.capture_panel,
         }
     }
 
@@ -325,6 +329,7 @@ impl Hotkeys {
             HotkeyAction::FullScreen => &mut self.full_screen,
             HotkeyAction::LastRegion => &mut self.last_region,
             HotkeyAction::Window => &mut self.window,
+            HotkeyAction::CapturePanel => &mut self.capture_panel,
         };
         *slot = hotkey;
     }
@@ -564,6 +569,22 @@ mod tests {
         ] {
             assert_eq!(SaveFormat::from_extension(extension), format, "{extension}");
         }
+    }
+
+    #[test]
+    fn f11_the_capture_panel_action_is_the_capture_panel_hotkey_ctrl_shift_5_by_default_and_no_other_may_take_it()
+     {
+        let mut hotkeys = Settings::default().hotkeys;
+        assert_eq!(
+            hotkeys.get(HotkeyAction::CapturePanel),
+            hotkey("Ctrl+Shift+5")
+        );
+        hotkeys.set(HotkeyAction::CapturePanel, hotkey("Win+5"));
+        assert_eq!(hotkeys.capture_panel, hotkey("Win+5"));
+        assert_eq!(
+            hotkeys.used_by_another(HotkeyAction::Region, hotkey("Win+5")),
+            Some(HotkeyAction::CapturePanel)
+        );
     }
 
     #[test]

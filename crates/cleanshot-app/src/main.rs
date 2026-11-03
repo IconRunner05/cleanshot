@@ -10,14 +10,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    Delivered, DeliveryError, Document, Hotkey, HotkeyAction, MAX_SETTINGS_BYTES, Output, Policy,
-    PolicyProblem, RgbaImage, Settings, SettingsProblem, delivery_notice,
+    CaptureMode, CapturePanel, Delivered, DeliveryError, Document, Hotkey, HotkeyAction,
+    MAX_SETTINGS_BYTES, Output, Policy, PolicyProblem, RgbaImage, Settings, SettingsProblem,
+    delivery_notice,
 };
 use cleanshot_editor::{AsyncApp, ask_save_path};
 use cleanshot_win::capture::{Copied, MonitorImage, OutputReport, RECT, black_share};
 use cleanshot_win::instance::Launch;
 use cleanshot_win::log::{Log, Usage, since_start, usage};
 use cleanshot_win::overlay::Overlay;
+use cleanshot_win::panel::{Countdown, Panel};
 use cleanshot_win::policy::read_policy;
 use cleanshot_win::settings_file::{read_settings, settings_path};
 use cleanshot_win::tray::{
@@ -27,10 +29,11 @@ use cleanshot_win::tray::{
 
 mod capture;
 mod delivery;
+mod panel;
 mod settings_window;
 mod thumbnail;
 
-use capture::{Handoff, capture};
+use capture::{Handoff, Shot, capture};
 use delivery::{deliver, save_as_start, save_to};
 use settings_window::open_settings;
 
@@ -116,14 +119,20 @@ fn on_tray_request(app: &AsyncApp, session: Rc<Session>, request: Request) {
     // GPUI's executor instead of borrowing the app here.
     app.spawn(async move |cx| {
         cx.update(|cx| {
-            let action = match request {
-                Request::Capture(action) => action,
+            let shot = match request {
+                Request::Capture(action) => match action {
+                    HotkeyAction::Region => Shot::Mode(CaptureMode::Region),
+                    HotkeyAction::FullScreen => Shot::Mode(CaptureMode::FullScreen),
+                    HotkeyAction::Window => Shot::Mode(CaptureMode::Window),
+                    HotkeyAction::LastRegion => Shot::LastRegion,
+                    HotkeyAction::CapturePanel => return panel::open(&session, defer, pass_on),
+                },
                 Request::EditLastCapture => return thumbnail::edit_last(&session, &pass_on),
                 Request::SaveLastCapture => return thumbnail::save_last(&session),
                 Request::OpenSettings => return open_settings(cx, &session),
                 Request::Exit => return cx.quit(),
             };
-            capture(&session, action, asked, defer, pass_on);
+            capture(&session, shot, asked, defer, pass_on);
         });
     })
     .detach();
@@ -191,14 +200,15 @@ fn log_dropped(log: &RefCell<Option<Log>>, request: Request) {
 
 /// The hotkey each capture request registers at start, and the warning when Snipping Tool
 /// holds the region's (F-52).
-fn tray_hotkeys(settings: &Settings) -> ([(Request, Hotkey); 4], Option<String>) {
+fn tray_hotkeys(settings: &Settings) -> ([(Request, Hotkey); 5], Option<String>) {
     let (region, fallback) = region_hotkey(settings.hotkeys.region);
     let hotkeys = HotkeyAction::ALL.map(|action| {
         let hotkey = match action {
             HotkeyAction::Region => region,
-            HotkeyAction::FullScreen | HotkeyAction::LastRegion | HotkeyAction::Window => {
-                settings.hotkeys.get(action)
-            }
+            HotkeyAction::FullScreen
+            | HotkeyAction::LastRegion
+            | HotkeyAction::Window
+            | HotkeyAction::CapturePanel => settings.hotkeys.get(action),
         };
         (Request::Capture(action), hotkey)
     });
@@ -230,6 +240,12 @@ struct Session {
     policy: Policy,
     tray: RefCell<Tray>,
     overlay: RefCell<Option<Overlay>>,
+    /// F-11: the capture panel, while it shows.
+    panel: RefCell<Option<Panel>>,
+    /// F-10: the wait before a timed capture, while it counts.
+    countdown: RefCell<Option<Countdown>>,
+    /// D-99: the panel's mode and timer, kept for the session and never written.
+    capture_panel: Cell<CapturePanel>,
     /// F-09: the thumbnail of the last capture copied or saved, while it shows.
     thumbnail: RefCell<Option<thumbnail::Shown>>,
     /// How many thumbnails have shown, so an event from a replaced one does nothing.
@@ -250,6 +266,9 @@ impl Session {
             policy,
             tray: RefCell::new(tray),
             overlay: RefCell::new(None),
+            panel: RefCell::new(None),
+            countdown: RefCell::new(None),
+            capture_panel: Cell::new(CapturePanel::default()),
             thumbnail: RefCell::new(None),
             thumbnails_shown: Cell::new(0),
             last_selection: Cell::new(None),
@@ -545,6 +564,17 @@ mod tests {
         assert_eq!(
             registered.map(|&(_, hotkey)| hotkey.to_string()),
             Some("Alt+PrtSc".to_owned())
+        );
+    }
+
+    #[test]
+    fn f11_start_registers_the_capture_panel_hotkey_ctrl_shift_5_by_default() {
+        let (hotkeys, _) = tray_hotkeys(&Settings::default());
+        let panel = Request::Capture(HotkeyAction::CapturePanel);
+        let registered = hotkeys.iter().find(|&&(request, _)| request == panel);
+        assert_eq!(
+            registered.map(|&(_, hotkey)| hotkey.to_string()),
+            Some("Ctrl+Shift+5".to_owned())
         );
     }
 }

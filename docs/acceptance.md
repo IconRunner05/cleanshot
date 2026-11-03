@@ -2,9 +2,9 @@
 
 The hands-on check the owner runs on the reference PC with a release candidate before v1.0.0 is tagged (CHARTER 9, D-102). One step per feature: do what it says, and tick it only if you see what it says. Anything else is a failed step; note what you saw.
 
-Start from a release candidate exe downloaded from its GitHub pre-release, with no `cleanshot.toml` next to it or in `%APPDATA%\Cleanshot` from an earlier run (C-05). Default hotkeys: PrtSc captures a region (Ctrl+Shift+4 if Windows' "Use the Print screen key to open screen capture" is on), Shift+PrtSc the last region, Ctrl+PrtSc the full screen.
+Start from a release candidate exe downloaded from its GitHub pre-release, with no `cleanshot.toml` next to it or in `%APPDATA%\Cleanshot` from an earlier run (C-05). Default hotkeys: PrtSc captures a region (Ctrl+Shift+4 if Windows' "Use the Print screen key to open screen capture" is on), Shift+PrtSc the last region, Ctrl+PrtSc the full screen, Ctrl+Shift+5 the capture panel.
 
-F-10, F-11 and F-12 get their steps when they are built.
+F-12 gets its steps when it is built.
 
 ## Start and tray
 
@@ -26,6 +26,8 @@ F-10, F-11 and F-12 get their steps when they are built.
 - [ ] F-07: Press Ctrl+PrtSc. The monitor under the pointer is captured.
 - [ ] F-08, F-58: Open a few windows, minimise one, put one on another virtual desktop, and show a click-through overlay (for example a game's FPS counter). Capture, wait for the thumbnail, then press PrtSc and W. Move the pointer: each window lights up by its frame, without its shadow. The minimised window, the one on the other desktop and Cleanshot's own thumbnail never light up, the click-through overlay is passed over for the window under it, and bare desktop, the wallpaper, lights up the whole monitor. Click a window: it becomes the selection. Press W, Tab a few times and Enter: the window lit up is selected. Press Esc, then Alt+PrtSc: the overlay opens already picking a window, and a click selects one. Windows' own Alt+PrtSc copy of the active window does not happen while Cleanshot runs. Turn on Narrator and do it again: Narrator says "Window to capture" and the title of each window the highlight moves to, and "Capture screen" when the pointer rests on bare desktop.
 - [ ] F-09: Capture and press Enter. A thumbnail slides in at the bottom-right of that monitor, and the window you were in keeps the focus. Hover it: it stays, with Save and Dismiss along its bottom. Move away: it fades after about 5 s. Capture again and drag the thumbnail into Word or Explorer: the image or a PNG file lands there. Capture again and click it: the editor opens with the capture.
+- [ ] F-11: Click into Notepad and press Ctrl+Shift+5. The capture panel opens at the bottom of the monitor under the pointer, with Region chosen and the focus on Capture. Type: the keys go to the panel, not Notepad. Tab to Window and press Enter, then Tab to Timer and press Enter twice: it reads "5 s". Press Esc: the panel closes and Notepad has the focus again. Press Ctrl+Shift+5 again: Window and 5 s are still chosen. Click into Notepad while the panel shows: the panel stays; Ctrl+Shift+5 brings it back to the front.
+- [ ] F-10: In the panel choose Screen and 3 s and press Capture. A pill reading "Capturing in 3" counts down where the panel was, and the focus stays where it was before the panel opened. Open the Start menu while it counts: the capture holds the open menu, and neither the panel nor the countdown. Start another and press Esc while it counts: nothing is captured. Choose Window and 3 s and press Capture: when the count ends, the overlay opens picking a window.
 - [ ] F-13: Turn off Settings > Accessibility > Visual effects > Animation effects. The overlay appears with no fade. Turn on a high-contrast theme: the overlay and toolbar use its colours.
 
 ## Editor

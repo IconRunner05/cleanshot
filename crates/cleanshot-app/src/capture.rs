@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    AfterCapture, Delivered, DeliveryError, Document, HotkeyAction, Output, RgbaImage, Saving,
+    AfterCapture, CaptureMode, Delivered, DeliveryError, Document, Output, RgbaImage, Saving,
     delivery_notice,
 };
 use cleanshot_win::capture::{
@@ -38,6 +38,14 @@ enum Next {
     Thumbnail(Arc<RgbaImage>, RECT),
 }
 
+/// What a capture takes: a capture mode, from its hotkey or the capture panel (F-11), or the
+/// last region (F-06).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Shot {
+    Mode(CaptureMode),
+    LastRegion,
+}
+
 #[derive(Debug, PartialEq)]
 enum Plan {
     Copy(RECT),
@@ -46,23 +54,23 @@ enum Plan {
     PickWindow,
 }
 
-/// What a capture of `action` does once the screen is copied, or None when the pointer's
+/// What a capture of `shot` does once the screen is copied, or None when the pointer's
 /// monitor is unknown. F-07 follows `after_capture` (D-34); F-06 copies the last selection
 /// with no overlay, or opens one when there is none yet (D-35).
 fn plan(
-    action: HotkeyAction,
+    shot: Shot,
     after_capture: AfterCapture,
     last_selection: Option<RECT>,
     pointer_monitor: impl FnOnce() -> Option<RECT>,
 ) -> Option<Plan> {
-    Some(match (action, after_capture) {
-        (HotkeyAction::Region, _) => Plan::Overlay(None),
-        (HotkeyAction::FullScreen, AfterCapture::Copy) => Plan::Copy(pointer_monitor()?),
-        (HotkeyAction::FullScreen, AfterCapture::ShowToolbar) => {
+    Some(match (shot, after_capture) {
+        (Shot::Mode(CaptureMode::Region), _) => Plan::Overlay(None),
+        (Shot::Mode(CaptureMode::FullScreen), AfterCapture::Copy) => Plan::Copy(pointer_monitor()?),
+        (Shot::Mode(CaptureMode::FullScreen), AfterCapture::ShowToolbar) => {
             Plan::Overlay(Some(pointer_monitor()?))
         }
-        (HotkeyAction::LastRegion, _) => last_selection.map_or(Plan::Overlay(None), Plan::Copy),
-        (HotkeyAction::Window, _) => Plan::PickWindow,
+        (Shot::LastRegion, _) => last_selection.map_or(Plan::Overlay(None), Plan::Copy),
+        (Shot::Mode(CaptureMode::Window), _) => Plan::PickWindow,
     })
 }
 
@@ -72,7 +80,7 @@ fn plan(
 // overlay opens as for a region.
 pub(super) fn capture(
     session: &Rc<Session>,
-    action: HotkeyAction,
+    shot: Shot,
     asked: Instant,
     defer: impl Fn(Duration, Box<dyn FnOnce()>) + 'static,
     pass_on: impl Fn(RgbaImage, Handoff) + 'static,
@@ -80,8 +88,12 @@ pub(super) fn capture(
     if session.overlay.borrow().is_some() {
         return;
     }
-    // The thumbnail is topmost, so it would be in the copy of the screen.
+    // The thumbnail is topmost, so it would be in the copy of the screen. The capture panel
+    // and countdown are left out of every copy (D-106), and close here too, so another
+    // hotkey's capture never relies on that alone.
     thumbnail::close_now(session);
+    session.panel.borrow_mut().take();
+    session.countdown.borrow_mut().take();
     session.captures_started.update(|started| started + 1);
     let defer: Rc<Defer> = Rc::new(defer);
     let pass_on: Rc<PassOn> = Rc::new(pass_on);
@@ -104,7 +116,7 @@ pub(super) fn capture(
     };
     let last = session.last_selection.get();
     let (selected, picking) = match plan(
-        action,
+        shot,
         session.settings.borrow().after_capture,
         last,
         under_pointer,
@@ -298,12 +310,17 @@ mod tests {
     fn f07_full_screen_copies_or_preselects_the_pointer_monitor_by_after_capture() {
         let monitor = || Some(MONITOR);
         assert_eq!(
-            plan(HotkeyAction::FullScreen, AfterCapture::Copy, None, monitor),
+            plan(
+                Shot::Mode(CaptureMode::FullScreen),
+                AfterCapture::Copy,
+                None,
+                monitor
+            ),
             Some(Plan::Copy(MONITOR))
         );
         assert_eq!(
             plan(
-                HotkeyAction::FullScreen,
+                Shot::Mode(CaptureMode::FullScreen),
                 AfterCapture::ShowToolbar,
                 None,
                 monitor
@@ -311,7 +328,12 @@ mod tests {
             Some(Plan::Overlay(Some(MONITOR)))
         );
         assert_eq!(
-            plan(HotkeyAction::FullScreen, AfterCapture::Copy, None, || None),
+            plan(
+                Shot::Mode(CaptureMode::FullScreen),
+                AfterCapture::Copy,
+                None,
+                || None
+            ),
             None
         );
     }
@@ -320,7 +342,9 @@ mod tests {
     fn f08_the_window_hotkey_opens_the_overlay_picking_a_window_whatever_was_last() {
         for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
             assert_eq!(
-                plan(HotkeyAction::Window, after, Some(LAST), || Some(MONITOR)),
+                plan(Shot::Mode(CaptureMode::Window), after, Some(LAST), || Some(
+                    MONITOR
+                )),
                 Some(Plan::PickWindow)
             );
         }
@@ -331,17 +355,17 @@ mod tests {
         let monitor = || Some(MONITOR);
         for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
             assert_eq!(
-                plan(HotkeyAction::LastRegion, after, Some(LAST), monitor),
+                plan(Shot::LastRegion, after, Some(LAST), monitor),
                 Some(Plan::Copy(LAST))
             );
             assert_eq!(
-                plan(HotkeyAction::LastRegion, after, None, monitor),
+                plan(Shot::LastRegion, after, None, monitor),
                 Some(Plan::Overlay(None))
             );
         }
         assert_eq!(
             plan(
-                HotkeyAction::Region,
+                Shot::Mode(CaptureMode::Region),
                 AfterCapture::Copy,
                 Some(LAST),
                 monitor
