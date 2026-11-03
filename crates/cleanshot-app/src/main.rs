@@ -438,7 +438,7 @@ impl Session {
                 format!(
                     "monitor bounds={:?} black_share={:.3}",
                     monitor.bounds,
-                    black_share(&monitor.image)
+                    black_share(&monitor.frame)
                 )
             });
         }

@@ -8,7 +8,9 @@ use cleanshot_core::thumbnail_layout::{
 };
 use cleanshot_core::{Rect, RgbaImage, saving_off_notice};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED,
+};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_ROUNDED_RECT, ID2D1Bitmap, ID2D1HwndRenderTarget,
     ID2D1SolidColorBrush,
@@ -310,6 +312,7 @@ fn surface(
         target_size,
         (width, height),
         &bgra(preview),
+        D2D1_ALPHA_MODE_PREMULTIPLIED,
     )?;
     let palette = Palette::current()?;
     // SAFETY: each colour lives in `palette`, which outlives its call.

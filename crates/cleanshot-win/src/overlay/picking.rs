@@ -300,9 +300,7 @@ mod tests {
     fn f58_ui_automation_names_the_window_tab_puts_the_highlight_on() {
         use std::time::Duration;
 
-        use cleanshot_core::RgbaImage;
-
-        use crate::capture::MonitorImage;
+        use crate::capture::{BgraFrame, MonitorImage};
         use crate::overlay::tests::pump;
 
         let _screen = screen();
@@ -314,7 +312,7 @@ mod tests {
                 right: 800,
                 bottom: 600,
             },
-            image: RgbaImage::new(width, height, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
+            frame: BgraFrame::new(width, height, vec![128; 800 * 600 * 4]).expect("800x600 BGRA"),
         };
         // One window over the whole desktop, so the pointer and Tab can only highlight it.
         let pickable = vec![Pickable {

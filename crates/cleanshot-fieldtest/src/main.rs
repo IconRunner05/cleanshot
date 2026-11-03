@@ -502,9 +502,9 @@ fn report_capture(report: &mut String) {
                         .map(|monitor| {
                             format!(
                                 "{}x{} with {} distinct colours sampled",
-                                monitor.image.width(),
-                                monitor.image.height(),
-                                distinct_colours(monitor.image.pixels())
+                                monitor.frame.width(),
+                                monitor.frame.height(),
+                                distinct_colours(monitor.frame.pixels())
                             )
                         })
                         .collect();
@@ -520,13 +520,15 @@ fn report_capture(report: &mut String) {
     }
 }
 
-/// Distinct RGBA values among every 97th pixel: 1 means the capture is blank.
+/// Distinct colours among every 97th BGRA pixel, whose fourth byte is not read: 1 means the
+/// capture is blank.
 fn distinct_colours(pixels: &[u8]) -> usize {
     pixels
         .as_chunks::<4>()
         .0
         .iter()
         .step_by(97)
+        .map(|pixel| &pixel[..3])
         .collect::<std::collections::HashSet<_>>()
         .len()
 }

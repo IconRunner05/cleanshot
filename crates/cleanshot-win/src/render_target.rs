@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use cleanshot_core::RgbaImage;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
+    D2D_SIZE_U, D2D1_ALPHA_MODE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_PROPERTIES, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
@@ -68,16 +68,20 @@ pub(crate) fn target(
 }
 
 /// A render target for `window`, `target` physical pixels, and a bitmap on it `width` x
-/// `height` of `bgra`, rows of premultiplied BGRA `width` pixels long.
+/// `height` of `bgra`, rows of BGRA `width` pixels long whose alpha is read as `alpha` says.
 pub(crate) fn target_and_bitmap(
     factory: &ID2D1Factory,
     window: HWND,
     size: D2D_SIZE_U,
     (width, height): (u32, u32),
     bgra: &[u8],
+    alpha: D2D1_ALPHA_MODE,
 ) -> windows::core::Result<(ID2D1HwndRenderTarget, ID2D1Bitmap)> {
     let bitmap_properties = D2D1_BITMAP_PROPERTIES {
-        pixelFormat: FORMAT,
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: alpha,
+        },
         dpiX: DESKTOP_DPI,
         dpiY: DESKTOP_DPI,
     };

@@ -439,7 +439,7 @@ pub(crate) mod tests {
     use std::sync::{Mutex, MutexGuard, PoisonError};
     use std::time::{Duration, Instant};
 
-    use cleanshot_core::{RgbaImage, TabDirection};
+    use cleanshot_core::TabDirection;
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetPixel,
@@ -461,6 +461,7 @@ pub(crate) mod tests {
     use windows::core::BOOL;
 
     use super::*;
+    use crate::capture::BgraFrame;
 
     /// An overlay, the capture panel and the countdown register system-wide hotkeys, take or
     /// test the foreground, and cover the same part of the screen, so one such test runs at a
@@ -488,7 +489,12 @@ pub(crate) mod tests {
     pub(super) fn monitor() -> MonitorImage {
         let (width, height) = (64, 48);
         let pixels = (0..height)
-            .flat_map(|y| (0..width).flat_map(move |x| gradient(x, y).into_iter().chain([255])))
+            .flat_map(|y| {
+                (0..width).flat_map(move |x| {
+                    let [red, green, blue] = gradient(x, y);
+                    [blue, green, red, 255]
+                })
+            })
             .collect();
         MonitorImage {
             bounds: RECT {
@@ -497,7 +503,7 @@ pub(crate) mod tests {
                 right: 64,
                 bottom: 48,
             },
-            image: RgbaImage::new(width, height, pixels).expect("64x48 RGBA"),
+            frame: BgraFrame::new(width, height, pixels).expect("64x48 BGRA"),
         }
     }
 
@@ -707,7 +713,7 @@ pub(crate) mod tests {
                 right: 0,
                 bottom: 0,
             },
-            image: monitor().image,
+            frame: monitor().frame,
         };
         let copied = Rc::new(Cell::new(None));
         let sink = Rc::clone(&copied);
@@ -961,7 +967,7 @@ pub(crate) mod tests {
                 right: 800,
                 bottom: 600,
             },
-            image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
+            frame: BgraFrame::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 BGRA"),
         };
         let overlay = Overlay::show(
             &[large],

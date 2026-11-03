@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-use cleanshot_core::RgbaImage;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
@@ -106,22 +105,19 @@ fn draw_cursor(monitor: &mut MonitorImage, cursor: HCURSOR, at: POINT) -> Result
     if columns.is_empty() || rows.is_empty() {
         return Ok(());
     }
-    let mut pixels = monitor.image.pixels().to_vec();
+    let pixels = monitor.frame.pixels_mut();
     let in_image = |x: i32, y: i32| index(y * image_width + x);
     let in_cursor = |x: i32, y: i32| index((y - top) * shape.width + (x - left));
     let mut patch = vec![0; index(shape.width * shape.height)];
     for (x, y) in each(&columns, &rows) {
         let (from, to) = (in_image(x, y), in_cursor(x, y));
-        patch[to..to + 4].copy_from_slice(&swap_red_blue(&pixels[from..from + 4]));
+        patch[to..to + 4].copy_from_slice(&pixels[from..from + 4]);
     }
     paint(cursor, &shape, &mut patch)?;
     for (x, y) in each(&columns, &rows) {
         let (to, from) = (in_image(x, y), in_cursor(x, y));
-        let [red, green, blue, _] = swap_red_blue(&patch[from..from + 4]);
-        // A capture of the screen is opaque.
-        pixels[to..to + 4].copy_from_slice(&[red, green, blue, u8::MAX]);
+        pixels[to..to + 4].copy_from_slice(&patch[from..from + 4]);
     }
-    monitor.image = RgbaImage::new(monitor.image.width(), monitor.image.height(), pixels)?;
     Ok(())
 }
 
@@ -187,10 +183,6 @@ fn each(columns: &Range<i32>, rows: &Range<i32>) -> impl Iterator<Item = (i32, i
         .flat_map(move |y| columns.clone().map(move |x| (x, y)))
 }
 
-fn swap_red_blue(pixel: &[u8]) -> [u8; 4] {
-    [pixel[2], pixel[1], pixel[0], pixel[3]]
-}
-
 #[expect(
     clippy::cast_sign_loss,
     reason = "a pixel's offset, clipped to its image, is never negative"
@@ -204,6 +196,7 @@ mod tests {
     use windows::Win32::UI::WindowsAndMessaging::{IDC_ARROW, LoadCursorW};
 
     use super::*;
+    use crate::capture::BgraFrame;
 
     const GREY: [u8; 4] = [128, 128, 128, 255];
 
@@ -216,13 +209,13 @@ mod tests {
                 right: 1_000 + width,
                 bottom: 500 + height,
             },
-            image: RgbaImage::new(200, 100, GREY.repeat(200 * 100)).expect("200x100 RGBA"),
+            frame: BgraFrame::new(200, 100, GREY.repeat(200 * 100)).expect("200x100 BGRA"),
         }
     }
 
     fn pixel(monitor: &MonitorImage, x: i32, y: i32) -> [u8; 4] {
         let at = index(y * 200 + x);
-        monitor.image.pixels()[at..at + 4]
+        monitor.frame.pixels()[at..at + 4]
             .try_into()
             .expect("four bytes a pixel")
     }
@@ -247,14 +240,6 @@ mod tests {
             changed(0..50, 0..100) + changed(50..200, 0..40),
             0,
             "nothing above or left of the tip"
-        );
-        assert!(
-            monitor
-                .image
-                .pixels()
-                .chunks(4)
-                .all(|each| each[3] == u8::MAX),
-            "every pixel stays opaque"
         );
     }
 

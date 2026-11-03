@@ -7,9 +7,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cleanshot_core::{RgbaImage, SavingOff, saving_off_notice};
+use cleanshot_core::{SavingOff, saving_off_notice};
 use cleanshot_win::accessibility::{ControlKind, invoke_in_own_windows, wait_for_container};
-use cleanshot_win::capture::{MonitorImage, RECT};
+use cleanshot_win::capture::{BgraFrame, MonitorImage, RECT};
 use cleanshot_win::overlay::{Opening, Overlay};
 
 const TEST: &str = "f57_ui_automation_reports_save_off_with_the_reason_and_refuses_to_press_it";
@@ -84,7 +84,7 @@ fn main() {
                 right: 800,
                 bottom: 600,
             },
-            image: RgbaImage::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 RGBA"),
+            frame: BgraFrame::new(800, 600, vec![128; 800 * 600 * 4]).expect("800x600 BGRA"),
         };
         let shown = Overlay::show(
             &[monitor],

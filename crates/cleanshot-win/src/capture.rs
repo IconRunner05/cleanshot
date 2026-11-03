@@ -31,9 +31,11 @@ use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use crate::Error;
 use crate::struct_size;
 
+mod frame;
 mod pointer;
 mod window;
 
+pub use frame::BgraFrame;
 pub use pointer::draw_pointer;
 pub use window::pickable_windows;
 
@@ -52,7 +54,7 @@ pub enum Method {
 #[derive(Debug)]
 pub struct MonitorImage {
     pub bounds: RECT,
-    pub image: RgbaImage,
+    pub frame: BgraFrame,
 }
 
 /// Copies every monitor's pixels with `method`, before any window of ours is shown (F-02).
@@ -293,14 +295,14 @@ pub fn capture_desktop(devices: &mut Devices) -> Result<Desktop, Error> {
     }
 }
 
-/// The share of `image`'s pixels whose red, green and blue are all 0.
+/// The share of `frame`'s pixels whose red, green and blue are all 0.
 #[expect(
     clippy::cast_precision_loss,
     reason = "a share for a log line, where a few lost bits do not matter"
 )]
 #[must_use]
-pub fn black_share(image: &RgbaImage) -> f64 {
-    let pixels = image.pixels().as_chunks::<4>().0;
+pub fn black_share(frame: &BgraFrame) -> f64 {
+    let pixels = frame.pixels().as_chunks::<4>().0;
     let black = pixels
         .iter()
         .filter(|pixel| pixel[..3] == [0, 0, 0])
@@ -308,8 +310,8 @@ pub fn black_share(image: &RgbaImage) -> f64 {
     black as f64 / pixels.len().max(1) as f64
 }
 
-/// The pixels of `selected`, a rectangle on the virtual desktop, cut from `captures`. A
-/// part no monitor covers stays transparent.
+/// The pixels of `selected`, a rectangle on the virtual desktop, cut from `captures` as
+/// opaque RGBA. A part no monitor covers stays transparent.
 ///
 /// # Errors
 ///
@@ -323,13 +325,15 @@ pub fn region(captures: &[MonitorImage], selected: RECT) -> Result<RgbaImage, Er
         let Some(overlap) = screen_rect(selected).overlap(screen_rect(bounds)) else {
             continue;
         };
-        let source_row_bytes = capture.image.width() as usize * 4;
+        let source_row_bytes = capture.frame.width() as usize * 4;
         let span = overlap.right.abs_diff(overlap.left) as usize * 4;
         for y in overlap.top..overlap.bottom {
             let source = offset(y - bounds.top, overlap.left - bounds.left, source_row_bytes);
             let target = offset(y - selected.top, overlap.left - selected.left, row_bytes);
-            pixels[target..target + span]
-                .copy_from_slice(&capture.image.pixels()[source..source + span]);
+            frame::to_rgba(
+                &capture.frame.pixels()[source..source + span],
+                &mut pixels[target..target + span],
+            );
         }
     }
     Ok(RgbaImage::new(width, height, pixels)?)
@@ -442,11 +446,11 @@ fn bitblt(bounds: RECT) -> Result<MonitorImage, Error> {
         let deleted = DeleteDC(memory);
         debug_assert!(deleted.as_bool(), "a memory DC made here is deleted once");
         ReleaseDC(None, screen);
-        let mut pixels = copied.map_err(Error::Capture)?;
-        bgra_to_rgba(&mut pixels);
+        let pixels = copied.map_err(Error::Capture)?;
         Ok(MonitorImage {
             bounds,
-            image: RgbaImage::new(width, height, pixels)?,
+            frame: BgraFrame::new(width, height, pixels)
+                .expect("the DIB holds width x height pixels"),
         })
     }
 }
@@ -714,11 +718,10 @@ fn duplicate_output(
     // SAFETY: the frame acquired above is released once, after its last use.
     let released = unsafe { duplication.ReleaseFrame() };
     debug_assert!(released.is_ok(), "an acquired frame releases");
-    let mut pixels = copied?;
-    bgra_to_rgba(&mut pixels);
-    let image = RgbaImage::new(width, height, pixels)?;
+    let frame =
+        BgraFrame::new(width, height, copied?).expect("copy_to_cpu reads width x height pixels");
     report.copy = Some(copying.elapsed());
-    Ok(MonitorImage { bounds, image })
+    Ok(MonitorImage { bounds, frame })
 }
 
 /// D-28: `copy_to_cpu` reads upright 8-bit BGRA frames `width` x `height`; GDI copies the rest.
@@ -845,13 +848,6 @@ fn copy_to_cpu(
     }
 }
 
-fn bgra_to_rgba(pixels: &mut [u8]) {
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-        pixel[3] = u8::MAX;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use windows::Win32::Graphics::Dxgi::Common::{
@@ -871,26 +867,30 @@ mod tests {
         }
     }
 
-    /// A monitor whose pixel n, counted row by row, is `first + n` in every channel, so a
-    /// pixel taken from the wrong row or column has the wrong value.
+    fn grey(value: u8) -> [u8; 4] {
+        [value, value, value, u8::MAX]
+    }
+
+    /// A monitor whose pixel n, counted row by row, is the grey `first + n`, so a pixel taken
+    /// from the wrong row or column has the wrong value.
     fn numbered(bounds: RECT, first: u8) -> MonitorImage {
         let (width, height) = size_of_rect(bounds).expect("a test monitor has an area");
         let pixels = (first..)
             .take(width as usize * height as usize)
-            .flat_map(|value| [value; 4])
+            .flat_map(grey)
             .collect();
         MonitorImage {
             bounds,
-            image: RgbaImage::new(width, height, pixels).expect("sized to match"),
+            frame: BgraFrame::new(width, height, pixels).expect("sized to match"),
         }
     }
 
     fn filled(bounds: RECT, value: u8) -> MonitorImage {
         let (width, height) = size_of_rect(bounds).expect("a test monitor has an area");
-        let pixels = vec![value; width as usize * height as usize * 4];
+        let pixels = grey(value).repeat(width as usize * height as usize);
         MonitorImage {
             bounds,
-            image: RgbaImage::new(width, height, pixels).expect("sized to match"),
+            frame: BgraFrame::new(width, height, pixels).expect("sized to match"),
         }
     }
 
@@ -904,7 +904,7 @@ mod tests {
         assert_eq!((image.width(), image.height()), (4, 1));
         assert_eq!(
             image.pixels(),
-            [[16; 4], [17; 4], [34; 4], [35; 4]].concat()
+            [grey(16), grey(17), grey(34), grey(35)].concat()
         );
     }
 
@@ -920,7 +920,7 @@ mod tests {
         assert_eq!((image.width(), image.height()), (2, 2));
         assert_eq!(
             image.pixels(),
-            [[15; 4], [16; 4], [31; 4], [32; 4]].concat()
+            [grey(15), grey(16), grey(31), grey(32)].concat()
         );
         assert_eq!(
             monitor_containing(&captures, POINT { x: 0, y: -1 }),
@@ -931,7 +931,7 @@ mod tests {
     #[test]
     fn d71_a_region_across_a_200_percent_monitor_and_a_100_percent_one_keeps_physical_pixels() {
         let shade =
-            |x: i32, y: i32| [u8::try_from((x * 3 + y * 7).rem_euclid(251)).expect("< 251"); 4];
+            |x: i32, y: i32| grey(u8::try_from((x * 3 + y * 7).rem_euclid(251)).expect("< 251"));
         let painted = |bounds: RECT| {
             let pixels = (bounds.top..bounds.bottom)
                 .flat_map(|y| (bounds.left..bounds.right).flat_map(move |x| shade(x, y)))
@@ -939,7 +939,7 @@ mod tests {
             let (width, height) = size_of_rect(bounds).expect("a test monitor has an area");
             MonitorImage {
                 bounds,
-                image: RgbaImage::new(width, height, pixels).expect("sized to match"),
+                frame: BgraFrame::new(width, height, pixels).expect("sized to match"),
             }
         };
         let captures = [
@@ -966,10 +966,20 @@ mod tests {
     }
 
     #[test]
+    fn p01_a_region_is_cut_from_the_frozen_bgra_frames_as_opaque_rgba() {
+        let blue_then_red = MonitorImage {
+            bounds: rect(0, 0, 2, 1),
+            frame: BgraFrame::new(2, 1, vec![255, 0, 0, 0, 0, 0, 255, 7]).expect("2x1 BGRA"),
+        };
+        let image = region(&[blue_then_red], rect(0, 0, 2, 1)).expect("the region has an area");
+        assert_eq!(image.pixels(), [0, 0, 255, 255, 255, 0, 0, 255]);
+    }
+
+    #[test]
     fn f01_a_region_no_monitor_covers_stays_transparent() {
         let captures = [filled(rect(0, 0, 2, 2), 30)];
         let image = region(&captures, rect(1, 1, 3, 2)).expect("the region has an area");
-        assert_eq!(image.pixels(), [[30; 4], [0; 4]].concat());
+        assert_eq!(image.pixels(), [grey(30), [0; 4]].concat());
     }
 
     fn refused(code: windows::core::HRESULT) -> Result<MonitorImage, Error> {
@@ -1056,11 +1066,11 @@ mod tests {
     #[test]
     fn f02_black_share_counts_pixels_with_no_red_green_or_blue() {
         let mut pixels = [[0, 0, 0, 255], [0, 0, 1, 255], [7, 0, 0, 255], [0, 0, 0, 0]].concat();
-        let image = RgbaImage::new(2, 2, pixels.clone()).expect("2x2 RGBA");
-        assert!((black_share(&image) - 0.5).abs() < f64::EPSILON);
+        let frame = BgraFrame::new(2, 2, pixels.clone()).expect("2x2 BGRA");
+        assert!((black_share(&frame) - 0.5).abs() < f64::EPSILON);
         pixels.fill(9);
-        let image = RgbaImage::new(2, 2, pixels).expect("2x2 RGBA");
-        assert!(black_share(&image).abs() < f64::EPSILON);
+        let frame = BgraFrame::new(2, 2, pixels).expect("2x2 BGRA");
+        assert!(black_share(&frame).abs() < f64::EPSILON);
     }
 
     #[test]

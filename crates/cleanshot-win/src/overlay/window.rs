@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use cleanshot_core::box_handles;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, ID2D1Bitmap, ID2D1Factory,
     ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
@@ -22,7 +22,7 @@ use crate::Error;
 use crate::capture::{MonitorImage, dpi_scale};
 use crate::loupe;
 use crate::palette::Palette;
-use crate::render_target::{bgra, target_and_bitmap};
+use crate::render_target::target_and_bitmap;
 use crate::selection::{Grip, as_box, dragged, grip_at, nudged};
 use crate::size_pill;
 use crate::toolbar::automation::{self, Request};
@@ -273,7 +273,7 @@ pub(super) fn open_window(
     stages: &mut Stages,
 ) -> Result<HWND, Error> {
     let bounds = capture.bounds;
-    let (width, height) = (capture.image.width(), capture.image.height());
+    let (width, height) = (capture.frame.width(), capture.frame.height());
     // SAFETY: the class is registered and every string is 'static. The process is
     // per-monitor DPI aware, so the bounds are physical pixels.
     let window = unsafe {
@@ -348,6 +348,7 @@ pub(super) fn prewarm(factory: &ID2D1Factory, palette: &Palette) -> windows::cor
         },
         (1, 1),
         &[0; 4],
+        D2D1_ALPHA_MODE_IGNORE,
     )
     .and_then(|(target, frozen)| {
         Paint::new(&target.cast()?, Some(&frozen), 1.0, palette)?;
@@ -374,14 +375,14 @@ fn surface(
     hosts_toolbar: bool,
     stages: &mut Stages,
 ) -> windows::core::Result<Surface> {
-    let bgra = bgra(&capture.image);
-    stages.mark("bgra");
+    // P-01: the frozen frame is drawn in the order Windows copied it, with no pass over it.
     let (target, frozen) = target_and_bitmap(
         factory,
         window,
         D2D_SIZE_U { width, height },
         (width, height),
-        &bgra,
+        capture.frame.pixels(),
+        D2D1_ALPHA_MODE_IGNORE,
     )?;
     stages.mark("target_and_bitmap");
     // SAFETY: every call takes owned or borrowed COM objects that outlive it.
@@ -398,7 +399,13 @@ fn surface(
         };
         let scale = dpi_scale(capture.bounds)?;
         let pill = size_pill::Paint::new(&target, capture.bounds, scale, &palette)?;
-        let loupe = loupe::Paint::new(&target, bgra, capture.bounds, scale, &palette)?;
+        let loupe = loupe::Paint::new(
+            &target,
+            capture.frame.pixels().to_vec(),
+            capture.bounds,
+            scale,
+            &palette,
+        )?;
         stages.mark("paints");
         Ok(Surface {
             tips: RefCell::new(None),
