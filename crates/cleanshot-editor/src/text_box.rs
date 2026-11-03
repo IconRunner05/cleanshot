@@ -12,7 +12,7 @@ use gpui::{
 
 use crate::canvas::rgba;
 use crate::placement::Fit;
-use crate::text::{LaidLine, em_width, lay_out};
+use crate::text::{LaidLine, lay_out, line_width};
 use crate::theme::ACCENT;
 
 const CARET_WIDTH: f32 = 1.5;
@@ -84,7 +84,7 @@ impl TextBox {
     ///
     /// [`TextBlockError`] only if GPUI measured a width that is not a number of ems.
     pub fn commit(&self, window: &Window) -> Result<Option<Command>, TextBlockError> {
-        commit_text(&self.origin, &self.edit, em_width(self.edit.text(), window))
+        commit_text(&self.origin, &self.edit, |line| line_width(line, window))
     }
 
     /// What the canvas draws while the box is open: its text as the shape it would become, in
@@ -155,7 +155,10 @@ impl TextBox {
     /// Where `range` starts on screen, a caret wide, for the input method's candidate window.
     pub fn bounds_for(&self, range: &Range<usize>, fit: &Fit, window: &Window) -> Bounds<Pixels> {
         let lines = self.screen_lines(fit, window);
-        caret(&lines, self.edit.position(range.start))
+        caret(
+            &lines,
+            self.edit.position(range.start, &self.line_ranges(window)),
+        )
     }
 
     /// The offset of the character boundary nearest `position` on screen.
@@ -178,13 +181,14 @@ impl TextBox {
             BorderStyle::Dashed,
         ));
         let lines = self.screen_lines(fit, window);
+        let ranges = self.line_ranges(window);
         let selection = self.edit.selection();
         let selected = gpui::Rgba { a: 0.3, ..ACCENT };
-        for bounds in self.spans(&lines, &selection) {
+        for bounds in self.spans(&lines, &ranges, &selection) {
             window.paint_quad(fill(bounds, selected));
         }
         if let Some(marked) = self.edit.marked() {
-            for bounds in self.spans(&lines, &marked) {
+            for bounds in self.spans(&lines, &ranges, &marked) {
                 let underline = Bounds::new(
                     point(bounds.origin.x, bounds.bottom() - px(2.0)),
                     size(bounds.size.width, px(1.0)),
@@ -192,7 +196,7 @@ impl TextBox {
                 window.paint_quad(fill(underline, ACCENT));
             }
         }
-        let head = self.edit.position(self.edit.caret());
+        let head = self.edit.position(self.edit.caret(), &ranges);
         window.paint_quad(fill(caret(&lines, head), rgba(self.text_color())));
     }
 
@@ -206,15 +210,16 @@ impl TextBox {
         }
     }
 
-    /// The box's text as the text block it would become, measured now.
+    /// The box's text as the text block it would become, measured and wrapped now.
     fn block(&self, window: &Window) -> TextBlock {
-        let (at, size) = match &self.origin {
-            TextOrigin::New { at, size, .. } => (*at, *size),
-            TextOrigin::Existing { block, .. } => (block.at(), block.size()),
-        };
-        let text = self.edit.text();
-        TextBlock::new(at, text.to_owned(), size, em_width(text, window))
+        self.origin
+            .block(self.edit.text().to_owned(), |line| line_width(line, window))
             .expect("open checked the size, and GPUI measures a width of 0 or more ems")
+    }
+
+    /// The byte range of each line as the box lays its text out, wrapped lines included.
+    fn line_ranges(&self, window: &Window) -> Vec<Range<usize>> {
+        self.block(window).line_ranges().collect()
     }
 
     fn screen_lines(&self, fit: &Fit, window: &Window) -> Vec<LaidLine> {
@@ -248,32 +253,40 @@ impl TextBox {
         let byte = lines[line]
             .shaped
             .closest_index_for_x(px(at.x) - lines[line].origin.x);
-        self.edit.offset(LinePosition { line, byte })
+        self.edit
+            .offset(LinePosition { line, byte }, &self.line_ranges(window))
     }
 
     /// Up or Down, where core sends it: to the character nearest the caret's x on that line.
     fn move_line(&mut self, step: LineStep, extend: bool, window: &Window) {
-        let offset = match self.edit.line_move(step) {
+        let ranges = self.line_ranges(window);
+        let offset = match self.edit.line_move(step, &ranges) {
             LineMove::ToOffset(offset) => offset,
             LineMove::ToLine(line) => {
                 let lines = self.image_lines(window);
-                let from = self.edit.position(self.edit.caret());
+                let from = self.edit.position(self.edit.caret(), &ranges);
                 let x = lines[from.line].shaped.x_for_index(from.byte);
                 let byte = lines[line].shaped.closest_index_for_x(x);
-                self.edit.offset(LinePosition { line, byte })
+                self.edit
+                    .offset(LinePosition { line, byte }, &self.line_ranges(window))
             }
         };
         self.edit.move_to(offset, extend);
     }
 
     /// One rectangle per line that `range` covers, from its start to its end on that line.
-    fn spans(&self, lines: &[LaidLine], range: &Range<usize>) -> Vec<Bounds<Pixels>> {
+    fn spans(
+        &self,
+        lines: &[LaidLine],
+        ranges: &[Range<usize>],
+        range: &Range<usize>,
+    ) -> Vec<Bounds<Pixels>> {
         if range.is_empty() {
             return Vec::new();
         }
         let (start, end) = (
-            self.edit.position(range.start),
-            self.edit.position(range.end),
+            self.edit.position(range.start, ranges),
+            self.edit.position(range.end, ranges),
         );
         lines[start.line..=end.line]
             .iter()

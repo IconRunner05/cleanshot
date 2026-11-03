@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Range;
 
 use crate::{Color, PointF, RectF, ShapeId};
 
@@ -18,17 +19,25 @@ pub const INTER_ASCENT: u16 = 1984;
 /// Inter's descent below the baseline, in design units; its hhea, typo and win metrics agree.
 pub const INTER_DESCENT: u16 = 494;
 
-/// A text shape: lines broken only where the user pressed Enter, with the width DirectWrite or
-/// GPUI measured for exactly this text (F-34).
+/// A text shape: lines broken where the user pressed Enter and, in a box of set width, where a
+/// line would overflow it (F-34, D-119).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextBlock {
     at: PointF,
     text: String,
     size: f32,
-    em_width: f32,
+    width: Width,
 }
 
-/// Why [`TextBlock::new`] refused its size or width.
+/// How wide a text block is, in ems: the widest line as DirectWrite or GPUI measured it, or a
+/// width set for it with the byte offsets where [`wrap`] started a new line to fit it.
+#[derive(Clone, Debug, PartialEq)]
+enum Width {
+    Measured(f32),
+    Wrapped { width: f32, breaks: Vec<usize> },
+}
+
+/// Why [`TextBlock::new`] or [`TextBlock::with_text`] refused its size or width.
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum TextBlockError {
     #[error("a font size must be a positive number of pixels, but it is {0}")]
@@ -56,7 +65,87 @@ impl TextBlock {
             at,
             text,
             size,
-            em_width,
+            width: Width::Measured(em_width),
+        })
+    }
+
+    /// This block holding `text` instead, in the same place, size and box, with `measure` giving
+    /// a line's width in ems as GPUI lays it out.
+    ///
+    /// # Errors
+    ///
+    /// [`TextBlockError::WidthNotMeasured`] if, outside a box, `measure` gives a line a width
+    /// that is not a finite number of ems, at least 0.
+    pub fn with_text(
+        &self,
+        text: String,
+        measure: impl Fn(&str) -> f32,
+    ) -> Result<Self, TextBlockError> {
+        let width = match self.width {
+            Width::Measured(_) => {
+                let mut widest = 0.0_f32;
+                for line in text.split('\n') {
+                    let width = measure(line);
+                    if !(width.is_finite() && width >= 0.0) {
+                        return Err(TextBlockError::WidthNotMeasured(width));
+                    }
+                    widest = widest.max(width);
+                }
+                Width::Measured(widest)
+            }
+            Width::Wrapped { width, .. } => Width::Wrapped {
+                width,
+                breaks: wrap(&text, width, measure),
+            },
+        };
+        Ok(Self {
+            text,
+            width,
+            ..self.clone()
+        })
+    }
+
+    /// This block with its left edge at `x`, wrapped in a box `width` ems wide, which the caller
+    /// has checked is positive (D-119).
+    pub(crate) fn in_box(&self, x: f32, width: f32, measure: impl Fn(&str) -> f32) -> Self {
+        Self {
+            at: PointF { x, y: self.at.y },
+            width: Width::Wrapped {
+                width,
+                breaks: wrap(&self.text, width, measure),
+            },
+            ..self.clone()
+        }
+    }
+
+    /// The width in ems of the box this block wraps in, or `None` if only Enter breaks its lines.
+    #[must_use]
+    pub fn wrap_width(&self) -> Option<f32> {
+        match self.width {
+            Width::Measured(_) => None,
+            Width::Wrapped { width, .. } => Some(width),
+        }
+    }
+
+    /// The byte range of each line in [`TextBlock::text`], top to bottom, without the `\n` that
+    /// ends a line the user broke.
+    pub fn line_ranges(&self) -> impl Iterator<Item = Range<usize>> + '_ {
+        let breaks: &[usize] = match &self.width {
+            Width::Measured(_) => &[],
+            Width::Wrapped { breaks, .. } => breaks,
+        };
+        let text = &self.text;
+        let mut breaks = breaks.iter().copied().peekable();
+        let mut start = Some(0);
+        std::iter::from_fn(move || {
+            let from = start?;
+            let hard_end = text[from..].find('\n').map(|at| from + at);
+            if let Some(soft) = breaks.next_if(|soft| hard_end.is_none_or(|end| *soft < end)) {
+                start = Some(soft);
+                return Some(from..soft);
+            }
+            start = hard_end.map(|end| end + 1);
+            Some(from..hard_end.unwrap_or(text.len()))
         })
     }
 
@@ -90,11 +179,14 @@ impl TextBlock {
     /// The layout box of every line, in image pixels.
     #[must_use]
     pub fn extent(&self) -> RectF {
-        let lines = self.text.split('\n').fold(0.0, |lines, _| lines + 1.0);
+        let lines = self.line_ranges().fold(0.0, |lines, _| lines + 1.0);
+        let ems = match self.width {
+            Width::Measured(width) | Width::Wrapped { width, .. } => width,
+        };
         RectF {
             x: self.at.x,
             y: self.at.y,
-            width: self.em_width * self.size,
+            width: ems * self.size,
             height: lines * LINE_HEIGHT * self.size,
         }
     }
@@ -104,8 +196,7 @@ impl TextBlock {
     #[must_use]
     pub fn line_at(&self, y: f32) -> usize {
         let step = LINE_HEIGHT * self.size;
-        self.text
-            .split('\n')
+        self.line_ranges()
             .skip(1)
             .scan(self.at.y + step, |top, _| {
                 let line_top = *top;
@@ -122,16 +213,59 @@ impl TextBlock {
         let first = baseline(self.at.y, self.size);
         let step = LINE_HEIGHT * self.size;
         let x = self.at.x;
-        self.text.split('\n').scan(first, move |y, line| {
+        self.line_ranges().scan(first, move |y, line| {
             let baseline = PointF { x, y: *y };
             *y += step;
-            Some((line, baseline))
+            Some((&self.text[line], baseline))
         })
     }
 
     pub(crate) fn moved_to(&self, at: PointF) -> Self {
         Self { at, ..self.clone() }
     }
+}
+
+/// The byte offsets in `text` where a line starts because the line before it would overflow a
+/// box `width` ems wide, with `measure` giving a line's width in ems. Each is the start of a
+/// word; a word wider than the box gets a line of its own.
+fn wrap(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> Vec<usize> {
+    let fits = |line: &str| measure(line.trim_end_matches(' ')) <= width;
+    let mut breaks = Vec::new();
+    let mut line_start = 0;
+    for line in text.split('\n') {
+        let end = line_start + line.len();
+        let word_starts = line
+            .char_indices()
+            .filter(|&(at, letter)| {
+                letter != ' '
+                    && line[..at].ends_with(' ')
+                    && !line[..at].trim_start_matches(' ').is_empty()
+            })
+            .map(|(at, _)| line_start + at);
+        let mut start = line_start;
+        let mut last_fit = None;
+        for at in word_starts.chain([end]) {
+            if fits(&text[start..at]) {
+                last_fit = Some(at);
+                continue;
+            }
+            if let Some(fit) = last_fit {
+                breaks.push(fit);
+                start = fit;
+                if fits(&text[start..at]) {
+                    last_fit = Some(at);
+                    continue;
+                }
+            }
+            last_fit = None;
+            if at < end {
+                breaks.push(at);
+                start = at;
+            }
+        }
+        line_start = end + 1;
+    }
+    breaks
 }
 
 /// The baseline of a line whose line box has its top at `top`, in Inter at `size` pixels per
@@ -323,6 +457,73 @@ mod tests {
             Err(TextBlockError::WidthNotMeasured(-0.5))
         );
         assert!(block(24.0, f32::NAN).is_err());
+    }
+
+    fn half_an_em_a_letter(line: &str) -> f32 {
+        line.chars().fold(0.0, |width, _| width + 0.5)
+    }
+
+    fn wrapped(text: &str, width: f32) -> TextBlock {
+        let at = PointF { x: 10.0, y: 20.0 };
+        TextBlock::new(at, text.into(), 16.0, 0.0)
+            .unwrap()
+            .in_box(10.0, width, half_an_em_a_letter)
+    }
+
+    fn lines(block: &TextBlock) -> Vec<&str> {
+        block.lines().map(|(line, _)| line).collect()
+    }
+
+    #[test]
+    fn d119_a_line_wraps_after_the_last_word_that_fits_the_box_and_enter_still_breaks() {
+        let block = wrapped("one two three\nfour five", 3.5);
+        assert_eq!(lines(&block), ["one two ", "three", "four ", "five"]);
+        assert_eq!(
+            block.line_ranges().collect::<Vec<_>>(),
+            [0..8, 8..13, 14..19, 19..23]
+        );
+        assert_eq!(block.line_at(20.0 + 2.5 * 20.0), 2);
+        assert_eq!(block.wrap_width(), Some(3.5));
+        assert_eq!(
+            block.extent(),
+            RectF {
+                x: 10.0,
+                y: 20.0,
+                width: 56.0,
+                height: 80.0,
+            }
+        );
+        assert_eq!(lines(&block.with_size(32.0)), lines(&block));
+    }
+
+    #[test]
+    fn d119_a_word_wider_than_the_box_overflows_on_a_line_of_its_own() {
+        assert_eq!(
+            lines(&wrapped("a verylongword b", 3.0)),
+            ["a ", "verylongword ", "b"]
+        );
+        assert_eq!(lines(&wrapped("   hi there", 2.5)), ["   hi ", "there"]);
+        assert_eq!(lines(&wrapped("", 1.0)), [""]);
+        assert_eq!(lines(&wrapped("fits", 9.0)), ["fits"]);
+    }
+
+    #[test]
+    fn d119_text_retyped_in_a_box_wraps_in_it_and_unboxed_text_is_measured_afresh() {
+        let boxed = wrapped("one", 3.5)
+            .with_text("one two three".into(), half_an_em_a_letter)
+            .unwrap();
+        assert_eq!(lines(&boxed), ["one two ", "three"]);
+        let at = PointF { x: 0.0, y: 0.0 };
+        let measured = TextBlock::new(at, "Hi".into(), 24.0, 1.0).unwrap();
+        assert_eq!(measured.wrap_width(), None);
+        let retyped = measured
+            .with_text("abc\nabcdef".into(), half_an_em_a_letter)
+            .unwrap();
+        assert_eq!(retyped.extent().width, 3.0 * 24.0);
+        assert!(matches!(
+            measured.with_text("x".into(), |_| f32::NAN),
+            Err(TextBlockError::WidthNotMeasured(width)) if width.is_nan()
+        ));
     }
 
     #[test]

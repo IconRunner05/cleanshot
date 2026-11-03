@@ -73,12 +73,9 @@ pub(crate) fn lay_out(
         .collect()
 }
 
-/// The widest line of `text` in ems, as [`TextBlock::new`] takes it (F-34).
-pub(crate) fn em_width(text: &str, window: &Window) -> f32 {
-    text.split('\n')
-        .map(|line| f32::from(shape(line, px(MEASURE_SIZE), black().into(), window).width()))
-        .fold(0.0, f32::max)
-        / MEASURE_SIZE
+/// One line's width in ems, as core measures text with it (F-34, D-119).
+pub(crate) fn line_width(line: &str, window: &Window) -> f32 {
+    f32::from(shape(line, px(MEASURE_SIZE), black().into(), window).width()) / MEASURE_SIZE
 }
 
 /// Each of `texts` measured as a committed text block measures it, in ems, for F-34's drift
@@ -101,7 +98,14 @@ pub fn em_widths(texts: &[&str], cx: &mut App) -> Result<Vec<f32>, Error> {
     let mut widths = Vec::new();
     let window = cx
         .open_window(options, |window, cx| {
-            widths = texts.iter().map(|text| em_width(text, window)).collect();
+            widths = texts
+                .iter()
+                .map(|text| {
+                    text.split('\n')
+                        .map(|line| line_width(line, window))
+                        .fold(0.0, f32::max)
+                })
+                .collect();
             cx.new(|_| EmptyView)
         })
         .map_err(|error| Error::WindowOpen(error.into()))?;

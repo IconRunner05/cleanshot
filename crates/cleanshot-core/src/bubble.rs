@@ -1,4 +1,5 @@
 use crate::document::{PointF, RectF};
+use crate::selection::BoxHandle;
 use crate::text::{LINE_HEIGHT, TextBlock};
 
 /// The space between a bubble's text and its edge, and its corners' radius, as a multiple of
@@ -127,6 +128,33 @@ impl Bubble {
         Some(triangle)
     }
 
+    /// This bubble with the box's `handle` dragged to `to`: the box takes the new width, at
+    /// least one em of text, and the text wraps inside it; the text size and the tail stay, and
+    /// the box's height follows the wrapped text (D-119). `measure` gives a line's width in ems.
+    pub(crate) fn resized(
+        &self,
+        handle: BoxHandle,
+        to: PointF,
+        measure: impl Fn(&str) -> f32,
+    ) -> Self {
+        let size = self.block.size();
+        let padding = BUBBLE_PADDING * size;
+        let outline = self.outline();
+        let (left, right) = (outline.x, outline.x + outline.width);
+        let narrowest = size + 2.0 * padding;
+        let (left, right) = match handle {
+            BoxHandle::TopLeft | BoxHandle::BottomLeft | BoxHandle::Left => {
+                (to.x.min(right - narrowest), right)
+            }
+            BoxHandle::TopRight | BoxHandle::BottomRight | BoxHandle::Right => {
+                (left, to.x.max(left + narrowest))
+            }
+            BoxHandle::Top | BoxHandle::Bottom => (left, right),
+        };
+        let width = (right - left - 2.0 * padding) / size;
+        self.with_block(self.block.in_box(left + padding, width, measure))
+    }
+
     pub(crate) fn with_block(&self, block: TextBlock) -> Self {
         Self {
             block,
@@ -188,13 +216,15 @@ mod tests {
         use crate::selection::{Handle, handles, hits, moved, resized};
         let shape = Shape::Bubble(bubble(PointF { x: 120.0, y: 200.0 }));
         assert_eq!(
-            handles(&shape),
-            vec![(Handle::End, PointF { x: 120.0, y: 200.0 })]
+            handles(&shape).last(),
+            Some(&(Handle::End, PointF { x: 120.0, y: 200.0 }))
         );
         assert!(hits(&shape, PointF { x: 120.0, y: 180.0 }, 1.0));
         assert!(hits(&shape, PointF { x: 150.0, y: 110.0 }, 1.0));
         assert!(!hits(&shape, PointF { x: 160.0, y: 180.0 }, 1.0));
-        let Shape::Bubble(pointed) = resized(&shape, Handle::End, PointF { x: 0.0, y: 0.0 }) else {
+        let Shape::Bubble(pointed) =
+            resized(&shape, Handle::End, PointF { x: 0.0, y: 0.0 }, |_| 0.0)
+        else {
             panic!("a bubble stays a bubble");
         };
         assert_eq!(pointed.tail(), PointF { x: 0.0, y: 0.0 });
@@ -204,6 +234,67 @@ mod tests {
         };
         assert_eq!(shifted.tail(), PointF { x: 125.0, y: 195.0 });
         assert_eq!((shifted.outline().x, shifted.outline().y), (95.0, 85.0));
+    }
+
+    #[test]
+    fn d119_a_bubbles_sides_and_corners_set_its_width_and_the_text_wraps_at_the_same_size() {
+        use crate::document::Shape;
+        use crate::selection::{BoxHandle, Handle, handles, resized};
+        let half_an_em_a_letter = |line: &str| line.chars().fold(0.0, |width, _| width + 0.5);
+        let tail = PointF { x: 120.0, y: 200.0 };
+        let block = TextBlock::new(PointF { x: 100.0, y: 100.0 }, "aa bb cc".into(), 20.0, 4.0);
+        let shape = Shape::Bubble(Bubble::new(block.unwrap(), tail));
+        let sides: Vec<_> = handles(&shape)
+            .into_iter()
+            .filter_map(|(handle, _)| match handle {
+                Handle::Box(side) => Some(side),
+                Handle::Start | Handle::End => None,
+            })
+            .collect();
+        assert_eq!(
+            sides,
+            [
+                BoxHandle::TopLeft,
+                BoxHandle::TopRight,
+                BoxHandle::Right,
+                BoxHandle::BottomRight,
+                BoxHandle::BottomLeft,
+                BoxHandle::Left,
+            ]
+        );
+        let drag = |handle, x| match resized(
+            &shape,
+            Handle::Box(handle),
+            PointF { x, y: 0.0 },
+            half_an_em_a_letter,
+        ) {
+            Shape::Bubble(bubble) => bubble,
+            other => panic!("a bubble stays a bubble, not {other:?}"),
+        };
+        let narrowed = drag(BoxHandle::Right, 150.0);
+        let lines: Vec<_> = narrowed.block().lines().map(|(line, _)| line).collect();
+        assert_eq!(lines, ["aa ", "bb ", "cc"]);
+        assert_eq!(
+            narrowed.outline(),
+            RectF {
+                x: 90.0,
+                y: 90.0,
+                width: 60.0,
+                height: 95.0,
+            }
+        );
+        assert_eq!((narrowed.block().size(), narrowed.tail()), (20.0, tail));
+        let narrowest = drag(BoxHandle::BottomLeft, 160.0);
+        assert_eq!(
+            (narrowest.outline().x, narrowest.outline().width),
+            (150.0, 40.0)
+        );
+        let retyped = narrowed
+            .block()
+            .with_text("aa bb cc dd".into(), half_an_em_a_letter)
+            .unwrap();
+        assert_eq!(retyped.wrap_width(), Some(2.0));
+        assert_eq!(retyped.lines().count(), 4);
     }
 
     #[test]

@@ -140,7 +140,7 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 | F-39 | Zoom / pan | Ctrl+wheel, Space-drag, Ctrl+0 fit | M2 | Smooth on a 4K image. |
 | F-40 | Copy / save from editor | Ctrl+C, Ctrl+S | M2 | Uses F-24's pipeline. |
 | F-41 | Numbered step | N | M4 | Auto-increments 1, 2, 3…; renumbers when one is deleted. |
-| F-42 | Speech bubble | B | M4 | Text box with a draggable tail. |
+| F-42 | Speech bubble | B | M4 | Text box with a draggable tail. The box's sides and corners set its width and the text wraps inside it at the same size; its height follows the text (D-119). |
 | F-43 | Spotlight | S | M4 | Dims everything outside the rectangle. |
 | F-44 | Border and drop shadow | — | M4 | Whole-image effects toggled from the property strip. |
 

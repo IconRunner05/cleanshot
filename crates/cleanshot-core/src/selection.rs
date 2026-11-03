@@ -56,8 +56,13 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
         }),
         // F-34, F-41: text and steps resize by their font size, on the property strip.
         Shape::Text(_) | Shape::Step(_) => Vec::new(),
-        // F-42: the tail's tip is the one handle; the box follows the text.
-        Shape::Bubble(bubble) => vec![(Handle::End, bubble.tail())],
+        // D-119: the box's sides and corners set its width; its height follows the text.
+        Shape::Bubble(bubble) => box_handles(bubble.outline())
+            .into_iter()
+            .filter(|(handle, _)| !matches!(handle, BoxHandle::Top | BoxHandle::Bottom))
+            .map(|(handle, at)| (Handle::Box(handle), at))
+            .chain([(Handle::End, bubble.tail())])
+            .collect(),
     }
 }
 
@@ -147,9 +152,10 @@ pub fn moved(shape: &Shape, offset: PointF) -> Shape {
 }
 
 /// `shape` with `handle` dragged to `to`. A box dragged past its opposite side flips rather
-/// than turning inside out. A handle the shape does not have leaves it unchanged.
+/// than turning inside out. A handle the shape does not have leaves it unchanged. `measure`
+/// gives a line's width in ems, for a bubble whose text wraps in its box (D-119).
 #[must_use]
-pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
+pub fn resized(shape: &Shape, handle: Handle, to: PointF, measure: impl Fn(&str) -> f32) -> Shape {
     let new_bounds = |handle| bounds(shape).map(|rect| resized_box(rect, handle, to));
     match (shape, handle) {
         (Shape::Arrow { to: end, .. }, Handle::Start) => Shape::Arrow { from: to, to: *end },
@@ -157,6 +163,9 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
         (Shape::Line { to: end, .. }, Handle::Start) => Shape::Line { from: to, to: *end },
         (Shape::Line { from, .. }, Handle::End) => Shape::Line { from: *from, to },
         (Shape::Bubble(bubble), Handle::End) => Shape::Bubble(bubble.with_tail(to)),
+        (Shape::Bubble(bubble), Handle::Box(handle)) => {
+            Shape::Bubble(bubble.resized(handle, to, measure))
+        }
         (Shape::Rect { fill, .. }, Handle::Box(handle)) => match new_bounds(handle) {
             Some(rect) => Shape::Rect { rect, fill: *fill },
             None => shape.clone(),
@@ -195,7 +204,7 @@ pub fn resized(shape: &Shape, handle: Handle, to: PointF) -> Shape {
             Handle::Start | Handle::End,
         )
         | (Shape::Text(_) | Shape::Step(_), Handle::Box(_) | Handle::Start | Handle::End)
-        | (Shape::Bubble(_), Handle::Box(_) | Handle::Start) => shape.clone(),
+        | (Shape::Bubble(_), Handle::Start) => shape.clone(),
     }
 }
 
@@ -505,7 +514,12 @@ mod tests {
             rect: rect(10.0, 10.0, 20.0, 20.0),
             fill: Fill::Hollow,
         };
-        let resized = resized(&shape, Handle::Box(BoxHandle::TopLeft), point(40.0, 50.0));
+        let resized = resized(
+            &shape,
+            Handle::Box(BoxHandle::TopLeft),
+            point(40.0, 50.0),
+            |_| 0.0,
+        );
         assert_eq!(
             resized,
             Shape::Rect {
@@ -518,7 +532,12 @@ mod tests {
     #[test]
     fn f30_an_edge_handle_moves_only_its_side() {
         let shape = Shape::Highlight(rect(10.0, 10.0, 20.0, 20.0));
-        let resized = resized(&shape, Handle::Box(BoxHandle::Right), point(50.0, 99.0));
+        let resized = resized(
+            &shape,
+            Handle::Box(BoxHandle::Right),
+            point(50.0, 99.0),
+            |_| 0.0,
+        );
         assert_eq!(resized, Shape::Highlight(rect(10.0, 10.0, 40.0, 20.0)));
     }
 
@@ -529,6 +548,7 @@ mod tests {
             &shape,
             Handle::Box(BoxHandle::BottomRight),
             point(40.0, 30.0),
+            |_| 0.0,
         );
         assert_eq!(
             resized,
@@ -545,7 +565,7 @@ mod tests {
         assert_eq!(handle_at(&shape, point(11.0, 1.0), 2.0), Some(Handle::End));
         assert_eq!(handle_at(&shape, point(5.0, 3.0), 2.0), None);
         assert_eq!(
-            resized(&shape, Handle::End, point(5.0, 20.0)),
+            resized(&shape, Handle::End, point(5.0, 20.0), |_| 0.0),
             Shape::Arrow {
                 from: point(0.0, 0.0),
                 to: point(5.0, 20.0),

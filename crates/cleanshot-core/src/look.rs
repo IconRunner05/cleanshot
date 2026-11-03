@@ -551,7 +551,7 @@ mod tests {
             panic!("{tool:?} draws by dragging");
         };
         drag.extend(PointF { x: 40.0, y: 30.0 });
-        drag.command(false)
+        drag.command(false, |_| 0.0)
     }
 
     #[test]

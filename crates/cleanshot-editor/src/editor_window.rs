@@ -23,7 +23,7 @@ use crate::canvas::{
 };
 use crate::placement::{MIN_WINDOW, Placement, opening_size};
 use crate::strip::property_strip;
-use crate::text::register_inter;
+use crate::text::{line_width, register_inter};
 use crate::text_box::TextBox;
 use crate::theme::Theme;
 use crate::toolbar::toolbar;
@@ -198,7 +198,7 @@ impl EditorView {
                 let Some(drag) = self.drag.take() else {
                     return;
                 };
-                if let Some(command) = drag.command(shift) {
+                if let Some(command) = drag.command(shift, |line| line_width(line, window)) {
                     self.apply(command);
                 } else if let Some(origin) = drag.typed_on_click(self.tool) {
                     self.selected = None;
@@ -478,7 +478,10 @@ impl Render for EditorView {
                 over: Some(paint_text_box(text_box.clone(), input, self.focus.clone())),
             },
             None => Overlay {
-                preview: self.drag.as_ref().and_then(|drag| drag.command(self.shift)),
+                preview: self
+                    .drag
+                    .as_ref()
+                    .and_then(|drag| drag.command(self.shift, |line| line_width(line, window))),
                 selected: self.selected,
                 crop_handles: self.tool == Tool::Crop,
                 over: None,

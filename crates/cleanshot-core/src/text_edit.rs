@@ -202,11 +202,12 @@ impl TextEdit {
         self.move_to(to, extend);
     }
 
-    /// Where Up or Down moves the caret from its line.
+    /// Where Up or Down moves the caret from its line among `lines`, laid out as for
+    /// [`TextEdit::position`].
     #[must_use]
-    pub fn line_move(&self, step: LineStep) -> LineMove {
-        let line = self.position(self.head).line;
-        let last = self.text.matches('\n').count();
+    pub fn line_move(&self, step: LineStep, lines: &[Range<usize>]) -> LineMove {
+        let line = self.position(self.head, lines).line;
+        let last = lines.len().saturating_sub(1);
         match step {
             LineStep::Up if line == 0 => LineMove::ToOffset(0),
             LineStep::Up => LineMove::ToLine(line - 1),
@@ -245,34 +246,32 @@ impl TextEdit {
         self.selecting = false;
     }
 
-    /// Where `offset` falls, moved onto a whole character inside the text.
+    /// Where `offset` falls, moved onto a whole character inside the text, with `lines` the byte
+    /// range of each line as [`TextBlock::line_ranges`] lays the text out. Where a wrapped line
+    /// ends, the offset is the start of the next.
     #[must_use]
-    pub fn position(&self, offset: usize) -> LinePosition {
+    pub fn position(&self, offset: usize, lines: &[Range<usize>]) -> LinePosition {
         let byte = self.byte_at(offset);
-        let before = &self.text[..byte];
-        let line_start = before.rfind('\n').map_or(0, |line_break| line_break + 1);
+        let line = lines
+            .iter()
+            .rposition(|line| line.start <= byte)
+            .unwrap_or(0);
         LinePosition {
-            line: before.matches('\n').count(),
-            byte: byte - line_start,
+            line,
+            byte: byte - lines.get(line).map_or(0, |line| line.start),
         }
     }
 
-    /// The offset at `position`: past the last line is the end of the text, past a line's end is
-    /// that end, and inside a character is that character's start.
+    /// The offset at `position` among `lines`, laid out as for [`TextEdit::position`]: past the
+    /// last line is the end of the text, past a line's end is that end, and inside a character
+    /// is that character's start.
     #[must_use]
-    pub fn offset(&self, position: LinePosition) -> usize {
-        let mut line_starts = std::iter::once(0).chain(
-            self.text
-                .match_indices('\n')
-                .map(|(line_break, _)| line_break + 1),
-        );
-        let Some(line_start) = line_starts.nth(position.line) else {
+    pub fn offset(&self, position: LinePosition, lines: &[Range<usize>]) -> usize {
+        let Some(line) = lines.get(position.line) else {
             return utf16_len(&self.text);
         };
-        let rest = &self.text[line_start..];
-        let line = rest.split_once('\n').map_or(rest, |(line, _)| line);
-        let byte = line.floor_char_boundary(position.byte);
-        utf16_len(&self.text[..line_start + byte])
+        let byte = self.text[line.clone()].floor_char_boundary(position.byte);
+        utf16_len(&self.text[..line.start + byte])
     }
 
     fn line_start(&self, offset: usize) -> usize {
@@ -426,49 +425,55 @@ impl TextOrigin {
             Self::New { frame, .. } | Self::Existing { frame, .. } => *frame,
         }
     }
+
+    /// `text` as a block where this origin puts it: at a new box's place and size, or in an
+    /// existing block's place, size and box (D-119). `measure` gives a line's width in ems.
+    ///
+    /// # Errors
+    ///
+    /// [`TextBlockError::SizeNotPositive`] if a new box's size is not a text block's;
+    /// [`TextBlockError::WidthNotMeasured`] as [`TextBlock::with_text`] gives it.
+    pub fn block(
+        &self,
+        text: String,
+        measure: impl Fn(&str) -> f32,
+    ) -> Result<TextBlock, TextBlockError> {
+        let empty = match self {
+            Self::New { at, size, .. } => TextBlock::new(*at, String::new(), *size, 0.0)?,
+            Self::Existing { block, .. } => block.clone(),
+        };
+        empty.with_text(text, measure)
+    }
 }
 
 /// The one command that commits `edit` (F-34, F-38: one undo step per text edit), with
-/// `em_width` measured for its text, or `None` when committing changes nothing: an empty new
-/// box, or an existing shape whose text is unchanged. Emptying an existing shape removes it. A
-/// composition still in progress is committed as it stands, as Windows completes one when its
-/// field loses focus (D-52).
+/// `measure` giving a line's width in ems, or `None` when committing changes nothing: an empty
+/// new box, or an existing shape whose text is unchanged. Emptying an existing shape removes
+/// it. A composition still in progress is committed as it stands, as Windows completes one when
+/// its field loses focus (D-52).
 ///
 /// # Errors
 ///
-/// [`TextBlockError`] when the origin's size or `em_width` is not a valid [`TextBlock`]'s.
+/// [`TextBlockError`] when a new box's size is not a valid [`TextBlock`]'s.
 pub fn commit_text(
     origin: &TextOrigin,
     edit: &TextEdit,
-    em_width: f32,
+    measure: impl Fn(&str) -> f32,
 ) -> Result<Option<Command>, TextBlockError> {
     let text = edit.text();
     Ok(match origin {
         TextOrigin::New { .. } if text.is_empty() => None,
-        TextOrigin::New {
-            at,
-            size,
-            style,
-            frame,
-        } => Some(Command::Add {
-            shape: frame.around(TextBlock::new(*at, text.to_owned(), *size, em_width)?),
+        TextOrigin::New { style, frame, .. } => Some(Command::Add {
+            shape: frame.around(origin.block(text.to_owned(), measure)?),
             style: *style,
         }),
         TextOrigin::Existing { block, .. } if block.text() == text => None,
         TextOrigin::Existing { id, .. } if text.is_empty() => Some(Command::Remove(*id)),
         TextOrigin::Existing {
-            id,
-            block,
-            style,
-            frame,
+            id, style, frame, ..
         } => Some(Command::Replace {
             id: *id,
-            shape: frame.around(TextBlock::new(
-                block.at(),
-                text.to_owned(),
-                block.size(),
-                em_width,
-            )?),
+            shape: frame.around(origin.block(text.to_owned(), measure)?),
             style: *style,
         }),
     })
@@ -640,7 +645,7 @@ mod tests {
     }
 
     fn commit(origin: &TextOrigin, typed: &str) -> Option<Command> {
-        commit_text(origin, &TextEdit::new(typed.into()), 2.5).unwrap()
+        commit_text(origin, &TextEdit::new(typed.into()), |_| 2.5).unwrap()
     }
 
     #[test]
@@ -734,7 +739,7 @@ mod tests {
         };
         let edit = TextEdit::new("hi".into());
         assert!(matches!(
-            commit_text(&new, &edit, f32::NAN),
+            commit_text(&new, &edit, |_| f32::NAN),
             Err(TextBlockError::WidthNotMeasured(width)) if width.is_nan()
         ));
     }
@@ -742,20 +747,40 @@ mod tests {
     #[test]
     fn f34_an_offset_maps_to_its_line_and_byte_and_back_on_whole_characters() {
         let edit = TextEdit::new("ab\n\u{1F600}c\n".into());
+        let lines = [0..2, 3..8, 9..9];
         let at = |line, byte| LinePosition { line, byte };
-        assert_eq!(edit.position(0), at(0, 0));
-        assert_eq!(edit.position(2), at(0, 2));
-        assert_eq!(edit.position(3), at(1, 0));
-        assert_eq!(edit.position(4), at(1, 0));
-        assert_eq!(edit.position(5), at(1, 4));
-        assert_eq!(edit.position(6), at(1, 5));
-        assert_eq!(edit.position(99), at(2, 0));
-        assert_eq!(edit.offset(at(1, 4)), 5);
-        assert_eq!(edit.offset(at(1, 5)), 6);
-        assert_eq!(edit.offset(at(1, 2)), 3);
-        assert_eq!(edit.offset(at(0, 9)), 2);
-        assert_eq!(edit.offset(at(2, 3)), 7);
-        assert_eq!(edit.offset(at(7, 0)), 7);
+        let position = |offset| edit.position(offset, &lines);
+        let offset = |position| edit.offset(position, &lines);
+        assert_eq!(position(0), at(0, 0));
+        assert_eq!(position(2), at(0, 2));
+        assert_eq!(position(3), at(1, 0));
+        assert_eq!(position(4), at(1, 0));
+        assert_eq!(position(5), at(1, 4));
+        assert_eq!(position(6), at(1, 5));
+        assert_eq!(position(99), at(2, 0));
+        assert_eq!(offset(at(1, 4)), 5);
+        assert_eq!(offset(at(1, 5)), 6);
+        assert_eq!(offset(at(1, 2)), 3);
+        assert_eq!(offset(at(0, 9)), 2);
+        assert_eq!(offset(at(2, 3)), 7);
+        assert_eq!(offset(at(7, 0)), 7);
+    }
+
+    #[test]
+    fn d119_the_caret_walks_wrapped_lines_and_sits_at_the_start_of_the_next_at_a_wrap() {
+        let edit = TextEdit::new("one two".into());
+        let lines = [0..4, 4..7];
+        let at = |line, byte| LinePosition { line, byte };
+        assert_eq!(edit.position(3, &lines), at(0, 3));
+        assert_eq!(edit.position(4, &lines), at(1, 0));
+        assert_eq!(edit.position(6, &lines), at(1, 2));
+        assert_eq!(edit.offset(at(1, 1), &lines), 5);
+        assert_eq!(edit.offset(at(0, 9), &lines), 4);
+        assert_eq!(edit.line_move(LineStep::Up, &lines), LineMove::ToLine(0));
+        assert_eq!(
+            edit.line_move(LineStep::Down, &lines),
+            LineMove::ToOffset(7)
+        );
     }
 
     #[test]
@@ -774,13 +799,17 @@ mod tests {
     #[test]
     fn f34_up_and_down_go_to_the_next_line_or_past_the_first_and_last_to_the_ends() {
         let mut edit = TextEdit::new("ab\ncd\nef".into());
-        assert_eq!(edit.line_move(LineStep::Down), LineMove::ToOffset(8));
-        assert_eq!(edit.line_move(LineStep::Up), LineMove::ToLine(1));
+        let lines = [0..2, 3..5, 6..8];
+        assert_eq!(
+            edit.line_move(LineStep::Down, &lines),
+            LineMove::ToOffset(8)
+        );
+        assert_eq!(edit.line_move(LineStep::Up, &lines), LineMove::ToLine(1));
         edit.move_to(4, false);
         edit.move_to(1, true);
         assert_eq!(edit.caret(), 1);
-        assert_eq!(edit.line_move(LineStep::Up), LineMove::ToOffset(0));
-        assert_eq!(edit.line_move(LineStep::Down), LineMove::ToLine(1));
+        assert_eq!(edit.line_move(LineStep::Up, &lines), LineMove::ToOffset(0));
+        assert_eq!(edit.line_move(LineStep::Down, &lines), LineMove::ToLine(1));
     }
 
     #[test]
@@ -814,7 +843,7 @@ mod tests {
         };
         let mut edit = TextEdit::new("a".into());
         edit.replace_and_mark(None, "ni", None);
-        let committed = commit_text(&new, &edit, 2.5).unwrap();
+        let committed = commit_text(&new, &edit, |_| 2.5).unwrap();
         assert_eq!(
             committed,
             Some(Command::Add {

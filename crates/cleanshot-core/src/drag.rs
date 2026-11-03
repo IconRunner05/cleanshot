@@ -157,11 +157,11 @@ impl Drag {
     /// go of without moving it, so a click on one still types in it (F-34, F-42, D-118).
     #[must_use]
     pub fn typed_on_click(&self, tool: Tool) -> Option<TextOrigin> {
-        let Self::Move { original, .. } = self else {
+        let Self::Move { original, from, to } = self else {
             return None;
         };
         match tool {
-            Tool::Text | Tool::Bubble if self.command(false).is_none() => existing_text(original),
+            Tool::Text | Tool::Bubble if from == to => existing_text(original),
             Tool::Text
             | Tool::Bubble
             | Tool::Select
@@ -188,9 +188,10 @@ impl Drag {
 
     /// The edit this drag makes if released now, `constrained` while Shift is held. Shift keeps a
     /// move on one axis, snaps a line end to 45 degrees and squares a box resized by a corner.
-    /// `None` if the drag changes nothing.
+    /// `None` if the drag changes nothing. `measure` gives a line's width in ems, for a bubble
+    /// whose text wraps in its box (D-119).
     #[must_use]
-    pub fn command(&self, constrained: bool) -> Option<Command> {
+    pub fn command(&self, constrained: bool, measure: impl Fn(&str) -> f32) -> Option<Command> {
         let replace = |original: &ShapeEntry, shape: Shape| {
             (shape != original.shape).then_some(Command::Replace {
                 id: original.id,
@@ -214,7 +215,7 @@ impl Drag {
                 } else {
                     *to
                 };
-                replace(original, resized(&original.shape, *handle, to))
+                replace(original, resized(&original.shape, *handle, to, measure))
             }
             Self::Recrop {
                 original,
@@ -411,7 +412,7 @@ mod tests {
     fn dragged(press: Press, to: PointF, constrained: bool) -> Option<Command> {
         let mut drag = drag(press)?;
         drag.extend(to);
-        drag.command(constrained)
+        drag.command(constrained, |_| 0.0)
     }
 
     #[test]
@@ -496,7 +497,7 @@ mod tests {
             drag.extend(at);
         }
         assert_eq!(
-            drag.command(false),
+            drag.command(false, |_| 0.0),
             Tool::Pen.command(
                 &[point(0.0, 0.0), rest[0], rest[1]],
                 false,
@@ -736,7 +737,7 @@ mod tests {
         };
         tip.extend(point(20.0, 195.0));
         assert_eq!(
-            tip.command(false),
+            tip.command(false, |_| 0.0),
             Some(Command::Replace {
                 id: bubble_id,
                 shape: Shape::Bubble(Bubble::new(block, point(20.0, 195.0))),
@@ -749,7 +750,7 @@ mod tests {
             panic!("the bubble tool picks up the bubble");
         };
         held.extend(point(130.0, 160.0));
-        assert!(held.command(false).is_some());
+        assert!(held.command(false, |_| 0.0).is_some());
         assert_eq!(held.typed_on_click(Tool::Bubble), None);
     }
 
@@ -770,7 +771,7 @@ mod tests {
             drag
         };
         let recrop = |from, to| match dragged(Tool::Crop, from, to) {
-            drag @ Drag::Recrop { .. } => drag.command(false),
+            drag @ Drag::Recrop { .. } => drag.command(false, |_| 0.0),
             other => panic!("the crop tool at {from:?} starts {other:?}"),
         };
         assert_eq!(

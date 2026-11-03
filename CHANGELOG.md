@@ -14,6 +14,8 @@ section exists.
 - Ctrl+] and Ctrl+[ move the selected shape in front of or behind its neighbour, and
   Ctrl+Shift+] and Ctrl+Shift+[ move it to the front or back. Each move can be undone
   (F-38).
+- A speech bubble's box can be resized by its sides and corners. The text wraps inside
+  it at the same size, in the editor and in the copied or saved image alike (F-42).
 
 ### Changed
 
