@@ -242,9 +242,6 @@ impl Layout {
     }
 }
 
-/// D-117: tooltips over a window's buttons, one per button, each shown after the system's
-/// hover time. They belong to the window that shows the buttons, which destroys them with
-/// itself.
 /// D-117: how long the pointer rests on a control before its tooltip shows, as set in Windows.
 ///
 /// # Errors
@@ -264,6 +261,9 @@ pub fn hover_time() -> Result<Duration, windows::core::Error> {
     Ok(Duration::from_millis(hover.into()))
 }
 
+/// D-117: tooltips over a window's buttons, one per button, each shown after the system's
+/// hover time. They belong to the window that shows the buttons, which destroys them with
+/// itself.
 pub(crate) struct Tips {
     window: HWND,
     owner: HWND,
