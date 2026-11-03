@@ -17,7 +17,7 @@ use cleanshot_core::{
 };
 use cleanshot_editor::{AsyncApp, ask_save_path};
 use cleanshot_win::capture::{
-    AdapterReport, Copied, MonitorImage, OutputReport, RECT, black_share, monitor_of,
+    AdapterReport, Copied, Devices, MonitorImage, OutputReport, RECT, black_share, monitor_of,
 };
 use cleanshot_win::instance::Launch;
 use cleanshot_win::log::{Log, LogError, Usage, os_code, since_start, usage};
@@ -276,6 +276,8 @@ struct Session {
     last_selection: Cell<Option<RECT>>,
     /// So a P-04 after-use sample knows whether a capture started after it was set.
     captures_started: Cell<u64>,
+    /// P-01: the capture devices kept from one capture to the next.
+    devices: RefCell<Devices>,
     /// C-23: open only under `--log`. Shared with the tray's callback, which can outlive the
     /// session by a request as Cleanshot quits.
     log: Rc<RefCell<Option<Log>>>,
@@ -295,6 +297,7 @@ impl Session {
             thumbnails_shown: Cell::new(0),
             last_selection: Cell::new(None),
             captures_started: Cell::new(0),
+            devices: RefCell::new(Devices::default()),
             log,
         }
     }

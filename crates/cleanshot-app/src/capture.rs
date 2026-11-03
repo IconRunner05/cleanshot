@@ -273,7 +273,7 @@ fn overlay_listener(
 /// Copies every monitor, with the pointer drawn in when Show pointer is on (F-12), so the
 /// overlay shows what is copied or saved. Warns and gives nothing if the copy fails.
 fn copy_screen(session: &Session, stage: &dyn Fn(&str)) -> Option<Desktop> {
-    let mut desktop = match capture_desktop() {
+    let mut desktop = match capture_desktop(&mut session.devices.borrow_mut()) {
         Ok(desktop) => desktop,
         Err(error) => {
             session.warn(Warning::Failed("The screen could not be captured", &error));

@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use cleanshot_core::{Monitor, Point, Rect, RgbaImage, first_holding};
 pub use windows::Win32::Foundation::RECT;
-use windows::Win32::Foundation::{HMODULE, LPARAM, POINT};
+use windows::Win32::Foundation::{HMODULE, LPARAM, LUID, POINT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ,
@@ -64,7 +64,10 @@ pub struct MonitorImage {
 pub fn capture_all(method: Method) -> Result<Vec<MonitorImage>, Error> {
     match method {
         Method::GdiBitBlt => monitor_bounds()?.into_iter().map(bitblt).collect(),
-        Method::DesktopDuplication => duplicate_all().results.into_iter().collect(),
+        Method::DesktopDuplication => duplicate_all(&mut Devices::default())
+            .results
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -168,8 +171,8 @@ pub struct Desktop {
     pub outputs: Vec<OutputReport>,
 }
 
-/// One adapter as DXGI listed it, how long listing it and its outputs took, and how long its
-/// Direct3D device took to make; None when no device was made.
+/// One adapter as DXGI listed it, how long listing it and its outputs took, and where its
+/// Direct3D device came from.
 #[derive(Debug)]
 pub struct AdapterReport {
     /// Its place in DXGI's list, as two adapters can share a name.
@@ -177,7 +180,36 @@ pub struct AdapterReport {
     pub adapter: String,
     pub vendor: u32,
     pub listing: Duration,
-    pub device: Option<Duration>,
+    pub device: Device,
+}
+
+/// Where an adapter's Direct3D device came from for one copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Device {
+    /// P-01: the adapter shows no screen, so it got none: a device wakes a sleeping GPU.
+    Skipped,
+    /// Making one failed; the copy's error says why.
+    Failed,
+    /// Made for this copy, taking this long.
+    Made(Duration),
+    /// The device the last copy on this adapter made, kept by [`Devices`].
+    Kept,
+}
+
+/// P-01: the Direct3D device of each adapter that showed the desktop, kept from one copy to
+/// the next so a copy skips making one. A device holds no pixels between copies (C-22), and
+/// one whose copy failed is not kept, so the next copy makes it afresh.
+#[derive(Default)]
+pub struct Devices {
+    kept: Vec<(LUID, ID3D11Device, ID3D11DeviceContext)>,
+}
+
+impl Devices {
+    fn take(&mut self, adapter: LUID) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
+        let at = self.kept.iter().position(|(kept, _, _)| *kept == adapter)?;
+        let (_, device, context) = self.kept.swap_remove(at);
+        Some((device, context))
+    }
 }
 
 /// How [`Desktop::monitors`] were copied.
@@ -223,19 +255,20 @@ pub struct FrameReport {
     pub copy: Option<Duration>,
 }
 
-/// Copies every monitor with Desktop Duplication, or with GDI `BitBlt` when any output
-/// refuses duplication (D-28), before any window of ours is shown (F-02).
+/// Copies every monitor with Desktop Duplication, on the devices `devices` kept from the last
+/// copy where it has them, or with GDI `BitBlt` when any output refuses duplication (D-28),
+/// before any window of ours is shown (F-02).
 ///
 /// # Errors
 ///
 /// The GDI copy's error when duplication was refused and GDI failed too.
-pub fn capture_desktop() -> Result<Desktop, Error> {
+pub fn capture_desktop(devices: &mut Devices) -> Result<Desktop, Error> {
     let Duplicates {
         factory,
         adapters,
         reports: outputs,
         results,
-    } = duplicate_all();
+    } = duplicate_all(devices);
     match choose(results) {
         Ok(monitors) => Ok(Desktop {
             monitors,
@@ -422,7 +455,7 @@ struct Duplicates {
     results: Vec<Result<MonitorImage, Error>>,
 }
 
-fn duplicate_all() -> Duplicates {
+fn duplicate_all(devices: &mut Devices) -> Duplicates {
     let mut duplicates = Duplicates::default();
     let making = Instant::now();
     // SAFETY: CreateDXGIFactory1 has no preconditions.
@@ -439,7 +472,9 @@ fn duplicate_all() -> Duplicates {
         let listing = Instant::now();
         // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
         match unsafe { factory.EnumAdapters1(adapter_index) } {
-            Ok(adapter) => duplicate_adapter(&adapter, adapter_index, listing, &mut duplicates),
+            Ok(adapter) => {
+                duplicate_adapter(&adapter, adapter_index, listing, devices, &mut duplicates);
+            }
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
             Err(error) => {
                 duplicates.results.push(Err(Error::Capture(error)));
@@ -454,11 +489,16 @@ fn duplicate_adapter(
     adapter: &IDXGIAdapter1,
     index: u32,
     listing: Instant,
+    devices: &mut Devices,
     duplicates: &mut Duplicates,
 ) {
     // SAFETY: a read of the adapter's own description.
-    let (name, vendor) = match unsafe { adapter.GetDesc1() } {
-        Ok(description) => (wide(&description.Description), description.VendorId),
+    let (name, vendor, luid) = match unsafe { adapter.GetDesc1() } {
+        Ok(description) => (
+            wide(&description.Description),
+            description.VendorId,
+            description.AdapterLuid,
+        ),
         Err(error) => return duplicates.results.push(Err(Error::Capture(error))),
     };
     let listed = list_outputs(adapter, index, &name, vendor, duplicates);
@@ -470,18 +510,56 @@ fn duplicate_adapter(
             adapter: name,
             vendor,
             listing,
-            device: None,
+            device: Device::Skipped,
         });
         return duplicates
             .reports
             .extend(listed.into_iter().map(|(_, report)| report));
     }
+    let (device, context, made) = match devices.take(luid) {
+        Some((device, context)) => (device, context, Device::Kept),
+        None => match make_device(adapter) {
+            Ok((device, context, took)) => (device, context, Device::Made(took)),
+            Err(error) => {
+                duplicates.adapters.push(AdapterReport {
+                    index,
+                    adapter: name,
+                    vendor,
+                    listing,
+                    device: Device::Failed,
+                });
+                duplicates
+                    .reports
+                    .extend(listed.into_iter().map(|(_, report)| report));
+                return duplicates.results.push(Err(Error::Capture(error)));
+            }
+        },
+    };
+    duplicates.adapters.push(AdapterReport {
+        index,
+        adapter: name,
+        vendor,
+        listing,
+        device: made,
+    });
+    let before = duplicates.results.len();
+    for (output, report) in listed {
+        duplicate_listed(&device, &context, &output, report, duplicates);
+    }
+    if duplicates.results[before..].iter().all(Result::is_ok) {
+        devices.kept.push((luid, device, context));
+    }
+}
+
+fn make_device(
+    adapter: &IDXGIAdapter1,
+) -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext, Duration)> {
     let mut device = None;
     let mut context = None;
     let making = Instant::now();
     // SAFETY: the device is created on `adapter`, as DuplicateOutput requires; outputs are
     // written only on success.
-    let created = unsafe {
+    unsafe {
         D3D11CreateDevice(
             adapter,
             D3D_DRIVER_TYPE_UNKNOWN,
@@ -493,26 +571,13 @@ fn duplicate_adapter(
             None,
             Some(&raw mut context),
         )
-    };
-    duplicates.adapters.push(AdapterReport {
-        index,
-        adapter: name,
-        vendor,
-        listing,
-        device: created.is_ok().then(|| making.elapsed()),
-    });
-    if let Err(error) = created {
-        duplicates
-            .reports
-            .extend(listed.into_iter().map(|(_, report)| report));
-        return duplicates.results.push(Err(Error::Capture(error)));
-    }
-    let device: ID3D11Device = device.expect("D3D11CreateDevice returned a device on success");
-    let context: ID3D11DeviceContext =
-        context.expect("D3D11CreateDevice returned a context on success");
-    for (output, report) in listed {
-        duplicate_listed(&device, &context, &output, report, duplicates);
-    }
+    }?;
+    let took = making.elapsed();
+    Ok((
+        device.expect("D3D11CreateDevice returned a device on success"),
+        context.expect("D3D11CreateDevice returned a context on success"),
+        took,
+    ))
 }
 
 /// Each output of `adapter` with its report, before any duplication; an output that fails to
@@ -984,7 +1049,7 @@ mod tests {
     #[test]
     fn d28_a_duplicated_desktop_reports_each_output_and_its_first_frame() {
         let _screen = screen();
-        let desktop = capture_desktop().expect("the desktop is copied");
+        let desktop = capture_desktop(&mut Devices::default()).expect("the desktop is copied");
         assert!(matches!(desktop.copied, Copied::Duplication), "{desktop:?}");
         assert_eq!(desktop.outputs.len(), desktop.monitors.len());
         for (output, monitor) in desktop.outputs.iter().zip(&desktop.monitors) {
@@ -1004,7 +1069,7 @@ mod tests {
             desktop
                 .adapters
                 .iter()
-                .any(|adapter| adapter.device.is_some()),
+                .any(|adapter| matches!(adapter.device, Device::Made(_))),
             "the duplicating adapter says how long its device took: {:?}",
             desktop.adapters
         );
@@ -1013,7 +1078,7 @@ mod tests {
     #[test]
     fn p01_only_an_adapter_showing_the_desktop_gets_a_device() {
         let _screen = screen();
-        let desktop = capture_desktop().expect("the desktop is copied");
+        let desktop = capture_desktop(&mut Devices::default()).expect("the desktop is copied");
         let showing: Vec<u32> = desktop
             .outputs
             .iter()
@@ -1030,11 +1095,36 @@ mod tests {
         );
         for adapter in &desktop.adapters {
             assert_eq!(
-                adapter.device.is_some(),
+                adapter.device != Device::Skipped,
                 showing.contains(&adapter.index),
                 "{adapter:?}"
             );
         }
+    }
+
+    #[test]
+    fn p01_a_second_copy_duplicates_on_the_device_the_first_one_made() {
+        let _screen = screen();
+        let mut devices = Devices::default();
+        let first = capture_desktop(&mut devices).expect("the desktop is copied");
+        let second = capture_desktop(&mut devices).expect("the desktop is copied again");
+        assert!(matches!(second.copied, Copied::Duplication), "{second:?}");
+        let made = |desktop: &Desktop, device: fn(Device) -> bool| -> Vec<u32> {
+            desktop
+                .adapters
+                .iter()
+                .filter(|adapter| device(adapter.device))
+                .map(|adapter| adapter.index)
+                .collect()
+        };
+        let first_made = made(&first, |device| matches!(device, Device::Made(_)));
+        assert!(!first_made.is_empty(), "{:?}", first.adapters);
+        assert_eq!(
+            made(&second, |device| device == Device::Kept),
+            first_made,
+            "{:?}",
+            second.adapters
+        );
     }
 
     #[test]
