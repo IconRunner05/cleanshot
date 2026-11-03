@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use cleanshot_core::RgbaImage;
 use cleanshot_win::accessibility::controls_in_own_windows;
 use cleanshot_win::capture::RECT;
-use cleanshot_win::thumbnail::{Saving, Thumbnail};
+use cleanshot_win::thumbnail::{Export, Thumbnail};
 
 const TEST: &str = "f58_ui_automation_finds_the_thumbnail_by_its_window_name";
 const NAME: &str = "Screenshot preview";
@@ -36,10 +36,10 @@ fn main() {
     });
     let preview = RgbaImage::new(120, 80, vec![128; 120 * 80 * 4]).expect("120x80 RGBA");
     let ran = cleanshot_editor::run(move |_| {
-        let saving = Saving::On {
+        let export = Export::Allowed {
             drag: Box::new(|| None),
         };
-        match Thumbnail::show(&preview, RECT::default(), saving, |_| {}) {
+        match Thumbnail::show(&preview, RECT::default(), export, |_| {}) {
             // The thumbnail stays up until the walk ends the process.
             Ok(thumbnail) => std::mem::forget(thumbnail),
             Err(error) => {

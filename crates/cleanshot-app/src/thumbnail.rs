@@ -45,16 +45,16 @@ pub(super) fn show(
         }
     };
     let saving_off = matches!(session.policy.saving(), Saving::Off(_));
-    let saving = match session.policy.saving() {
-        Saving::Off(off) => thumbnail::Saving::Off(*off),
-        Saving::Allowed { .. } => thumbnail::Saving::On {
+    let export = match session.policy.saving() {
+        Saving::Off(off) => thumbnail::Export::Off(*off),
+        Saving::Allowed { .. } => thumbnail::Export::Allowed {
             drag: drag_out(Rc::downgrade(session), Arc::clone(&image)),
         },
     };
     let count = session.thumbnails_shown.get() + 1;
     session.thumbnails_shown.set(count);
     let (acting, defer, pass_on) = (Rc::downgrade(session), Rc::clone(defer), Rc::clone(pass_on));
-    let shown = Thumbnail::show(&preview, selected, saving, move |event| {
+    let shown = Thumbnail::show(&preview, selected, export, move |event| {
         let (acting, pass_on) = (acting.clone(), Rc::clone(&pass_on));
         // The event arrives inside the thumbnail's window procedure, so it is acted on after.
         defer(

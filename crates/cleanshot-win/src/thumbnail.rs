@@ -40,9 +40,9 @@ pub enum ThumbnailEvent {
 
 /// Whether the thumbnail saves and drags out, which the organisation's policy can turn off
 /// (F-57).
-pub enum Saving {
+pub enum Export {
     /// Save works, and a drag offers what `drag` makes when it starts, or nothing for `None`.
-    On {
+    Allowed {
         drag: Box<dyn Fn() -> Option<Dragged>>,
     },
     /// Save shows greyed, with [`cleanshot_core::saving_off_notice`] for this reason as its
@@ -74,14 +74,14 @@ impl Thumbnail {
     pub fn show(
         preview: &RgbaImage,
         monitor: RECT,
-        saving: Saving,
+        export: Export,
         on_event: impl FnMut(ThumbnailEvent) + 'static,
     ) -> Result<Self, Error> {
         window::register_class()?;
         let work = work_area(monitor).map_err(Error::Monitor)?;
         let scale = crate::capture::dpi_scale(monitor).map_err(Error::Monitor)?;
         let slide = fade::animations_on().map_err(Error::Window)?;
-        let window = window::open_window(preview, work, scale, slide, saving, Box::new(on_event))?;
+        let window = window::open_window(preview, work, scale, slide, export, Box::new(on_event))?;
         // SAFETY: `window` was created above on this thread; D-96 shows it without activation.
         let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
         let thumbnail = Self { window };
@@ -194,15 +194,15 @@ mod tests {
         }
     }
 
-    fn no_drag() -> Saving {
-        Saving::On {
+    fn no_drag() -> Export {
+        Export::Allowed {
             drag: Box::new(|| None),
         }
     }
 
-    fn shown(events: &Rc<RefCell<Vec<String>>>, saving: Saving) -> Thumbnail {
+    fn shown(events: &Rc<RefCell<Vec<String>>>, export: Export) -> Thumbnail {
         let sink = Rc::clone(events);
-        Thumbnail::show(&preview(), RECT::default(), saving, move |event| {
+        Thumbnail::show(&preview(), RECT::default(), export, move |event| {
             sink.borrow_mut().push(format!("{event:?}"));
         })
         .expect("the thumbnail opens")
@@ -249,7 +249,7 @@ mod tests {
             asking.set(asking.get() + 1);
             None
         });
-        let thumbnail = shown(&events, Saving::On { drag });
+        let thumbnail = shown(&events, Export::Allowed { drag });
         let (press, near, far) = (0x000A_000A, 0x000A_000B, 0x0028_0028);
         click(
             thumbnail.window,
@@ -281,7 +281,7 @@ mod tests {
             pump_until(STAY + Duration::from_secs(1), || !seen.borrow().is_empty());
             None
         });
-        let thumbnail = shown(&events, Saving::On { drag });
+        let thumbnail = shown(&events, Export::Allowed { drag });
         click(
             thumbnail.window,
             &[(WM_LBUTTONDOWN, PRESS), (WM_MOUSEMOVE, FAR)],
@@ -319,7 +319,7 @@ mod tests {
         let thumbnail = Thumbnail::show(
             &preview(),
             RECT::default(),
-            Saving::On { drag },
+            Export::Allowed { drag },
             move |_| {
                 let Freed(_) = &guard;
             },
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn f57_with_saving_off_a_click_on_save_sends_nothing_and_a_click_on_the_preview_still_opens() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let thumbnail = shown(&events, Saving::Off(SavingOff::ClipboardOnly));
+        let thumbnail = shown(&events, Export::Off(SavingOff::ClipboardOnly));
         let scale = crate::capture::dpi_scale(RECT::default()).expect("the primary monitor's dpi");
         let (width, height) = window_size(120, 80, scale);
         let [(_, save), _] = buttons(width, height, scale);

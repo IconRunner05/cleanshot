@@ -25,7 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, PCWSTR, w};
 
 use super::drag::{self, Dragged, Ended, left_the_press};
-use super::{RADIUS, Saving, ThumbnailEvent};
+use super::{Export, RADIUS, ThumbnailEvent};
 use crate::Error;
 use crate::capture::{screen_point, screen_rect, win32_rect};
 use crate::palette::Palette;
@@ -226,7 +226,7 @@ pub(super) fn open_window(
     work: RECT,
     scale: f32,
     slide: bool,
-    saving: Saving,
+    export: Export,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> Result<HWND, Error> {
     let (Ok(width), Ok(height)) = (
@@ -267,7 +267,7 @@ pub(super) fn open_window(
     }
     .map_err(Error::Window)?;
     let made =
-        surface(window, preview, rest, distance, scale, saving, listener).and_then(|surface| {
+        surface(window, preview, rest, distance, scale, export, listener).and_then(|surface| {
             crate::round_window(window, client_width, client_height, px(RADIUS))?;
             // SAFETY: `window` was created above with nothing stored on it, and
             // window_procedure takes every message's Surface through window_state. The timers
@@ -296,7 +296,7 @@ fn surface(
     rest: RECT,
     distance: i32,
     scale: f32,
-    saving: Saving,
+    export: Export,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> windows::core::Result<Surface> {
     // SAFETY: D2D1CreateFactory has no preconditions.
@@ -331,9 +331,9 @@ fn surface(
         )
     };
     let buttons = buttons(client.0, client.1, scale);
-    let (drag, save_off) = match saving {
-        Saving::On { drag } => (Some(drag), None),
-        Saving::Off(off) => {
+    let (drag, save_off) = match export {
+        Export::Allowed { drag } => (Some(drag), None),
+        Export::Off(off) => {
             let tip = OffTip::new(window, &saving_off_notice(off))?;
             let [(_, save), _] = buttons;
             tip.place(win32_rect(save));
