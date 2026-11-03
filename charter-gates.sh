@@ -96,6 +96,20 @@ grep -qF 'cp "$RUNNER_TEMP/exe/cleanshot.exe" "dist/cleanshot-$VERSION-x64.exe"'
 winget_line locale.en-US.yaml 'Publisher: Cleanshot'
 winget_line locale.en-US.yaml "License: $license"
 
+# A commit naming a charter id that changes product code says so in CHANGELOG.md, or says why
+# not in a "No CHANGELOG: <why>" line of its message. A warning only. CI's shallow clone has no
+# parent to compare.
+changelog_range=${LANES_FOLD_RANGE:-HEAD~1..HEAD}
+git rev-parse -q --verify "${changelog_range%%..*}^{commit}" >/dev/null || changelog_range=
+while IFS= read -r commit; do
+    subject=$(git log -1 --format=%s "$commit")
+    [[ $subject =~ (^|[^A-Za-z])[FCD]-[0-9]+ ]] || continue
+    [[ $'\n'$(git log -1 --format=%B "$commit") =~ $'\n'"No CHANGELOG: "[^[:space:]] ]] && continue
+    git diff --quiet "$commit^" "$commit" -- ':(glob)crates/*/src/**' && continue
+    git diff --quiet "$commit^" "$commit" -- CHANGELOG.md || continue
+    echo "WARN CHANGELOG.md: ${commit:0:9} \"$subject\" changes crates/*/src with no CHANGELOG.md line and no \"No CHANGELOG: <why>\" line." >&2
+done < <([[ -z $changelog_range ]] || git rev-list --no-merges "$changelog_range")
+
 cargo tree --locked -p cleanshot-app --target x86_64-pc-windows-msvc -e features -i cleanshot-win | grep -qF 'cleanshot-win feature "field-test"' &&
     fail "CHARTER 5: cleanshot-app turns on cleanshot-win's field-test feature, so field-test code could ship in cleanshot.exe."
 
