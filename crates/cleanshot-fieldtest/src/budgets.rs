@@ -97,14 +97,7 @@ pub(crate) fn overlay_visible(log: &str, machine: Machine) -> Verdict {
 /// P-03, P-04 and P-05 from the log of one idle start.
 pub(crate) fn idle(log: &str) -> [Verdict; 3] {
     [
-        under(
-            log,
-            "P-03",
-            "tray_ready_ms",
-            TRAY_READY_BUDGET_MS,
-            "tray ready after",
-            "ms",
-        ),
+        own_start(log),
         under(
             log,
             "P-04",
@@ -122,6 +115,32 @@ pub(crate) fn idle(log: &str) -> [Verdict; 3] {
             "ms",
         ),
     ]
+}
+
+/// P-03 by D-121: Cleanshot's own start, from main entered to tray ready. The time before
+/// main is the PC's process start, reported beside it and judged against nothing.
+fn own_start(log: &str) -> Verdict {
+    let Some(&entered) = perf_values(log, "P-03", "main_entered_ms").last() else {
+        return missing("P-03", "main_entered_ms");
+    };
+    let Some(&ready) = perf_values(log, "P-03", "tray_ready_ms").last() else {
+        return missing("P-03", "tray_ready_ms");
+    };
+    let Some(own) = ready.checked_sub(entered) else {
+        return Verdict {
+            budget: "P-03",
+            met: false,
+            detail: format!("tray ready at {ready} ms, before main entered at {entered} ms"),
+        };
+    };
+    Verdict {
+        budget: "P-03",
+        met: own < TRAY_READY_BUDGET_MS,
+        detail: format!(
+            "tray ready {own} ms after main entered (budget under {TRAY_READY_BUDGET_MS} ms); \
+             {entered} ms before main, not judged (D-121)"
+        ),
+    }
 }
 
 /// P-04 after use from the log of an overlay run: the private working set 10 s after the last
@@ -325,19 +344,34 @@ mod tests {
 
     #[test]
     fn idle_budgets_are_read_from_the_exe_log_lines() {
-        let log = "12 perf P-03 tray_ready_ms=299\n\
+        let log = "5 perf P-03 main_entered_ms=900\n\
+                   12 perf P-03 tray_ready_ms=1199\n\
                    10020 perf P-04 working_set_bytes=26214399\n\
                    10021 perf P-05 cpu_ms=99 over_ms=10000\n";
         assert!(idle(log).iter().all(|verdict| verdict.met));
-        let over = "12 perf P-03 tray_ready_ms=300\n\
+        let over = "5 perf P-03 main_entered_ms=900\n\
+                    12 perf P-03 tray_ready_ms=1200\n\
                     10020 perf P-04 working_set_bytes=26214400\n\
                     10021 perf P-05 cpu_ms=100 over_ms=10000\n";
         assert!(idle(over).iter().all(|verdict| !verdict.met));
     }
 
     #[test]
+    fn d121_p03_counts_from_main_entered_and_reports_the_time_before_main() {
+        let [start, ..] =
+            idle("887 perf P-03 main_entered_ms=887\n1175 perf P-03 tray_ready_ms=1175\n");
+        assert_eq!(
+            start.to_string(),
+            "P-03 PASS: tray ready 288 ms after main entered (budget under 300 ms); \
+             887 ms before main, not judged (D-121)"
+        );
+    }
+
+    #[test]
     fn a_missing_line_fails_its_budget() {
-        let [tray, memory, cpu] = idle("12 perf P-03 tray_ready_ms=10\n13 perf P-04 cpu_ms=5\n");
+        let [tray, memory, cpu] = idle(
+            "1 perf P-03 main_entered_ms=5\n12 perf P-03 tray_ready_ms=10\n13 perf P-04 cpu_ms=5\n",
+        );
         assert!(tray.met);
         assert!(!memory.met);
         assert!(!cpu.met);

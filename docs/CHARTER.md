@@ -353,7 +353,7 @@ Must budgets are release gates. Measure on the reference machine: a mid-range Wi
 | --- | --- | --- | --- |
 | P-01 | Hotkey → overlay visible | < 100 ms p95, and on the first press after start (D-76) | Must |
 | P-02 | Release → image on clipboard, 4K region | < 150 ms | Must |
-| P-03 | Process start → tray ready | < 300 ms | Must |
+| P-03 | Main entered → tray ready (D-121); the time from process start to main is logged and reported beside it, judged against nothing | < 300 ms | Must |
 | P-04 | Memory, idle and after use | Idle, tray only, before any capture: < 25 MB working set. After use, 10 s after the last capture closes: < 10 MB private working set; shared pages are not counted (D-82) | Must |
 | P-05 | Idle CPU | ~0%, no polling loops or timers | Must |
 | P-06 | Release exe size | < 15 MB (stretch < 10 MB) | Must |
