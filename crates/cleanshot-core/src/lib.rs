@@ -42,7 +42,7 @@ pub use document::{
     RedactStrength, RgbaImage, Shape, ShapeEntry, ShapeId, SpotlightDim, Style, areas_outside,
     arrow_head, dimmed_areas, step_numbers,
 };
-pub use drag::{Drag, Press, Start};
+pub use drag::{Drag, Press, Start, text_reopened_at};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Change, Command, CommandError, History, Restack};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key};

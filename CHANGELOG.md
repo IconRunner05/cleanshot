@@ -11,6 +11,8 @@ section exists.
 
 ### Added
 
+- Double-clicking a text or speech bubble opens it for typing, whichever tool is picked
+  (F-34, F-42).
 - Resting the pointer on a button in the editor's toolbar or property strip, or on a
   control in Settings, shows its name and its shortcut, such as "Highlighter (H)" (D-117).
 - Redact has a Strength setting on the property strip: 16, 24, 32 or 48 pixel blocks, for

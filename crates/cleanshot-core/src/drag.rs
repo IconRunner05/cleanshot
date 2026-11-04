@@ -322,6 +322,18 @@ fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look, new: TextFrame)
     })
 }
 
+/// The text box a double-click at `at` opens, with any tool: the topmost shape within `tolerance`
+/// of it, if that is a text or bubble (D-126).
+#[must_use]
+pub fn text_reopened_at(document: &Document, at: PointF, tolerance: f32) -> Option<TextOrigin> {
+    let id = shape_at(document, at, tolerance)?;
+    document
+        .shapes()
+        .iter()
+        .find(|entry| entry.id == id)
+        .and_then(existing_text)
+}
+
 /// The text box that reopens `entry`, if it is a text or bubble.
 fn existing_text(entry: &ShapeEntry) -> Option<TextOrigin> {
     let existing = |block: &TextBlock, frame| TextOrigin::Existing {
@@ -681,6 +693,48 @@ mod tests {
                 },
             }))
         );
+    }
+
+    #[test]
+    fn d126_a_double_click_reopens_the_text_or_bubble_under_it_and_nothing_else() {
+        let (document, box_id, _) = document();
+        let mut history = History::new(document);
+        let text = TextBlock::new(point(100.0, 150.0), "hi".into(), 20.0, 2.0).unwrap();
+        let words = TextBlock::new(point(300.0, 300.0), "hey".into(), 20.0, 2.0).unwrap();
+        let tail = point(250.0, 400.0);
+        let style = Look::default_for(Tool::Bubble).style();
+        for shape in [
+            Shape::Text(text.clone()),
+            Shape::Bubble(Bubble::new(words.clone(), tail)),
+        ] {
+            history.apply(Command::Add { shape, style }).unwrap();
+        }
+        let document = history.document();
+        let ids: Vec<_> = document.shapes().iter().map(|entry| entry.id).collect();
+        let (text_id, bubble_id) = (ids[ids.len() - 2], ids[ids.len() - 1]);
+        let reopened = |at| text_reopened_at(document, at, 4.0);
+
+        assert_eq!(
+            reopened(point(130.0, 160.0)),
+            Some(TextOrigin::Existing {
+                id: text_id,
+                block: text,
+                style,
+                frame: TextFrame::Plain,
+            })
+        );
+        assert_eq!(
+            reopened(point(310.0, 305.0)),
+            Some(TextOrigin::Existing {
+                id: bubble_id,
+                block: words,
+                style,
+                frame: TextFrame::Bubble { tail },
+            })
+        );
+        assert_eq!(shape_at(document, point(20.0, 15.0), 4.0), Some(box_id));
+        assert_eq!(reopened(point(20.0, 15.0)), None, "a box opens no text");
+        assert_eq!(reopened(point(180.0, 180.0)), None, "nor does bare image");
     }
 
     #[test]

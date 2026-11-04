@@ -42,11 +42,13 @@ pub(crate) enum Pointer {
     /// The left button went down over the canvas. `reach` is how far from `at`, in image
     /// pixels, a press still grips a shape or handle.
     /// `position` is on the canvas, and `placement` is where the image was when it was pressed.
+    /// `double_click` is a second press within the Windows double-click time and distance.
     Press {
         at: PointF,
         reach: f32,
         position: Point<Pixels>,
         placement: Placement,
+        double_click: bool,
     },
     Move {
         at: PointF,
@@ -246,6 +248,7 @@ fn listen_for_pointer(
                 reach,
                 position,
                 placement,
+                double_click: event.click_count > 1,
             };
             on_press(press, window, cx);
         }

@@ -10,7 +10,7 @@ use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
     KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError, Restack,
     RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextOrigin, Tool, action_for_key,
-    delivery_notice, save_as_notice, shape_at,
+    delivery_notice, save_as_notice, shape_at, text_reopened_at,
 };
 use gpui::{
     App, AppContext, Bounds, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
@@ -154,7 +154,12 @@ impl EditorView {
                     placement,
                 });
             }
-            Pointer::Press { at, reach, .. } => {
+            Pointer::Press {
+                at,
+                reach,
+                double_click,
+                ..
+            } => {
                 self.notice = None;
                 if let Some(text_box) = &mut self.text_box {
                     match text_box.press(at, reach, window) {
@@ -164,6 +169,13 @@ impl EditorView {
                         }
                         BoxPress::Commit => self.close_text_box(window),
                     }
+                }
+                if double_click && let Some(origin) = text_reopened_at(&self.document, at, reach) {
+                    self.selected = None;
+                    self.drag = None;
+                    self.open_text_box(origin);
+                    cx.notify();
+                    return;
                 }
                 let look = self.looks.look(self.tool);
                 let Press { selected, start } =
@@ -701,6 +713,7 @@ pub(crate) fn drag_redaction(
                 reach: 0.0,
                 position,
                 placement,
+                double_click: false,
             };
             view.pointer(press, window, cx);
         }
