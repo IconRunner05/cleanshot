@@ -1,4 +1,4 @@
-use cleanshot_core::{PointF, RectF, RgbaImage};
+use cleanshot_core::{Document, PointF, RectF, RgbaImage};
 use gpui::{Bounds, Pixels, Point, Size, point, px, size};
 
 /// Zoom stops between these scales, in screen pixels per image pixel (D-46).
@@ -86,12 +86,24 @@ impl Placement {
     }
 }
 
+/// The part of `document`'s image the canvas shows: what its crop keeps, or the whole image
+/// while the crop is being changed, so the crop has room to grow (D-118, D-127).
+pub(crate) fn shown_area(document: &Document, changing_crop: bool) -> RectF {
+    if changing_crop {
+        document.image_area()
+    } else {
+        document.kept_area()
+    }
+}
+
 /// A placement on the screen for one frame: maps image pixels to window pixels and back.
 #[derive(Clone, Copy)]
 pub(crate) struct Fit {
     pub origin: Point<Pixels>,
     pub scale: f32,
     pub image_bounds: Bounds<Pixels>,
+    /// The part of the image the canvas draws, in image pixels (D-127).
+    pub shown: RectF,
 }
 
 impl Fit {
@@ -102,6 +114,7 @@ impl Fit {
     pub fn new(
         canvas: Bounds<Pixels>,
         image: &RgbaImage,
+        shown: RectF,
         placement: Placement,
         scale_factor: f32,
     ) -> Self {
@@ -116,17 +129,19 @@ impl Fit {
             origin,
             scale: placement.scale,
             image_bounds: Bounds::new(origin, image_size),
+            shown,
         }
     }
 
-    /// The image pixel under `position`, clamped to the image.
+    /// The image pixel under `position`, clamped to the part of the image shown.
     pub fn image_point(&self, position: Point<Pixels>) -> PointF {
         let offset = position - self.origin;
-        let image =
-            |screen: Pixels, side: Pixels| f32::from(screen.clamp(px(0.0), side)) / self.scale;
+        let image = |screen: Pixels, start: f32, side: f32| {
+            (f32::from(screen) / self.scale).clamp(start, start + side)
+        };
         PointF {
-            x: image(offset.x, self.image_bounds.size.width),
-            y: image(offset.y, self.image_bounds.size.height),
+            x: image(offset.x, self.shown.x, self.shown.width),
+            y: image(offset.y, self.shown.y, self.shown.height),
         }
     }
 
@@ -149,7 +164,7 @@ impl Fit {
 mod tests {
     use std::sync::Arc;
 
-    use cleanshot_core::Document;
+    use cleanshot_core::{Command, History};
 
     use super::*;
 
@@ -172,6 +187,7 @@ mod tests {
         Fit::new(
             canvas,
             &image,
+            all_of(&image),
             Placement::fitted(CANVAS, all_of(&image), scale_factor),
             scale_factor,
         )
@@ -183,7 +199,7 @@ mod tests {
         let canvas = Bounds::new(point(px(0.3), px(41.7)), size(px(997.0), px(603.0)));
         for scale_factor in [1.0, 1.25, 1.5, 1.75, 2.0] {
             let placement = Placement::fitted(canvas.size, all_of(&image), scale_factor);
-            let fit = Fit::new(canvas, &image, placement, scale_factor);
+            let fit = Fit::new(canvas, &image, all_of(&image), placement, scale_factor);
             assert!(
                 (fit.scale * scale_factor - 1.0).abs() < 1e-6,
                 "{scale_factor}"
@@ -220,7 +236,13 @@ mod tests {
         let image = image(2000, 1000);
         let canvas = Bounds::new(point(px(0.0), px(0.0)), CANVAS);
         let shown = |crop: RectF| {
-            let fit = Fit::new(canvas, &image, Placement::fitted(CANVAS, crop, 1.0), 1.0);
+            let fit = Fit::new(
+                canvas,
+                &image,
+                crop,
+                Placement::fitted(CANVAS, crop, 1.0),
+                1.0,
+            );
             fit.bounds(crop)
         };
         let small = RectF {
@@ -254,6 +276,7 @@ mod tests {
             let fit = Fit::new(
                 Bounds::new(point(px(0.0), px(0.0)), window),
                 &image,
+                all_of(&image),
                 Placement::fitted(window, all_of(&image), scale),
                 scale,
             );
@@ -294,14 +317,51 @@ mod tests {
     }
 
     #[test]
+    fn d127_a_cropped_canvas_shows_and_takes_the_pointer_only_inside_the_crop_until_crop_is_picked()
+    {
+        let image = Arc::new(image(400, 300));
+        let crop = RectF {
+            x: 100.0,
+            y: 50.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let mut history = History::new(Document::new(Arc::clone(&image)));
+        history.apply(Command::SetCrop(Some(crop))).unwrap();
+        let document = history.document();
+        assert_eq!(shown_area(document, false), crop);
+        assert_eq!(shown_area(document, true), all_of(&image));
+        let canvas = Bounds::new(point(px(0.0), px(0.0)), CANVAS);
+        let fit = Fit::new(
+            canvas,
+            &image,
+            crop,
+            Placement::fitted(CANVAS, crop, 1.0),
+            1.0,
+        );
+        let corner = fit.point(PointF { x: 0.0, y: 0.0 });
+        assert_eq!(
+            fit.image_point(corner),
+            PointF { x: 100.0, y: 50.0 },
+            "a press over the cut-off top-left lands on the crop's corner"
+        );
+        assert_eq!(
+            fit.image_point(canvas.bottom_right()),
+            PointF { x: 300.0, y: 150.0 }
+        );
+    }
+
+    #[test]
     fn f39_zooming_keeps_the_image_pixel_under_the_pointer() {
         let image = image(400, 300);
         let canvas = Bounds::new(point(px(20.0), px(30.0)), CANVAS);
         let placement = Placement::fitted(CANVAS, all_of(&image), 1.0);
         let pointer = point(px(612.0), px(411.0));
-        let before = Fit::new(canvas, &image, placement, 1.0).image_point(canvas.origin + pointer);
+        let before = Fit::new(canvas, &image, all_of(&image), placement, 1.0)
+            .image_point(canvas.origin + pointer);
         let zoomed = placement.zoomed(3.0, pointer);
-        let after = Fit::new(canvas, &image, zoomed, 1.0).image_point(canvas.origin + pointer);
+        let after = Fit::new(canvas, &image, all_of(&image), zoomed, 1.0)
+            .image_point(canvas.origin + pointer);
         assert_eq!(zoomed.scale, 3.0);
         assert!((after.x - before.x).abs() < 1e-3 && (after.y - before.y).abs() < 1e-3);
     }

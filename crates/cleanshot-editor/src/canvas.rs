@@ -8,14 +8,14 @@ use cleanshot_core::{
     step_numbers, text_on,
 };
 use gpui::{
-    App, BorderStyle, Bounds, BoxShadow, Canvas, Corners, DispatchPhase, Hitbox, HitboxBehavior,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point,
-    RenderImage, Rgba, ScrollDelta, ScrollEvent, Window, canvas, fill, hsla, point, px, quad, size,
-    transparent_black,
+    App, BorderStyle, Bounds, BoxShadow, Canvas, ContentMask, Corners, DispatchPhase, Hitbox,
+    HitboxBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
+    Point, RenderImage, Rgba, ScrollDelta, ScrollEvent, Window, canvas, fill, hsla, point, px,
+    quad, size, transparent_black,
 };
 use smallvec::smallvec;
 
-use crate::placement::{Fit, Placement};
+use crate::placement::{Fit, Placement, shown_area};
 use crate::text::paint_label;
 use crate::theme::ACCENT;
 
@@ -137,66 +137,71 @@ pub(crate) fn document_canvas(
         move |bounds, hitbox, window, cx| {
             let image = document.base();
             let scale_factor = window.scale_factor();
-            // D-118: while the crop is being changed, the view shows what it can grow into.
-            let shown = if overlay.crop_handles {
-                document.image_area()
-            } else {
-                document.kept_area()
-            };
+            let shown = shown_area(&document, overlay.crop_handles);
             let placement =
                 placement.unwrap_or_else(|| Placement::fitted(bounds.size, shown, scale_factor));
-            let fit = Fit::new(bounds, image, placement, scale_factor);
-            paint_frame(document.frame(), fit.image_bounds, fit.scale, window);
-            let painted = window.paint_image(
-                fit.image_bounds,
-                fit.image_bounds,
-                0.0.into(),
-                base,
-                0,
-                false,
-            );
-            if painted.is_err() {
-                (previews.log)("base_image not_painted");
-            }
-            let shown = shown_shapes(&document, overlay.preview.as_ref());
-            previews.paint_highlights(
-                shown.iter().map(|(_, shape, style)| (*shape, *style)),
-                &fit,
-                window,
-            );
-            let dimmed = dimmed_areas(image, shown.iter().map(|(_, shape, _)| *shape));
-            let dim = document.dim().color();
-            paint_dim(&dimmed, dim, fit.image_bounds, &fit, window);
-            let mut selected_shape = None;
-            let numbers =
-                step_numbers(shown.iter().map(|(_, shape, _)| *shape)).collect::<Vec<_>>();
-            for ((id, shape, style), number) in shown.into_iter().zip(numbers) {
-                let painting = Painting {
-                    fit: &fit,
-                    redactions: &previews.redactions,
-                    shadows: &previews.shadows,
-                    dimmed: &dimmed,
-                    dim,
-                    number,
-                };
-                let shadow = paint_shadow(id, shape, *style, &painting, window, cx);
-                let painted = paint_shape(shape, *style, &painting, window, cx);
-                for unpainted in [shadow, painted].into_iter().filter_map(Result::err) {
-                    (previews.log)(unpainted.event());
-                }
-                if id.is_some() && overlay.selected == id {
-                    selected_shape = Some(shape);
-                }
-            }
-            if let Some(crop) = document.crop() {
-                paint_dim(
-                    &areas_outside(image, &[crop]),
-                    OUTSIDE_CROP,
+            let fit = Fit::new(bounds, image, shown, placement, scale_factor);
+            let shown_bounds = fit.bounds(shown);
+            paint_frame(document.frame(), shown_bounds, fit.scale, window);
+            // D-127: nothing a crop leaves out is drawn.
+            let mask = ContentMask {
+                bounds: shown_bounds,
+            };
+            let selected_shape = window.with_content_mask(Some(mask), |window| {
+                let painted = window.paint_image(
                     fit.image_bounds,
+                    fit.image_bounds,
+                    0.0.into(),
+                    base,
+                    0,
+                    false,
+                );
+                if painted.is_err() {
+                    (previews.log)("base_image not_painted");
+                }
+                let shapes = shown_shapes(&document, overlay.preview.as_ref());
+                previews.paint_highlights(
+                    shapes.iter().map(|(_, shape, style)| (*shape, *style)),
                     &fit,
                     window,
                 );
-            }
+                let dimmed = dimmed_areas(image, shapes.iter().map(|(_, shape, _)| *shape));
+                let dim = document.dim().color();
+                paint_dim(&dimmed, dim, fit.image_bounds, &fit, window);
+                let mut selected_shape = None;
+                let numbers =
+                    step_numbers(shapes.iter().map(|(_, shape, _)| *shape)).collect::<Vec<_>>();
+                for ((id, shape, style), number) in shapes.into_iter().zip(numbers) {
+                    let painting = Painting {
+                        fit: &fit,
+                        redactions: &previews.redactions,
+                        shadows: &previews.shadows,
+                        dimmed: &dimmed,
+                        dim,
+                        number,
+                    };
+                    let shadow = paint_shadow(id, shape, *style, &painting, window, cx);
+                    let painted = paint_shape(shape, *style, &painting, window, cx);
+                    for unpainted in [shadow, painted].into_iter().filter_map(Result::err) {
+                        (previews.log)(unpainted.event());
+                    }
+                    if id.is_some() && overlay.selected == id {
+                        selected_shape = Some(shape);
+                    }
+                }
+                if overlay.crop_handles
+                    && let Some(crop) = document.crop()
+                {
+                    paint_dim(
+                        &areas_outside(image, &[crop]),
+                        OUTSIDE_CROP,
+                        fit.image_bounds,
+                        &fit,
+                        window,
+                    );
+                }
+                selected_shape
+            });
             let new_crop = if let Some(Command::SetCrop(Some(crop))) = &overlay.preview {
                 paint_outline(fit.bounds(*crop), window);
                 Some(*crop)
@@ -313,7 +318,7 @@ fn listen_for_pointer(
 }
 
 /// F-44: the frame the export draws around the image, at the image's scale, so the canvas shows
-/// how the export will look. It frames the whole image, as the canvas shows it uncropped.
+/// how the export will look. It frames the part of the image shown (D-127).
 #[expect(
     clippy::cast_precision_loss,
     reason = "the frame's sizes are a few pixels, exact in f32"
