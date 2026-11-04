@@ -328,6 +328,8 @@ impl Session {
                 return self.warn(Warning::Failed("Logging could not sample idle use", &error));
             }
         };
+        // Logged before the sample's lines, which the field test waits for.
+        self.log_memory("idle");
         self.perf(|_| {
             format!(
                 "P-04 working_set_bytes={} idle_private_bytes={}",
@@ -358,11 +360,15 @@ impl Session {
                 }
                 let before = session.private_bytes();
                 cleanshot_win::release_factory();
+                let factory_released = session.private_bytes();
                 session.devices.borrow_mut().release();
-                if let (Some(before), Some(after)) = (before, session.private_bytes()) {
+                if let (Some(before), Some(factory_released), Some(after)) =
+                    (before, factory_released, session.private_bytes())
+                {
                     session.perf(|_| {
                         format!(
-                            "P-04 graphics_released private_before={before} private_after={after}"
+                            "P-04 graphics_released private_before={before} \
+                             private_factory_released={factory_released} private_after={after}"
                         )
                     });
                 }
@@ -385,6 +391,21 @@ impl Session {
             .map(|held| held.private_working_set_bytes)
     }
 
+    /// Under --log, logs what holds the working set now, by kind and size, as of `stage`
+    /// (P-04).
+    fn log_memory(&self, stage: &str) {
+        if self.log.borrow().is_none() {
+            return;
+        }
+        match cleanshot_win::log::memory::held() {
+            Ok(held) => self.log_line("memory", |_| format!("P-04 at={stage} {held}")),
+            Err(error) => self.warn(Warning::Failed(
+                "Logging could not account for memory",
+                &error,
+            )),
+        }
+    }
+
     /// Under --log, logs the P-04 private working set 10 s from now if no capture starts
     /// before then; normal running starts no timer (P-05).
     fn sample_after_use(self: &Rc<Self>, defer: &dyn Fn(Duration, Box<dyn FnOnce()>)) {
@@ -399,7 +420,10 @@ impl Session {
                 if session.captures_started.get() != started {
                     return;
                 }
-                if let Some(held) = session.private_bytes() {
+                let held = session.private_bytes();
+                // Logged before the sample's line, which the field test waits for.
+                session.log_memory("after_use");
+                if let Some(held) = held {
                     session.perf(|_| format!("P-04 private_working_set_bytes={held}"));
                 }
             }),

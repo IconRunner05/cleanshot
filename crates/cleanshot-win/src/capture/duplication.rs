@@ -300,6 +300,23 @@ fn make_device(
     ))
 }
 
+/// Whether any output of `adapter` is on the desktop.
+pub(crate) fn shows_desktop(adapter: &IDXGIAdapter1) -> windows::core::Result<bool> {
+    for index in 0.. {
+        // SAFETY: an index past the last output returns DXGI_ERROR_NOT_FOUND.
+        let output = match unsafe { adapter.EnumOutputs(index) } {
+            Ok(output) => output,
+            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        // SAFETY: a read of the output's own description.
+        if unsafe { output.GetDesc() }?.AttachedToDesktop.as_bool() {
+            return Ok(true);
+        }
+    }
+    unreachable!("the output list ends with DXGI_ERROR_NOT_FOUND")
+}
+
 /// Each output of `adapter` with its report, before any duplication; an output that fails to
 /// list or describe itself adds its error to `duplicates` instead.
 fn list_outputs(

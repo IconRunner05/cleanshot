@@ -21,6 +21,7 @@ mod pointer;
 mod window;
 
 use duplication::duplicate_all;
+pub(crate) use duplication::shows_desktop;
 pub use duplication::{
     AdapterReport, Copied, Desktop, Device, Devices, FrameReport, OutputReport, capture_desktop,
 };
