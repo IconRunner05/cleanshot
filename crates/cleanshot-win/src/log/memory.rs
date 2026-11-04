@@ -4,9 +4,8 @@ use windows::Win32::Foundation::{
     ERROR_BAD_LENGTH, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, HMODULE,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_MEMORY_SEGMENT_GROUP,
-    DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
-    DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3, IDXGIFactory1,
+    DXGI_MEMORY_SEGMENT_GROUP, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+    DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
 use windows::Win32::System::Memory::{
@@ -21,7 +20,7 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::core::{Interface, PCWSTR};
 
 use super::LogError;
-use crate::capture::shows_desktop;
+use crate::capture::desktop_adapters;
 
 const PAGE: usize = 4096;
 /// The low bits of a working set entry, below its page's address.
@@ -378,19 +377,8 @@ fn system_folder() -> Result<String, LogError> {
 }
 
 fn video() -> Result<Vec<(u64, u64)>, LogError> {
-    // SAFETY: CreateDXGIFactory1 has no preconditions.
-    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(LogError::Memory)?;
     let mut used = Vec::new();
-    for index in 0.. {
-        // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
-        let adapter = match unsafe { factory.EnumAdapters1(index) } {
-            Ok(adapter) => adapter,
-            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
-            Err(error) => return Err(LogError::Memory(error)),
-        };
-        if !shows_desktop(&adapter).map_err(LogError::Memory)? {
-            continue;
-        }
+    for (_, adapter) in desktop_adapters().map_err(LogError::Memory)? {
         let adapter: IDXGIAdapter3 = adapter.cast().map_err(LogError::Memory)?;
         used.push((
             usage(&adapter, DXGI_MEMORY_SEGMENT_GROUP_LOCAL)?,

@@ -20,10 +20,10 @@ mod frame;
 mod pointer;
 mod window;
 
+pub(crate) use duplication::desktop_adapters;
 use duplication::duplicate_all;
 #[cfg(feature = "field-test")]
 pub(crate) use duplication::make_device;
-pub(crate) use duplication::shows_desktop;
 pub use duplication::{
     AdapterReport, Copied, Desktop, Device, Devices, FrameReport, OutputReport, capture_desktop,
 };

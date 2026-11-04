@@ -42,7 +42,7 @@ pub use crate::fade::animations_on;
 use crate::overlay::WINDOW_CLASS;
 
 use crate::Error;
-use crate::capture::{make_device, monitor_handles, shows_desktop};
+use crate::capture::{desktop_adapters, make_device, monitor_handles};
 use crate::registry::{read_number, read_text};
 use crate::struct_size;
 use cleanshot_core::{Hotkey, HotkeyAction};
@@ -315,19 +315,8 @@ pub struct DeviceCost {
 /// The Windows error if DXGI cannot list the adapters, a device cannot be made or the
 /// process's memory counters cannot be read.
 pub fn capture_device_costs() -> windows::core::Result<Vec<DeviceCost>> {
-    // SAFETY: CreateDXGIFactory1 has no preconditions.
-    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }?;
     let mut costs = Vec::new();
-    for adapter_index in 0.. {
-        // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
-        let adapter = match unsafe { factory.EnumAdapters1(adapter_index) } {
-            Ok(adapter) => adapter,
-            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
-            Err(error) => return Err(error),
-        };
-        if !shows_desktop(&adapter)? {
-            continue;
-        }
+    for (adapter_index, adapter) in desktop_adapters()? {
         let before = held_bytes()?;
         let (device, context, made) = make_device(&adapter)?;
         let held = held_bytes()?;

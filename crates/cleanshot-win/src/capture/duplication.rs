@@ -315,8 +315,27 @@ pub(crate) fn make_device(
     ))
 }
 
+/// Each adapter with an output on the desktop, with its place in DXGI's list.
+pub(crate) fn desktop_adapters() -> windows::core::Result<Vec<(u32, IDXGIAdapter1)>> {
+    // SAFETY: CreateDXGIFactory1 has no preconditions.
+    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }?;
+    let mut found = Vec::new();
+    for index in 0.. {
+        // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
+        let adapter = match unsafe { factory.EnumAdapters1(index) } {
+            Ok(adapter) => adapter,
+            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
+            Err(error) => return Err(error),
+        };
+        if shows_desktop(&adapter)? {
+            found.push((index, adapter));
+        }
+    }
+    Ok(found)
+}
+
 /// Whether any output of `adapter` is on the desktop.
-pub(crate) fn shows_desktop(adapter: &IDXGIAdapter1) -> windows::core::Result<bool> {
+fn shows_desktop(adapter: &IDXGIAdapter1) -> windows::core::Result<bool> {
     for index in 0.. {
         // SAFETY: an index past the last output returns DXGI_ERROR_NOT_FOUND.
         let output = match unsafe { adapter.EnumOutputs(index) } {
