@@ -447,8 +447,7 @@ impl EditorView {
     fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
         let setter = view.clone();
         let on_set = move |property, window: &mut Window, cx: &mut App| {
-            // Err only means a late event reached the view as its window closed: nothing is left to change.
-            let _ = setter.update(cx, |view, cx| {
+            update_while_open(&setter, cx, |view, cx| {
                 view.set_property(property);
                 if view.text_box.is_some() {
                     window.focus(&view.focus, cx);
@@ -458,8 +457,7 @@ impl EditorView {
         };
         let changer = view.clone();
         let on_document = move |command, _: &mut Window, cx: &mut App| {
-            // Err only means a late event reached the view as its window closed: nothing is left to change.
-            let _ = changer.update(cx, |view, cx| {
+            update_while_open(&changer, cx, |view, cx| {
                 view.apply(command);
                 cx.notify();
             });
@@ -483,6 +481,16 @@ impl EditorView {
     }
 }
 
+/// Runs `change` on the editor behind `view` while its window is open.
+fn update_while_open(
+    view: &WeakEntity<EditorView>,
+    cx: &mut App,
+    change: impl FnOnce(&mut EditorView, &mut Context<EditorView>),
+) {
+    // Err only means a late event reached the view as its window closed: nothing is left to change.
+    let _ = view.update(cx, change);
+}
+
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance(), hover_time(cx));
@@ -490,8 +498,7 @@ impl Render for EditorView {
         let picker = view.clone();
         let restacker = view.clone();
         let on_pick = move |tool, window: &mut Window, cx: &mut App| {
-            // Err only means a late event reached the view as its window closed: nothing is left to change.
-            let _ = picker.update(cx, |view, cx| {
+            update_while_open(&picker, cx, |view, cx| {
                 view.close_text_box(window);
                 view.tool = tool;
                 cx.notify();
@@ -499,8 +506,7 @@ impl Render for EditorView {
         };
         let replayer = view.clone();
         let on_replay = move |replay: Replay, window: &mut Window, cx: &mut App| {
-            // Err only means a late event reached the view as its window closed: nothing is left to change.
-            let _ = replayer.update(cx, |view, cx| {
+            update_while_open(&replayer, cx, |view, cx| {
                 view.close_text_box(window);
                 view.undo_or_redo(replay);
                 cx.notify();
@@ -509,8 +515,7 @@ impl Render for EditorView {
         let strip = self.strip(&view, theme);
         let input = view.clone();
         let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {
-            // Err only means a late event reached the view as its window closed: nothing is left to change.
-            let _ = view.update(cx, |view, cx| view.pointer(pointer, window, cx));
+            update_while_open(&view, cx, |view, cx| view.pointer(pointer, window, cx));
         });
         let overlay = match &self.text_box {
             Some(text_box) => Overlay {
@@ -580,8 +585,9 @@ impl Render for EditorView {
             )
             .children(self.menu.as_ref().map(|menu| {
                 menu.element(&self.document, theme, move |picked, window, cx| {
-                    // Err only means a late event reached the view as its window closed: nothing is left to change.
-                    let _ = restacker.update(cx, |view, cx| view.close_menu(picked, window, cx));
+                    update_while_open(&restacker, cx, |view, cx| {
+                        view.close_menu(picked, window, cx);
+                    });
                 })
             }))
     }

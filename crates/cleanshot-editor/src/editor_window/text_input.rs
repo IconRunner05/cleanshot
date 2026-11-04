@@ -5,7 +5,7 @@ use gpui::{
     App, Bounds, FocusHandle, InputHandler, Pixels, Point, UTF16Selection, WeakEntity, Window,
 };
 
-use super::EditorView;
+use super::{EditorView, update_while_open};
 use crate::canvas::PaintOver;
 use crate::placement::Fit;
 use crate::text_box::TextBox;
@@ -35,8 +35,7 @@ impl BoxInput {
     }
 
     fn change(&self, cx: &mut App, change: impl FnOnce(&mut TextEdit)) {
-        // Err only means a late event reached the view as its window closed: nothing is left to change.
-        let _ = self.view.update(cx, |view, cx| {
+        update_while_open(&self.view, cx, |view, cx| {
             if let Some(text_box) = &mut view.text_box {
                 change(text_box.edit_mut());
                 cx.notify();
