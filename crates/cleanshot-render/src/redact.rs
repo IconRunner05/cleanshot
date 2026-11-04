@@ -120,14 +120,23 @@ fn average(pixels: impl Iterator<Item = [u8; 4]>) -> [u8; 4] {
 /// pixel past either end.
 fn box_blur(line: &[[u8; 4]], radius: usize) -> Vec<[u8; 4]> {
     let last = line.len() - 1;
-    (0..line.len())
-        .map(|index| {
-            average(
-                (0..=2 * radius)
-                    .map(|offset| line[(index + offset).saturating_sub(radius).min(last)]),
-            )
-        })
-        .collect()
+    let padded = |index: usize| line[index.saturating_sub(radius).min(last)];
+    let window = 2 * radius + 1;
+    let mut sums = [0_usize; 4];
+    for index in 0..window {
+        for (sum, channel) in sums.iter_mut().zip(padded(index)) {
+            *sum += usize::from(channel);
+        }
+    }
+    let mut blurred = Vec::with_capacity(line.len());
+    for index in 0..line.len() {
+        blurred.push(sums.map(|sum| channel((sum + window / 2) / window)));
+        let (leaving, entering) = (padded(index), padded(index + window));
+        for ((sum, out), into) in sums.iter_mut().zip(leaving).zip(entering) {
+            *sum = *sum + usize::from(into) - usize::from(out);
+        }
+    }
+    blurred
 }
 
 #[expect(
@@ -427,6 +436,34 @@ mod tests {
                         "{mode:?} {x},{y}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn d130_a_blurred_pixel_is_the_rounded_mean_of_the_radius_either_side_at_any_radius() {
+        let line: Vec<[u8; 4]> = (0..=255_u8)
+            .cycle()
+            .take(300)
+            .map(|x| [x.wrapping_mul(37), x.wrapping_mul(101), x % 7, 255])
+            .collect();
+        for length in [1, 2, 5, 300] {
+            let line = &line[..length];
+            for radius in [1, 16, 128] {
+                let last = length - 1;
+                let expected: Vec<_> =
+                    (0..length)
+                        .map(|index| {
+                            average((0..=2 * radius).map(|offset| {
+                                line[(index + offset).saturating_sub(radius).min(last)]
+                            }))
+                        })
+                        .collect();
+                assert_eq!(
+                    box_blur(line, radius),
+                    expected,
+                    "{length} pixels, radius {radius}"
+                );
             }
         }
     }
