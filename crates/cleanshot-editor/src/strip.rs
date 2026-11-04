@@ -1,11 +1,12 @@
 use cleanshot_core::{
-    Alignment, Command, Fill, Frame, Horizontal, Look, Property, Setting, SpotlightDim, Vertical,
+    Alignment, Command, Fill, Frame, Horizontal, Look, Property, Setting, SpotlightDim, TypedValue,
+    Vertical,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Div, ElementId, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
-    Stateful, StatefulInteractiveElement, Styled, Toggled, Window, anchored, deferred, div, point,
-    px,
+    App, Div, ElementId, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
+    RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled, Toggled, Window, anchored,
+    deferred, div, point, px,
 };
 
 use crate::canvas::rgba;
@@ -62,7 +63,15 @@ pub(crate) fn property_strip(
                         .on_click(move |_, window, cx| on_set(property, window, cx))
                         .child(swatch(property, name, theme))
                 });
-                group(setting.name(), Role::RadioGroup, index > 0, theme).children(choices)
+                let typed = setting.typed(&look).map(|typed| TypedField {
+                    setting,
+                    typed,
+                    theme,
+                    on_set: on_set.clone(),
+                });
+                group(setting.name(), Role::RadioGroup, index > 0, theme)
+                    .children(choices)
+                    .children(typed)
             }
         });
     let toggles = [
@@ -189,6 +198,115 @@ impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for Al
             )
         });
         div().flex().flex_col().child(button).children(grid)
+    }
+}
+
+/// A box to type `setting`'s value in, showing what the look holds until digits are typed.
+/// Enter, Tab or a press outside sets the nearest value the setting takes, which the box then
+/// shows; Esc leaves the value as it was (D-130).
+#[derive(IntoElement)]
+struct TypedField<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> {
+    setting: Setting,
+    typed: TypedValue,
+    theme: Theme,
+    on_set: F,
+}
+
+/// The most digits the box takes: every value a setting takes has three or fewer.
+const TYPED_DIGITS: usize = 3;
+
+impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for TypedField<F> {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self {
+            setting,
+            typed,
+            theme,
+            on_set,
+        } = self;
+        let id = format!("{}: typed", setting.name());
+        let draft =
+            window.use_keyed_state(ElementId::Name(format!("{id} draft").into()), cx, |_, _| {
+                None::<String>
+            });
+        let focus = window
+            .use_keyed_state(
+                ElementId::Name(format!("{id} focus").into()),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
+        let set = move |draft: &Entity<Option<String>>, window: &mut Window, cx: &mut App| {
+            let digits = draft.update(cx, |draft, cx| {
+                cx.notify();
+                draft.take()
+            });
+            if let Some(value) = digits.and_then(|digits| digits.parse().ok()) {
+                on_set(typed.property(value), window, cx);
+            }
+        };
+        let shown = draft
+            .read(cx)
+            .clone()
+            .filter(|_| focus.is_focused(window))
+            .unwrap_or_else(|| typed.shown().to_string());
+        let range = typed.range();
+        let (on_key, on_out) = (draft.clone(), draft);
+        let set_on_out = set.clone();
+        div()
+            .id(ElementId::Name(id.into()))
+            .track_focus(&focus)
+            .tab_stop(true)
+            .role(Role::SpinButton)
+            .aria_label(setting.name())
+            .aria_numeric_value(f64::from(typed.shown()))
+            .aria_min_numeric_value(f64::from(*range.start()))
+            .aria_max_numeric_value(f64::from(*range.end()))
+            .h(px(28.0))
+            .w(px(40.0))
+            .px(px(6.0))
+            .flex()
+            .items_center()
+            .justify_end()
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(theme.hairline)
+            .focus(|field| field.border_color(ACCENT))
+            .text_xs()
+            .text_color(theme.text)
+            .on_mouse_down_out(move |_, window, cx| set_on_out(&on_out, window, cx))
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                if event.keystroke.modifiers.modified() {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "enter" => set(&on_key, window, cx),
+                    "tab" => {
+                        set(&on_key, window, cx);
+                        return;
+                    }
+                    "escape" => on_key.update(cx, |draft, cx| {
+                        *draft = None;
+                        cx.notify();
+                    }),
+                    "backspace" => on_key.update(cx, |draft, cx| {
+                        draft.get_or_insert_default().pop();
+                        cx.notify();
+                    }),
+                    digit if digit.len() == 1 && digit.chars().all(|c| c.is_ascii_digit()) => {
+                        on_key.update(cx, |draft, cx| {
+                            let digits = draft.get_or_insert_default();
+                            if digits.len() < TYPED_DIGITS {
+                                digits.push_str(digit);
+                            }
+                            cx.notify();
+                        });
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+            })
+            .child(shown)
     }
 }
 
@@ -327,6 +445,6 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
         Property::RedactStrength(strength) => div()
             .text_xs()
             .text_color(theme.text)
-            .child(format!("{}", strength.cell())),
+            .child(format!("{}", strength.pixels())),
     }
 }

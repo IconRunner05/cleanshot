@@ -115,7 +115,7 @@ impl Tool {
                 add(Shape::Redact {
                     rect: area,
                     mode: RedactMode::Pixelate,
-                    strength: RedactStrength::Fine,
+                    strength: RedactStrength::FINE,
                 })
             }),
             Self::Spotlight => has_area.then(|| add(Shape::Spotlight(area))),
@@ -231,7 +231,7 @@ mod tests {
             Shape::Redact {
                 rect: area,
                 mode: RedactMode::Pixelate,
-                strength: RedactStrength::Fine,
+                strength: RedactStrength::FINE,
             }
         );
         assert_eq!(

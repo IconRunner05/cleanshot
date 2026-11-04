@@ -10,7 +10,7 @@ use crate::{Error, Patch};
 /// average; blur pixelates first and then smooths the cells over the same radius, so neither
 /// keeps more than the cell averages (D-123).
 pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode, strength: RedactStrength) {
-    let cell = strength.cell();
+    let cell = usize::from(strength.pixels());
     let Some((columns, rows)) = covered_pixels(rect, pixmap.width(), pixmap.height()) else {
         return;
     };
@@ -211,7 +211,7 @@ mod tests {
             Shape::Redact {
                 rect: AREA,
                 mode,
-                strength: RedactStrength::Fine,
+                strength: RedactStrength::FINE,
             },
             style(MAGENTA),
         )
@@ -325,7 +325,7 @@ mod tests {
                     shape: Shape::Redact {
                         rect: whole_cells,
                         mode,
-                        strength: RedactStrength::Fine,
+                        strength: RedactStrength::FINE,
                     },
                     style: style(MAGENTA),
                 })
@@ -358,10 +358,10 @@ mod tests {
             height: 8.0,
         };
         for (strength, cells) in [
-            (RedactStrength::Fine, 6),
-            (RedactStrength::Medium, 4),
-            (RedactStrength::Coarse, 3),
-            (RedactStrength::Coarsest, 2),
+            (RedactStrength::FINE, 6),
+            (RedactStrength::MEDIUM, 4),
+            (RedactStrength::COARSE, 3),
+            (RedactStrength::COARSEST, 2),
         ] {
             let patch = redacted(&image, whole, RedactMode::Pixelate, strength)
                 .unwrap()
@@ -412,13 +412,13 @@ mod tests {
                 shape: Shape::Redact {
                     rect,
                     mode,
-                    strength: RedactStrength::Fine,
+                    strength: RedactStrength::FINE,
                 },
                 style: style(MAGENTA),
             };
             history.apply(command).unwrap();
             let export = flatten(history.document(), &TextMasks::default()).unwrap();
-            let preview = redacted(&varied(), rect, mode, RedactStrength::Fine)
+            let preview = redacted(&varied(), rect, mode, RedactStrength::FINE)
                 .unwrap()
                 .unwrap();
             let size = (preview.pixels.width(), preview.pixels.height());

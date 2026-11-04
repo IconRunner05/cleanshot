@@ -254,7 +254,7 @@ mod tests {
                         height: 16.0,
                     },
                     mode: RedactMode::Pixelate,
-                    strength: RedactStrength::Fine,
+                    strength: RedactStrength::FINE,
                 },
                 style: Style::new(
                     Color {

@@ -1,5 +1,7 @@
+use std::ops::RangeInclusive;
+
 use crate::document::{Color, Fill, HighlightStrength, RedactMode, RedactStrength};
-use crate::look::{ANNOTATION_RED, HIGHLIGHTER_YELLOW, Property};
+use crate::look::{ANNOTATION_RED, HIGHLIGHTER_YELLOW, Look, Property};
 use crate::text::{Alignment, DEFAULT_TEXT_SIZE, Horizontal, Vertical};
 use crate::tool::Tool;
 
@@ -61,6 +63,30 @@ impl Setting {
         }
     }
 
+    /// The value the strip lets the user type for this setting beside its choices, holding what
+    /// `look` has now, or `None` for a setting with no typed value (D-130).
+    #[must_use]
+    pub fn typed(self, look: &Look) -> Option<TypedValue> {
+        match self {
+            Self::RedactStrength => Some(TypedValue {
+                kind: Typed::RedactStrength,
+                shown: f32::from(look.redact_strength().pixels()),
+            }),
+            Self::TextSize => Some(TypedValue {
+                kind: Typed::TextSize,
+                shown: look.text_size(),
+            }),
+            Self::Color
+            | Self::StrokeWidth
+            | Self::Fill
+            | Self::Redact
+            | Self::HighlightStrength
+            | Self::Shadow
+            | Self::Alignment
+            | Self::HorizontalAlignment => None,
+        }
+    }
+
     /// The values the strip offers for this setting, each with the name a screen reader reads,
     /// in strip order (D-55).
     #[must_use]
@@ -76,6 +102,51 @@ impl Setting {
             Self::Shadow => &SHADOW_CHOICES,
             Self::Alignment => &ALIGNMENT_CHOICES,
             Self::HorizontalAlignment => &HORIZONTAL_ALIGNMENT_CHOICES,
+        }
+    }
+}
+
+/// A value typed on the strip for a setting, as [`Setting::typed`] gives it (D-130).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TypedValue {
+    kind: Typed,
+    shown: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Typed {
+    RedactStrength,
+    TextSize,
+}
+
+const TYPED_TEXT_SIZES: RangeInclusive<u16> = 8..=200;
+
+impl TypedValue {
+    /// What the look holds now, which the strip shows until a value is typed.
+    #[must_use]
+    pub fn shown(self) -> f32 {
+        self.shown
+    }
+
+    /// The values a typed one is clamped into.
+    #[must_use]
+    pub fn range(self) -> RangeInclusive<u16> {
+        match self.kind {
+            Typed::RedactStrength => {
+                RedactStrength::FINE.pixels()..=RedactStrength::STRONGEST.pixels()
+            }
+            Typed::TextSize => TYPED_TEXT_SIZES,
+        }
+    }
+
+    /// What typing `typed` sets: the nearest value in [`Self::range`].
+    #[must_use]
+    pub fn property(self, typed: u16) -> Property {
+        let range = self.range();
+        let used = typed.clamp(*range.start(), *range.end());
+        match self.kind {
+            Typed::RedactStrength => Property::RedactStrength(RedactStrength::clamped(used)),
+            Typed::TextSize => Property::TextSize(f32::from(used)),
         }
     }
 }
@@ -113,17 +184,17 @@ const REDACT_CHOICES: [(Property, &str); 2] = [
 ];
 
 const REDACT_STRENGTH_CHOICES: [(Property, &str); 4] = [
-    (Property::RedactStrength(RedactStrength::Fine), "16 pixels"),
+    (Property::RedactStrength(RedactStrength::FINE), "16 pixels"),
     (
-        Property::RedactStrength(RedactStrength::Medium),
+        Property::RedactStrength(RedactStrength::MEDIUM),
         "24 pixels",
     ),
     (
-        Property::RedactStrength(RedactStrength::Coarse),
+        Property::RedactStrength(RedactStrength::COARSE),
         "32 pixels",
     ),
     (
-        Property::RedactStrength(RedactStrength::Coarsest),
+        Property::RedactStrength(RedactStrength::COARSEST),
         "48 pixels",
     ),
 ];
@@ -182,3 +253,38 @@ const HORIZONTAL_ALIGNMENT_CHOICES: [(Property, &str); 3] = [
     (aligned(Horizontal::Centre, Vertical::Top), "Centre"),
     (aligned(Horizontal::Right, Vertical::Top), "Right"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn d130_a_typed_strength_or_text_size_is_clamped_into_its_range_and_shown_once_set() {
+        let redact = Look::default_for(Tool::Redact);
+        let strength = Setting::RedactStrength.typed(&redact).unwrap();
+        assert_eq!(strength.shown(), 16.0);
+        let used = |typed: TypedValue, value| match typed.property(value) {
+            Property::RedactStrength(strength) => f32::from(strength.pixels()),
+            Property::TextSize(size) => size,
+            other => panic!("a strength or a size, not {other:?}"),
+        };
+        assert_eq!(
+            [4, 64, 500].map(|value| used(strength, value)),
+            [16.0, 64.0, 128.0],
+            "never finer than C-22's 16 px"
+        );
+        let text = Look::default_for(Tool::Text);
+        let size = Setting::TextSize.typed(&text).unwrap();
+        assert_eq!(size.shown(), DEFAULT_TEXT_SIZE);
+        assert_eq!(
+            [2, 60, 999].map(|value| used(size, value)),
+            [8.0, 60.0, 200.0]
+        );
+        let set = text.with(size.property(999)).unwrap();
+        assert_eq!(
+            Setting::TextSize.typed(&set).map(TypedValue::shown),
+            Some(200.0)
+        );
+        assert_eq!(Setting::Color.typed(&text), None);
+    }
+}

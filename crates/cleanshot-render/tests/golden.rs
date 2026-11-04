@@ -265,7 +265,7 @@ fn redact() -> Vec<Command> {
             Shape::Redact {
                 rect: rect(6.0, 6.0, 38.5, 52.0),
                 mode: RedactMode::Pixelate,
-                strength: RedactStrength::Fine,
+                strength: RedactStrength::FINE,
             },
             WHITE,
             1.0,
@@ -274,7 +274,7 @@ fn redact() -> Vec<Command> {
             Shape::Redact {
                 rect: rect(52.0, 6.0, 38.0, 52.0),
                 mode: RedactMode::Blur,
-                strength: RedactStrength::Fine,
+                strength: RedactStrength::FINE,
             },
             WHITE,
             1.0,
@@ -363,7 +363,7 @@ fn text_redact_crop() -> Vec<Step> {
                 Shape::Redact {
                     rect: rect(20.0, 15.0, 30.0, 30.0),
                     mode: RedactMode::Pixelate,
-                    strength: RedactStrength::Fine,
+                    strength: RedactStrength::FINE,
                 },
                 WHITE,
                 1.0,

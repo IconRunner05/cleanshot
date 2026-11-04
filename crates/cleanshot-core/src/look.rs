@@ -58,7 +58,7 @@ impl Look {
             style,
             fill: Fill::Hollow,
             redact: RedactMode::Pixelate,
-            redact_strength: RedactStrength::Fine,
+            redact_strength: RedactStrength::FINE,
             highlight_strength: HighlightStrength::Strong,
             text_size: DEFAULT_TEXT_SIZE,
             alignment: Alignment::default(),
@@ -454,7 +454,7 @@ mod tests {
         Look {
             fill,
             redact,
-            redact_strength: RedactStrength::Coarse,
+            redact_strength: RedactStrength::COARSE,
             text_size,
             ..Look::default_for(tool)
         }
@@ -490,12 +490,12 @@ mod tests {
         let pixelated = Shape::Redact {
             rect: AREA,
             mode: RedactMode::Pixelate,
-            strength: RedactStrength::Fine,
+            strength: RedactStrength::FINE,
         };
         let blurred = Shape::Redact {
             rect: AREA,
             mode: RedactMode::Blur,
-            strength: RedactStrength::Coarse,
+            strength: RedactStrength::COARSE,
         };
         assert_eq!(solid.dress(pixelated), (blurred, style));
         let at = PointF { x: 5.0, y: 6.0 };
@@ -516,11 +516,11 @@ mod tests {
             Shape::Redact {
                 rect: AREA,
                 mode: RedactMode::Blur,
-                strength: RedactStrength::Fine,
+                strength: RedactStrength::FINE,
             },
             Look::default_for(Tool::Redact).style(),
         );
-        let coarse = Property::RedactStrength(RedactStrength::Coarse);
+        let coarse = Property::RedactStrength(RedactStrength::COARSE);
         let Ok(Some(Command::Replace { shape, .. })) =
             looks.set(coarse, Tool::Select, Some(&blurred))
         else {
@@ -531,7 +531,7 @@ mod tests {
             Shape::Redact {
                 rect: AREA,
                 mode: RedactMode::Blur,
-                strength: RedactStrength::Coarse,
+                strength: RedactStrength::COARSE,
             }
         );
         assert!(

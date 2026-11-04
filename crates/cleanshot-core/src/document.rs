@@ -307,26 +307,34 @@ impl HighlightStrength {
     }
 }
 
-/// How coarse a redaction is (D-123). The finest is the strength C-22 was set at, so the
-/// control only strengthens.
+/// How coarse a redaction is, as the side of its cells in image pixels (D-123, D-130). Never
+/// finer than the strength C-22 was set at, so the control only strengthens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum RedactStrength {
-    Fine,
-    Medium,
-    Coarse,
-    Coarsest,
-}
+pub struct RedactStrength(u16);
 
 impl RedactStrength {
+    /// The finest, the strength C-22 was set at.
+    pub const FINE: Self = Self(16);
+    /// A preset step on the strip (D-123).
+    pub const MEDIUM: Self = Self(24);
+    /// A preset step on the strip (D-123).
+    pub const COARSE: Self = Self(32);
+    /// The strongest preset step on the strip (D-123).
+    pub const COARSEST: Self = Self(48);
+    /// The strongest a typed strength can be (D-130).
+    pub const STRONGEST: Self = Self(128);
+
+    /// The strength with cells of `pixels`, or the nearest one a redaction takes: from
+    /// [`Self::FINE`] to 128 pixels.
+    #[must_use]
+    pub fn clamped(pixels: u16) -> Self {
+        Self(pixels.clamp(Self::FINE.0, Self::STRONGEST.0))
+    }
+
     /// The side of a pixelation cell in image pixels, which is also the blur radius.
     #[must_use]
-    pub const fn cell(self) -> usize {
-        match self {
-            Self::Fine => 16,
-            Self::Medium => 24,
-            Self::Coarse => 32,
-            Self::Coarsest => 48,
-        }
+    pub const fn pixels(self) -> u16 {
+        self.0
     }
 }
 

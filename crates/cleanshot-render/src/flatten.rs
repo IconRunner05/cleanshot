@@ -878,7 +878,7 @@ mod tests {
                 height: 2.0,
             },
             mode: cleanshot_core::RedactMode::Pixelate,
-            strength: cleanshot_core::RedactStrength::Fine,
+            strength: cleanshot_core::RedactStrength::FINE,
         };
         for shape in [spotlight, redaction] {
             history.apply(Command::Add { shape, style }).unwrap();

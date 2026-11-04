@@ -20,6 +20,9 @@ section exists.
 - Text can be aligned left, centre or right, and a speech bubble's text also to the top,
   centre or bottom of its box. Alignment on the property strip opens a small grid of the
   choices, drawn as where the lines go. It can be changed after drawing (F-34, F-42).
+- Redaction strength and text size can be typed on the property strip beside the preset
+  steps: strength from 16 to 128 pixels, text size from 8 to 200. A value outside that
+  range is set to the nearest one, and the strip shows the value used (F-34, F-36).
 - Resting the pointer on a button in the editor's toolbar or property strip, or on a
   control in Settings, shows its name and its shortcut, such as "Highlighter (H)" (D-117).
 - Redact has a Strength setting on the property strip: 16, 24, 32 or 48 pixel blocks, for

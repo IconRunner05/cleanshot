@@ -315,7 +315,7 @@ fn synthetic_shape(index: u32) -> Command {
                 } else {
                     RedactMode::Blur
                 },
-                strength: RedactStrength::Fine,
+                strength: RedactStrength::FINE,
             },
             255,
         ),

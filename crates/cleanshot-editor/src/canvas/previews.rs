@@ -467,7 +467,7 @@ mod tests {
     fn image_of(previews: &RedactionPreviews, rect: RectF, mode: RedactMode) -> Arc<RenderImage> {
         match previews
             .previews
-            .get(&RedactionKey::new(rect, mode, RedactStrength::Fine))
+            .get(&RedactionKey::new(rect, mode, RedactStrength::FINE))
         {
             Some(RedactionPreview::Pixels { image, .. }) => Arc::clone(image),
             Some(RedactionPreview::CoversNoPixel | RedactionPreview::Failed) | None => {
@@ -490,7 +490,7 @@ mod tests {
             shape: Shape::Redact {
                 rect,
                 mode,
-                strength: RedactStrength::Fine,
+                strength: RedactStrength::FINE,
             },
             style: Style::new(
                 Color {
