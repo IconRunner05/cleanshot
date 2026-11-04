@@ -3,8 +3,8 @@ use cleanshot_core::{Color, HighlightStrength, RectF, RgbaImage};
 use crate::flatten::{Covered, highlight};
 use crate::{Error, Patch};
 
-/// The pixels a highlight of `rect` in `color` at `strength` leaves of `image`, exactly as an export draws
-/// them where no shape is under it (F-35, D-125); `None` if `rect` covers no pixel.
+/// The pixels a highlight of `rect` in `color` at `strength` leaves of `image`, exactly as an
+/// export draws them where no shape is under it (F-35, D-125); `None` if `rect` covers no pixel.
 ///
 /// # Errors
 ///

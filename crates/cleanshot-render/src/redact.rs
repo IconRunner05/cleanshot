@@ -51,8 +51,8 @@ pub(crate) fn redact(pixmap: &mut Pixmap, rect: RectF, mode: RedactMode, strengt
     }
 }
 
-/// The pixels a redaction of `rect` in `mode` at `strength` leaves of `image`, exactly as an export draws
-/// them where no shape is under it (C-22, F-36); `None` if `rect` covers no pixel.
+/// The pixels a redaction of `rect` in `mode` at `strength` leaves of `image`, exactly as an
+/// export draws them where no shape is under it (C-22, F-36); `None` if `rect` covers no pixel.
 ///
 /// # Errors
 ///
