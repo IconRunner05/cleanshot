@@ -79,10 +79,9 @@ impl Drag {
         at: PointF,
         tolerance: f32,
     ) -> Press {
-        let entry = |id| document.shapes().iter().find(|entry| entry.id == id);
         let editable =
             |entry: &&ShapeEntry| tool == Tool::Select || Tool::drawing(&entry.shape) == tool;
-        if let Some(original) = selected.and_then(entry).filter(editable)
+        if let Some(original) = selected.and_then(|id| document.shape(id)).filter(editable)
             && let Some(handle) = handle_at(&original.shape, at, tolerance)
         {
             return Press {
@@ -94,7 +93,7 @@ impl Drag {
                 })),
             };
         }
-        let hit = shape_at(document, at, tolerance).and_then(entry);
+        let hit = shape_at(document, at, tolerance).and_then(|id| document.shape(id));
         if let Some(original) = hit.filter(editable) {
             return Press {
                 selected: Some(original.id),
@@ -364,11 +363,7 @@ fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look) -> TextOrigin {
 #[must_use]
 pub fn text_reopened_at(document: &Document, at: PointF, tolerance: f32) -> Option<TextOrigin> {
     let id = shape_at(document, at, tolerance)?;
-    document
-        .shapes()
-        .iter()
-        .find(|entry| entry.id == id)
-        .and_then(existing_text)
+    document.shape(id).and_then(existing_text)
 }
 
 /// The new bubble a bubble-tool drag through `path` opens, drawn in `look` (D-126).
