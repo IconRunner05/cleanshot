@@ -30,11 +30,24 @@ pub struct TextBlock {
 }
 
 /// How wide a text block is, in ems: the widest line as DirectWrite or GPUI measured it, or a
-/// width set for it with the byte offsets where [`wrap`] started a new line to fit it.
+/// width set for it with the byte offsets where [`wrap`] started a new line to fit it, and the
+/// height set for its box, if any (D-128).
 #[derive(Clone, Debug, PartialEq)]
 enum Width {
     Measured(f32),
-    Wrapped { width: f32, breaks: Vec<usize> },
+    Wrapped {
+        width: f32,
+        height: Option<f32>,
+        breaks: Vec<usize>,
+    },
+}
+
+/// The size of a text's box, in ems of its text, set when the box was dragged out (D-126,
+/// D-128).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxSize {
+    pub width: f32,
+    pub height: f32,
 }
 
 /// Why [`TextBlock::new`] or [`TextBlock::with_text`] refused its size or width.
@@ -93,8 +106,9 @@ impl TextBlock {
                 }
                 Width::Measured(widest)
             }
-            Width::Wrapped { width, .. } => Width::Wrapped {
+            Width::Wrapped { width, height, .. } => Width::Wrapped {
                 width,
+                height,
                 breaks: wrap(&text, width, measure),
             },
         };
@@ -106,12 +120,19 @@ impl TextBlock {
     }
 
     /// This block with its left edge at `x`, wrapped in a box `width` ems wide, which the caller
-    /// has checked is positive (D-119).
-    pub(crate) fn in_box(&self, x: f32, width: f32, measure: impl Fn(&str) -> f32) -> Self {
+    /// has checked is positive (D-119), and at least `height` ems high if set (D-128).
+    pub(crate) fn in_box(
+        &self,
+        x: f32,
+        width: f32,
+        height: Option<f32>,
+        measure: impl Fn(&str) -> f32,
+    ) -> Self {
         Self {
             at: PointF { x, y: self.at.y },
             width: Width::Wrapped {
                 width,
+                height,
                 breaks: wrap(&self.text, width, measure),
             },
             ..self.clone()
@@ -124,6 +145,15 @@ impl TextBlock {
         match self.width {
             Width::Measured(_) => None,
             Width::Wrapped { width, .. } => Some(width),
+        }
+    }
+
+    /// The height in ems set for the box this block wraps in, if any (D-128).
+    #[must_use]
+    pub fn box_height(&self) -> Option<f32> {
+        match self.width {
+            Width::Measured(_) => None,
+            Width::Wrapped { height, .. } => height,
         }
     }
 
@@ -176,18 +206,23 @@ impl TextBlock {
         }
     }
 
-    /// The layout box of every line, in image pixels.
+    /// The layout box of every line, in image pixels, at least as high as the box's set height
+    /// (D-128).
     #[must_use]
     pub fn extent(&self) -> RectF {
-        let lines = self.line_ranges().fold(0.0, |lines, _| lines + 1.0);
-        let ems = match self.width {
-            Width::Measured(width) | Width::Wrapped { width, .. } => width,
+        let lines_height = self.line_ranges().fold(0.0, |lines, _| lines + 1.0) * LINE_HEIGHT;
+        let (ems, height) = match self.width {
+            Width::Measured(width) => (width, lines_height),
+            Width::Wrapped { width, height, .. } => (
+                width,
+                height.map_or(lines_height, |set| set.max(lines_height)),
+            ),
         };
         RectF {
             x: self.at.x,
             y: self.at.y,
             width: ems * self.size,
-            height: lines * LINE_HEIGHT * self.size,
+            height: height * self.size,
         }
     }
 
@@ -465,9 +500,12 @@ mod tests {
 
     fn wrapped(text: &str, width: f32) -> TextBlock {
         let at = PointF { x: 10.0, y: 20.0 };
-        TextBlock::new(at, text.into(), 16.0, 0.0)
-            .unwrap()
-            .in_box(10.0, width, half_an_em_a_letter)
+        TextBlock::new(at, text.into(), 16.0, 0.0).unwrap().in_box(
+            10.0,
+            width,
+            None,
+            half_an_em_a_letter,
+        )
     }
 
     fn lines(block: &TextBlock) -> Vec<&str> {

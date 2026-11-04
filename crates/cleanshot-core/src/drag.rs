@@ -354,7 +354,7 @@ fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look) -> TextOrigin {
         size: look.text_size(),
         style: look.style(),
         frame: TextFrame::Plain,
-        width: None,
+        box_size: None,
     })
 }
 
@@ -370,8 +370,8 @@ pub fn text_reopened_at(document: &Document, at: PointF, tolerance: f32) -> Opti
 fn new_bubble(path: &[PointF], look: &Look) -> Option<TextOrigin> {
     let (&from, &to) = (path.first()?, path.last()?);
     let size = look.text_size();
-    let (at, width) = match Bubble::text_box_in(box_between(from, to), size) {
-        Some((at, width)) => (at, Some(width)),
+    let (at, box_size) = match Bubble::text_box_in(box_between(from, to), size) {
+        Some((at, dragged)) => (at, Some(dragged)),
         None => (from, None),
     };
     Some(TextOrigin::New {
@@ -381,7 +381,7 @@ fn new_bubble(path: &[PointF], look: &Look) -> Option<TextOrigin> {
         frame: TextFrame::Bubble {
             tail: Bubble::first_tail(at, size),
         },
-        width,
+        box_size,
     })
 }
 
@@ -420,7 +420,7 @@ mod tests {
     use super::*;
     use crate::document::{Fill, RgbaImage, Style};
     use crate::history::History;
-    use crate::text::{DEFAULT_TEXT_SIZE, TextBlock};
+    use crate::text::{BoxSize, DEFAULT_TEXT_SIZE, LINE_HEIGHT, TextBlock};
 
     fn point(x: f32, y: f32) -> PointF {
         PointF { x, y }
@@ -698,7 +698,7 @@ mod tests {
                 size: DEFAULT_TEXT_SIZE,
                 style: Look::default_for(Tool::Text).style(),
                 frame: TextFrame::Plain,
-                width: None,
+                box_size: None,
             }))
         };
         assert_eq!(press(point(30.0, 20.0)).start, new_box(point(30.0, 20.0)));
@@ -749,7 +749,7 @@ mod tests {
                 frame: TextFrame::Bubble {
                     tail: Bubble::first_tail(at, DEFAULT_TEXT_SIZE),
                 },
-                width: None,
+                box_size: None,
             })
         );
     }
@@ -779,7 +779,10 @@ mod tests {
                 frame: TextFrame::Bubble {
                     tail: Bubble::first_tail(at, DEFAULT_TEXT_SIZE),
                 },
-                width: Some(5.0),
+                box_size: Some(BoxSize {
+                    width: 5.0,
+                    height: LINE_HEIGHT,
+                }),
             }
         );
         let half_an_em_a_letter = |line: &str| line.chars().fold(0.0, |width, _| width + 0.5);
@@ -808,10 +811,48 @@ mod tests {
             narrow.typed_on_release(Tool::Bubble),
             Some(TextOrigin::New {
                 at: PointF { x: 40.0, y: 120.0 },
-                width: None,
+                box_size: None,
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn d128_a_bubble_drag_sets_its_box_height_as_well_as_its_width() {
+        let (document, _, _) = document();
+        let look = Look::default_for(Tool::Bubble);
+        let mut drag = drag(Drag::press(
+            &document,
+            Tool::Bubble,
+            look,
+            None,
+            point(40.0, 120.0),
+            4.0,
+        ))
+        .expect("a press on bare image with the bubble tool starts a drag");
+        drag.extend(point(184.0, 260.0));
+        let Some(Command::Add {
+            shape: Shape::Bubble(shown),
+            ..
+        }) = drag.preview(false, |_| 0.0).unwrap()
+        else {
+            panic!("a bubble drag shows the empty bubble");
+        };
+        assert_eq!(shown.outline(), rect(40.0, 120.0, 144.0, 140.0));
+        let Some(origin) = drag.typed_on_release(Tool::Bubble) else {
+            panic!("releasing a bubble drag opens a text box");
+        };
+        let typed = origin
+            .frame()
+            .around(origin.block("hi".into(), |_| 1.0).unwrap());
+        let Shape::Bubble(typed) = typed else {
+            panic!("the bubble tool's box commits a bubble");
+        };
+        assert_eq!(
+            typed.outline(),
+            shown.outline(),
+            "one short line keeps the box"
+        );
     }
 
     #[test]

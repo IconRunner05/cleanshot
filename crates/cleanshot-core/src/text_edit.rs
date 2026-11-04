@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::{
-    Activity, Bubble, Color, Command, LineStep, PointF, Shape, ShapeId, Style, TextBlock,
+    Activity, BoxSize, Bubble, Color, Command, LineStep, PointF, Shape, ShapeId, Style, TextBlock,
     TextBlockError, Tool, text_on,
 };
 
@@ -403,14 +403,14 @@ impl TextFrame {
 /// text or bubble already there, which keeps its own style.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TextOrigin {
-    /// `width` is the box's width in ems, set when it was dragged out, which its text wraps
-    /// in; `None` lets the box grow with the text (D-126).
+    /// `box_size` is the box's size, set when it was dragged out, whose width its text wraps
+    /// in; `None` lets the box grow with the text (D-126, D-128).
     New {
         at: PointF,
         size: f32,
         style: Style,
         frame: TextFrame,
-        width: Option<f32>,
+        box_size: Option<BoxSize>,
     },
     Existing {
         id: ShapeId,
@@ -429,8 +429,8 @@ impl TextOrigin {
         }
     }
 
-    /// `text` as a block where this origin puts it: at a new box's place, size and width
-    /// (D-126), or in an existing block's place, size and box (D-119). `measure` gives a line's
+    /// `text` as a block where this origin puts it: at a new box's place, text size and box
+    /// (D-126, D-128), or in an existing block's place, size and box (D-119). `measure` gives a line's
     /// width in ems.
     ///
     /// # Errors
@@ -444,11 +444,13 @@ impl TextOrigin {
     ) -> Result<TextBlock, TextBlockError> {
         let empty = match self {
             Self::New {
-                at, size, width, ..
+                at, size, box_size, ..
             } => {
                 let empty = TextBlock::new(*at, String::new(), *size, 0.0)?;
-                match width {
-                    Some(width) => empty.in_box(at.x, *width, &measure),
+                match box_size {
+                    Some(dragged) => {
+                        empty.in_box(at.x, dragged.width, Some(dragged.height), &measure)
+                    }
                     None => empty,
                 }
             }
@@ -667,7 +669,7 @@ mod tests {
             size: 24.0,
             style: STYLE,
             frame: TextFrame::Plain,
-            width: None,
+            box_size: None,
         };
         assert_eq!(
             commit(&new, "hi"),
@@ -706,7 +708,7 @@ mod tests {
             size: 24.0,
             style: STYLE,
             frame,
-            width: None,
+            box_size: None,
         };
         let bubble = |text: &str, size| {
             Shape::Bubble(Bubble::new(
@@ -750,7 +752,7 @@ mod tests {
             size: 24.0,
             style: STYLE,
             frame: TextFrame::Plain,
-            width: None,
+            box_size: None,
         };
         let edit = TextEdit::new("hi".into());
         assert!(matches!(
@@ -855,7 +857,7 @@ mod tests {
             size: 24.0,
             style: STYLE,
             frame: TextFrame::Plain,
-            width: None,
+            box_size: None,
         };
         let mut edit = TextEdit::new("a".into());
         edit.replace_and_mark(None, "ni", None);

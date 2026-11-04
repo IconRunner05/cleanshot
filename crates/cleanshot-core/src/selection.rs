@@ -56,10 +56,9 @@ pub fn handles(shape: &Shape) -> Vec<(Handle, PointF)> {
         }),
         // F-34, F-41: text and steps resize by their font size, on the property strip.
         Shape::Text(_) | Shape::Step(_) => Vec::new(),
-        // D-119: the box's sides and corners set its width; its height follows the text.
+        // D-119, D-128: the box's sides and corners set its width and height.
         Shape::Bubble(bubble) => box_handles(bubble.outline())
             .into_iter()
-            .filter(|(handle, _)| !matches!(handle, BoxHandle::Top | BoxHandle::Bottom))
             .map(|(handle, at)| (Handle::Box(handle), at))
             .chain([(Handle::End, bubble.tail())])
             .collect(),

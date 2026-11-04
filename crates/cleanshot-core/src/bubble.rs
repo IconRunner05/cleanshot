@@ -1,6 +1,6 @@
 use crate::document::{PointF, RectF};
 use crate::selection::BoxHandle;
-use crate::text::{LINE_HEIGHT, TextBlock};
+use crate::text::{BoxSize, LINE_HEIGHT, TextBlock};
 
 /// The space between a bubble's text and its edge, and its corners' radius, as a multiple of
 /// its text size (F-42, D-87).
@@ -21,11 +21,12 @@ impl Bubble {
         Self { block, tail }
     }
 
-    /// Where the text of a new bubble whose box is dragged out over `area` starts, and the width
-    /// in ems it wraps in, for text of `size` pixels per em; `None` if `area` is narrower than one
-    /// em of text, as for a resize (D-119, D-126).
+    /// Where the text of a new bubble whose box is dragged out over `area` starts, and the box's
+    /// size inside its padding, for text of `size` pixels per em; `None` if `area` is narrower
+    /// than one em of text, as for a resize (D-119, D-126). A box lower than a line is a line
+    /// high (D-128).
     #[must_use]
-    pub fn text_box_in(area: RectF, size: f32) -> Option<(PointF, f32)> {
+    pub fn text_box_in(area: RectF, size: f32) -> Option<(PointF, BoxSize)> {
         let padding = BUBBLE_PADDING * size;
         let width = (area.width - 2.0 * padding) / size;
         (width >= 1.0).then_some((
@@ -33,7 +34,10 @@ impl Bubble {
                 x: area.x + padding,
                 y: area.y + padding,
             },
-            width,
+            BoxSize {
+                width,
+                height: ((area.height - 2.0 * padding) / size).max(LINE_HEIGHT),
+            },
         ))
     }
 
@@ -145,8 +149,9 @@ impl Bubble {
     }
 
     /// This bubble with the box's `handle` dragged to `to`: the box takes the new width, at
-    /// least one em of text, and the text wraps inside it; the text size and the tail stay, and
-    /// the box's height follows the wrapped text (D-119). `measure` gives a line's width in ems.
+    /// least one em of text, and the text wraps inside it (D-119); then the new height, never
+    /// lower than the wrapped text (D-128). The text size and the tail stay. `measure` gives a
+    /// line's width in ems.
     pub(crate) fn resized(
         &self,
         handle: BoxHandle,
@@ -157,6 +162,7 @@ impl Bubble {
         let padding = BUBBLE_PADDING * size;
         let outline = self.outline();
         let (left, right) = (outline.x, outline.x + outline.width);
+        let (top, bottom) = (outline.y, outline.y + outline.height);
         let narrowest = size + 2.0 * padding;
         let (left, right) = match handle {
             BoxHandle::TopLeft | BoxHandle::BottomLeft | BoxHandle::Left => {
@@ -168,7 +174,30 @@ impl Bubble {
             BoxHandle::Top | BoxHandle::Bottom => (left, right),
         };
         let width = (right - left - 2.0 * padding) / size;
-        self.with_block(self.block.in_box(left + padding, width, measure))
+        let lowest = self
+            .block
+            .in_box(left + padding, width, None, &measure)
+            .extent()
+            .height
+            + 2.0 * padding;
+        let (top, bottom) = match handle {
+            BoxHandle::TopLeft | BoxHandle::TopRight | BoxHandle::Top => {
+                (to.y.min(bottom - lowest), bottom)
+            }
+            BoxHandle::BottomLeft | BoxHandle::BottomRight | BoxHandle::Bottom => {
+                (top, to.y.max(top + lowest))
+            }
+            BoxHandle::Left | BoxHandle::Right => {
+                let height = self.block.box_height();
+                return self.with_block(self.block.in_box(left + padding, width, height, measure));
+            }
+        };
+        let height = Some((bottom - top - 2.0 * padding) / size);
+        let lowered = self.block.moved_to(PointF {
+            x: left + padding,
+            y: top + padding,
+        });
+        self.with_block(lowered.in_box(left + padding, width, height, measure))
     }
 
     pub(crate) fn with_block(&self, block: TextBlock) -> Self {
@@ -271,9 +300,11 @@ mod tests {
             sides,
             [
                 BoxHandle::TopLeft,
+                BoxHandle::Top,
                 BoxHandle::TopRight,
                 BoxHandle::Right,
                 BoxHandle::BottomRight,
+                BoxHandle::Bottom,
                 BoxHandle::BottomLeft,
                 BoxHandle::Left,
             ]
@@ -311,6 +342,67 @@ mod tests {
             .unwrap();
         assert_eq!(retyped.wrap_width(), Some(2.0));
         assert_eq!(retyped.lines().count(), 4);
+    }
+
+    #[test]
+    fn d128_a_bubbles_handles_set_its_height_and_the_box_is_never_lower_than_its_text() {
+        use crate::document::Shape;
+        use crate::selection::{BoxHandle, Handle, resized};
+        let half_an_em_a_letter = |line: &str| line.chars().fold(0.0, |width, _| width + 0.5);
+        let drag = |bubble: &Bubble, handle, x, y| match resized(
+            &Shape::Bubble(bubble.clone()),
+            Handle::Box(handle),
+            PointF { x, y },
+            half_an_em_a_letter,
+        ) {
+            Shape::Bubble(bubble) => bubble,
+            other => panic!("a bubble stays a bubble, not {other:?}"),
+        };
+        let outline = |bubble: &Bubble| {
+            let RectF {
+                x,
+                y,
+                width,
+                height,
+            } = bubble.outline();
+            (x, y, width, height)
+        };
+        let start = bubble(PointF { x: 0.0, y: 0.0 });
+        assert_eq!(outline(&start), (90.0, 90.0, 100.0, 45.0));
+
+        let taller = drag(&start, BoxHandle::Bottom, 0.0, 200.0);
+        assert_eq!(outline(&taller), (90.0, 90.0, 100.0, 110.0));
+        assert_eq!(taller.block().at(), PointF { x: 100.0, y: 100.0 });
+        let raised = drag(&taller, BoxHandle::Top, 0.0, 50.0);
+        assert_eq!(outline(&raised), (90.0, 50.0, 100.0, 150.0));
+        assert_eq!(raised.block().at(), PointF { x: 100.0, y: 60.0 });
+        let widened = drag(&raised, BoxHandle::Left, 40.0, 0.0);
+        assert_eq!(
+            outline(&widened),
+            (40.0, 50.0, 150.0, 150.0),
+            "a side keeps the height"
+        );
+        let corner = drag(&start, BoxHandle::BottomRight, 150.0, 300.0);
+        assert_eq!(corner.block().lines().count(), 1, "\"Hi\" fits two ems");
+        assert_eq!(outline(&corner), (90.0, 90.0, 60.0, 210.0));
+
+        let squashed = drag(&taller, BoxHandle::Bottom, 0.0, 95.0);
+        assert_eq!(
+            outline(&squashed),
+            (90.0, 90.0, 100.0, 45.0),
+            "not below the text"
+        );
+        let overflowing = taller.with_block(
+            taller
+                .block()
+                .with_text("a\nb\nc\nd".into(), half_an_em_a_letter)
+                .unwrap(),
+        );
+        assert_eq!(
+            outline(&overflowing).3,
+            4.0 * LINE_HEIGHT * 20.0 + 20.0,
+            "four lines outgrow the 90 px set inside the box"
+        );
     }
 
     #[test]

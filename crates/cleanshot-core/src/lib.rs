@@ -64,7 +64,7 @@ pub use settings_change::{Applied, SettingsNotice, SettingsSaveError, settings_n
 pub use startup::{StartupEntryError, run_command, starts};
 pub use step::{STEP_DIAMETER, Step};
 pub use text::{
-    DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,
+    BoxSize, DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, INTER, INTER_ASCENT, INTER_DESCENT,
     INTER_UNITS_PER_EM, LINE_HEIGHT, Label, TextBlock, TextBlockError, TextMasks, baseline,
     text_on,
 };
