@@ -241,7 +241,10 @@ impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for Ty
                 cx.notify();
                 draft.take()
             });
-            if let Some(value) = digits.and_then(|digits| digits.parse().ok()) {
+            if let Some(digits) = digits.filter(|digits| !digits.is_empty()) {
+                let value = digits
+                    .parse()
+                    .expect("at most three ASCII digits make a u16");
                 on_set(typed.property(value), window, cx);
             }
         };
@@ -253,6 +256,7 @@ impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for Ty
         let range = typed.range();
         let (on_key, on_out) = (draft.clone(), draft);
         let set_on_out = set.clone();
+        let focus_out = focus.clone();
         div()
             .id(ElementId::Name(id.into()))
             .track_focus(&focus)
@@ -274,7 +278,13 @@ impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for Ty
             .focus(|field| field.border_color(ACCENT))
             .text_xs()
             .text_color(theme.text)
-            .on_mouse_down_out(move |_, window, cx| set_on_out(&on_out, window, cx))
+            .on_mouse_down_out(move |_, window, cx| {
+                if focus_out.is_focused(window) {
+                    set_on_out(&on_out, window, cx);
+                } else {
+                    on_out.update(cx, |draft, _| *draft = None);
+                }
+            })
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 if event.keystroke.modifiers.modified() {
                     return;
