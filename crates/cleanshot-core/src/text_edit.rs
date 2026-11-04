@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use crate::{
-    Activity, BoxSize, Bubble, Color, Command, LineStep, PointF, Shape, ShapeId, Style, TextBlock,
-    TextBlockError, Tool, text_on,
+    Activity, Alignment, BoxSize, Bubble, Color, Command, LineStep, PointF, Shape, ShapeId, Style,
+    TextBlock, TextBlockError, Tool, text_on,
 };
 
 /// The text box being typed into (F-34): its text, caret and selection, and the IME's
@@ -411,6 +411,7 @@ pub enum TextOrigin {
         style: Style,
         frame: TextFrame,
         box_size: Option<BoxSize>,
+        alignment: Alignment,
     },
     Existing {
         id: ShapeId,
@@ -429,9 +430,9 @@ impl TextOrigin {
         }
     }
 
-    /// `text` as a block where this origin puts it: at a new box's place, text size and box
-    /// (D-126, D-128), or in an existing block's place, size and box (D-119). `measure` gives a line's
-    /// width in ems.
+    /// `text` as a block where this origin puts it: at a new box's place, text size, box and
+    /// alignment (D-126, D-128, D-129), or in an existing block's place, size, box and alignment
+    /// (D-119). `measure` gives a line's width in ems.
     ///
     /// # Errors
     ///
@@ -444,9 +445,14 @@ impl TextOrigin {
     ) -> Result<TextBlock, TextBlockError> {
         let empty = match self {
             Self::New {
-                at, size, box_size, ..
+                at,
+                size,
+                box_size,
+                alignment,
+                ..
             } => {
-                let empty = TextBlock::new(*at, String::new(), *size, 0.0)?;
+                let empty =
+                    TextBlock::new(*at, String::new(), *size, 0.0)?.with_alignment(*alignment);
                 match box_size {
                     Some(dragged) => {
                         empty.in_box(at.x, dragged.width, Some(dragged.height), &measure)
@@ -670,6 +676,7 @@ mod tests {
             style: STYLE,
             frame: TextFrame::Plain,
             box_size: None,
+            alignment: Alignment::default(),
         };
         assert_eq!(
             commit(&new, "hi"),
@@ -709,6 +716,7 @@ mod tests {
             style: STYLE,
             frame,
             box_size: None,
+            alignment: Alignment::default(),
         };
         let bubble = |text: &str, size| {
             Shape::Bubble(Bubble::new(
@@ -753,6 +761,7 @@ mod tests {
             style: STYLE,
             frame: TextFrame::Plain,
             box_size: None,
+            alignment: Alignment::default(),
         };
         let edit = TextEdit::new("hi".into());
         assert!(matches!(
@@ -858,6 +867,7 @@ mod tests {
             style: STYLE,
             frame: TextFrame::Plain,
             box_size: None,
+            alignment: Alignment::default(),
         };
         let mut edit = TextEdit::new("a".into());
         edit.replace_and_mark(None, "ni", None);

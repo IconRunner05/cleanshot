@@ -1,8 +1,11 @@
-use cleanshot_core::{Command, Fill, Frame, Look, Property, Setting, SpotlightDim};
+use cleanshot_core::{
+    Alignment, Command, Fill, Frame, Horizontal, Look, Property, Setting, SpotlightDim, Vertical,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Role, Stateful,
-    StatefulInteractiveElement, Styled, Toggled, Window, div, px,
+    App, Div, ElementId, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
+    Stateful, StatefulInteractiveElement, Styled, Toggled, Window, anchored, deferred, div, point,
+    px,
 };
 
 use crate::canvas::rgba;
@@ -36,6 +39,14 @@ pub(crate) fn property_strip(
                         .on_click(move |_, window, cx| on_set(toggled, window, cx))
                         .child(div().text_xs().text_color(theme.text).child(name));
                 group(name, Role::Group, index > 0, theme).child(check)
+            }
+            Setting::Alignment | Setting::HorizontalAlignment => {
+                group(setting.name(), Role::Group, index > 0, theme).child(AlignmentPicker {
+                    setting,
+                    look,
+                    theme,
+                    on_set: on_set.clone(),
+                })
             }
             Setting::Color
             | Setting::StrokeWidth
@@ -107,6 +118,103 @@ pub(crate) fn property_strip(
             )
             .children(toggles),
         )
+}
+
+/// The button showing where text sits in its box, which opens a grid of `setting`'s choices,
+/// each drawn as where it puts the lines (D-129). A pick or a press outside the grid closes it.
+#[derive(IntoElement)]
+struct AlignmentPicker<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> {
+    setting: Setting,
+    look: Look,
+    theme: Theme,
+    on_set: F,
+}
+
+impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for AlignmentPicker<F> {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self {
+            setting,
+            look,
+            theme,
+            on_set,
+        } = self;
+        let open = window.use_keyed_state("alignment-grid", cx, |_, _| false);
+        let shown = *open.read(cx);
+        let set_open = move |entity: &Entity<bool>, value: bool, cx: &mut App| {
+            entity.update(cx, |open, cx| {
+                *open = value;
+                cx.notify();
+            });
+        };
+        let opener = open.clone();
+        let button = strip_button(
+            format!("{}: open", setting.name()),
+            Role::Button,
+            setting.name(),
+            shown,
+            theme,
+        )
+        .aria_expanded(shown)
+        .on_click(move |_, _, cx| set_open(&opener, true, cx))
+        .child(alignment_glyph(look.alignment(), theme));
+        let grid = shown.then(|| {
+            let closer = open.clone();
+            let cells = setting.choices().iter().map(|&(property, name)| {
+                let (on_set, open) = (on_set.clone(), open.clone());
+                strip_button(
+                    format!("{}: {name}", setting.name()),
+                    Role::RadioButton,
+                    name,
+                    look.has(property),
+                    theme,
+                )
+                .on_click(move |_, window, cx| {
+                    set_open(&open, false, cx);
+                    on_set(property, window, cx);
+                })
+                .child(swatch(property, name, theme))
+            });
+            deferred(
+                anchored().offset(point(px(-6.0), px(10.0))).child(
+                    panel(theme)
+                        .id("alignment-grid")
+                        .role(Role::RadioGroup)
+                        .aria_label(setting.name())
+                        .grid()
+                        .grid_cols(3)
+                        .gap(px(2.0))
+                        .on_mouse_down_out(move |_, _, cx| set_open(&closer, false, cx))
+                        .children(cells),
+                ),
+            )
+        });
+        div().flex().flex_col().child(button).children(grid)
+    }
+}
+
+/// Three lines in a box, set where `alignment` puts text (D-129).
+fn alignment_glyph(alignment: Alignment, theme: Theme) -> Div {
+    let lines = [10.0, 6.0, 8.0].map(|width| div().w(px(width)).h(px(2.0)).bg(theme.text));
+    let frame = div()
+        .size(px(18.0))
+        .p(px(2.0))
+        .rounded(px(3.0))
+        .border_1()
+        .border_color(theme.hairline)
+        .flex()
+        .flex_col()
+        .gap(px(1.0));
+    let frame = match alignment.horizontal {
+        Horizontal::Left => frame.items_start(),
+        Horizontal::Centre => frame.items_center(),
+        Horizontal::Right => frame.items_end(),
+    };
+    let frame = match alignment.vertical {
+        Vertical::Top => frame.justify_start(),
+        Vertical::Centre => frame.justify_center(),
+        Vertical::Bottom => frame.justify_end(),
+    };
+    frame.children(lines)
 }
 
 /// What the strip calls the border and shadow round the whole image, apart from a shape's own
@@ -215,6 +323,7 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
             .text_xs()
             .text_color(theme.text)
             .child(format!("{size}")),
+        Property::Alignment(alignment) => alignment_glyph(alignment, theme),
         Property::RedactStrength(strength) => div()
             .text_xs()
             .text_color(theme.text)

@@ -4,7 +4,7 @@ use crate::document::{
     Color, Fill, HighlightStrength, RedactMode, RedactStrength, Shape, ShapeEntry, ShapeId, Style,
 };
 use crate::history::Command;
-use crate::text::{DEFAULT_TEXT_SIZE, TextBlock};
+use crate::text::{Alignment, DEFAULT_TEXT_SIZE, Horizontal, TextBlock, Vertical};
 use crate::text_edit::{TextFrame, TextOrigin};
 use crate::tool::Tool;
 
@@ -31,6 +31,7 @@ pub struct Look {
     redact_strength: RedactStrength,
     highlight_strength: HighlightStrength,
     text_size: f32,
+    alignment: Alignment,
     shadow: bool,
 }
 
@@ -60,6 +61,7 @@ impl Look {
             redact_strength: RedactStrength::Fine,
             highlight_strength: HighlightStrength::Strong,
             text_size: DEFAULT_TEXT_SIZE,
+            alignment: Alignment::default(),
             shadow: false,
         }
     }
@@ -79,6 +81,12 @@ impl Look {
     #[must_use]
     pub fn text_size(&self) -> f32 {
         self.text_size
+    }
+
+    /// Where text sits in its box (D-129).
+    #[must_use]
+    pub fn alignment(&self) -> Alignment {
+        self.alignment
     }
 
     /// What a box-shaped shape is filled with: an outline, or the style colour.
@@ -145,7 +153,9 @@ impl Look {
     }
 
     fn dress_text(&self, block: &TextBlock) -> TextBlock {
-        block.with_size(self.text_size)
+        block
+            .with_size(self.text_size)
+            .with_alignment(self.alignment)
     }
 
     /// Whether `property` is already this look's value, which the strip shows as checked.
@@ -190,6 +200,7 @@ impl Look {
                 ..self
             },
             Property::Shadow(shadow) => Self { shadow, ..self },
+            Property::Alignment(alignment) => Self { alignment, ..self },
         })
     }
 
@@ -217,6 +228,7 @@ impl Look {
             },
             Shape::Text(block) => Self {
                 text_size: block.size(),
+                alignment: block.alignment(),
                 ..look
             },
             Shape::Step(step) => Self {
@@ -225,6 +237,7 @@ impl Look {
             },
             Shape::Bubble(bubble) => Self {
                 text_size: bubble.block().size(),
+                alignment: bubble.block().alignment(),
                 ..look
             },
             Shape::Arrow { .. } | Shape::Line { .. } | Shape::Pen(_) | Shape::Spotlight(_) => look,
@@ -243,6 +256,7 @@ pub enum Property {
     HighlightStrength(HighlightStrength),
     TextSize(f32),
     Shadow(bool),
+    Alignment(Alignment),
 }
 
 /// A setting on the property strip, without a value.
@@ -257,6 +271,10 @@ pub enum Setting {
     TextSize,
     /// On or off, shown as one check box, not a choice of values (D-114).
     Shadow,
+    /// Across and down a bubble's box, picked from a grid the strip opens (D-129).
+    Alignment,
+    /// Across a text's lines only: a text box is as high as its lines (D-129).
+    HorizontalAlignment,
 }
 
 /// Whether the shapes `tool` draws can cast a shadow (D-114).
@@ -291,7 +309,14 @@ impl Setting {
             }
             Tool::Highlighter => &[Self::Color, Self::HighlightStrength],
             Tool::Redact => &[Self::Redact, Self::RedactStrength],
-            Tool::Text | Tool::Step | Tool::Bubble => &[Self::Color, Self::TextSize, Self::Shadow],
+            Tool::Text => &[
+                Self::Color,
+                Self::TextSize,
+                Self::HorizontalAlignment,
+                Self::Shadow,
+            ],
+            Tool::Bubble => &[Self::Color, Self::TextSize, Self::Alignment, Self::Shadow],
+            Tool::Step => &[Self::Color, Self::TextSize, Self::Shadow],
             Tool::Select | Tool::Crop | Tool::Spotlight => &[],
         }
     }
@@ -307,6 +332,7 @@ impl Setting {
             Self::RedactStrength | Self::HighlightStrength => "Strength",
             Self::TextSize => "Text size",
             Self::Shadow => "Shadow",
+            Self::Alignment | Self::HorizontalAlignment => "Alignment",
         }
     }
 
@@ -323,6 +349,8 @@ impl Setting {
             Self::HighlightStrength => &HIGHLIGHT_STRENGTH_CHOICES,
             Self::TextSize => &TEXT_SIZE_CHOICES,
             Self::Shadow => &SHADOW_CHOICES,
+            Self::Alignment => &ALIGNMENT_CHOICES,
+            Self::HorizontalAlignment => &HORIZONTAL_ALIGNMENT_CHOICES,
         }
     }
 }
@@ -400,6 +428,34 @@ const TEXT_SIZE_CHOICES: [(Property, &str); 4] = [
 const SHADOW_CHOICES: [(Property, &str); 2] = [
     (Property::Shadow(false), "No shadow"),
     (Property::Shadow(true), "Shadow"),
+];
+
+const fn aligned(horizontal: Horizontal, vertical: Vertical) -> Property {
+    Property::Alignment(Alignment {
+        horizontal,
+        vertical,
+    })
+}
+
+const ALIGNMENT_CHOICES: [(Property, &str); 9] = [
+    (aligned(Horizontal::Left, Vertical::Top), "Top left"),
+    (aligned(Horizontal::Centre, Vertical::Top), "Top centre"),
+    (aligned(Horizontal::Right, Vertical::Top), "Top right"),
+    (aligned(Horizontal::Left, Vertical::Centre), "Centre left"),
+    (aligned(Horizontal::Centre, Vertical::Centre), "Centre"),
+    (aligned(Horizontal::Right, Vertical::Centre), "Centre right"),
+    (aligned(Horizontal::Left, Vertical::Bottom), "Bottom left"),
+    (
+        aligned(Horizontal::Centre, Vertical::Bottom),
+        "Bottom centre",
+    ),
+    (aligned(Horizontal::Right, Vertical::Bottom), "Bottom right"),
+];
+
+const HORIZONTAL_ALIGNMENT_CHOICES: [(Property, &str); 3] = [
+    (aligned(Horizontal::Left, Vertical::Top), "Left"),
+    (aligned(Horizontal::Centre, Vertical::Top), "Centre"),
+    (aligned(Horizontal::Right, Vertical::Top), "Right"),
 ];
 
 /// Why the strip refused a value.
@@ -521,11 +577,15 @@ impl Looks {
     ) -> Result<Option<Command>, PropertyError> {
         match origin {
             TextOrigin::New {
-                size, style, frame, ..
+                size,
+                style,
+                frame,
+                alignment,
+                ..
             } => {
                 self.set(property, frame.tool(), None)?;
                 let look = self.look(frame.tool());
-                (*size, *style) = (look.text_size, look.style);
+                (*size, *style, *alignment) = (look.text_size, look.style, look.alignment);
                 Ok(None)
             }
             TextOrigin::Existing {
@@ -899,6 +959,34 @@ mod tests {
     }
 
     #[test]
+    fn d129_text_aligns_across_a_bubble_also_down_and_a_pick_restyles_the_selection_in_one_step() {
+        assert_eq!(Setting::HorizontalAlignment.choices().len(), 3);
+        assert_eq!(Setting::Alignment.choices().len(), 9);
+        assert!(Setting::for_tool(Tool::Text).contains(&Setting::HorizontalAlignment));
+        assert!(Setting::for_tool(Tool::Bubble).contains(&Setting::Alignment));
+        let centred = Alignment {
+            horizontal: Horizontal::Centre,
+            vertical: Vertical::Bottom,
+        };
+        let mut looks = Looks::default();
+        let text = TextBlock::new(PointF { x: 1.0, y: 1.0 }, "Hi".into(), 24.0, 1.5).unwrap();
+        let bubble = entry(
+            Shape::Bubble(crate::Bubble::new(text, PointF { x: 0.0, y: 0.0 })),
+            Look::default_for(Tool::Bubble).style(),
+        );
+        let picked = looks.set(Property::Alignment(centred), Tool::Select, Some(&bubble));
+        let Ok(Some(Command::Replace {
+            shape: Shape::Bubble(restyled),
+            ..
+        })) = picked
+        else {
+            panic!("one replace of the bubble, not {picked:?}");
+        };
+        assert_eq!(restyled.block().alignment(), centred);
+        assert_eq!(looks.look(Tool::Bubble).alignment(), centred);
+    }
+
+    #[test]
     fn a_size_that_is_not_positive_is_refused_and_changes_nothing() {
         let mut looks = Looks::default();
         for size in [0.0, -3.0, f32::NAN] {
@@ -945,6 +1033,7 @@ mod tests {
             style: Look::default_for(Tool::Text).style(),
             frame: TextFrame::Plain,
             box_size: None,
+            alignment: Alignment::default(),
         };
         let added = looks.restyle_text(Property::TextSize(40.0), &mut new);
         assert_eq!(added, Ok(None));

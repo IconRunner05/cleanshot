@@ -17,6 +17,9 @@ section exists.
   wraps in it as you type. A click still opens a bubble that grows with its text (F-42).
 - A speech bubble's top and bottom handles set its height, and its corners set width and
   height together. The box never gets lower than its text (F-42).
+- Text can be aligned left, centre or right, and a speech bubble's text also to the top,
+  centre or bottom of its box. Alignment on the property strip opens a small grid of the
+  choices, drawn as where the lines go. It can be changed after drawing (F-34, F-42).
 - Resting the pointer on a button in the editor's toolbar or property strip, or on a
   control in Settings, shows its name and its shortcut, such as "Highlighter (H)" (D-117).
 - Redact has a Strength setting on the property strip: 16, 24, 32 or 48 pixel blocks, for

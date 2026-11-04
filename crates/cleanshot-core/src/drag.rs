@@ -355,6 +355,7 @@ fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look) -> TextOrigin {
         style: look.style(),
         frame: TextFrame::Plain,
         box_size: None,
+        alignment: look.alignment(),
     })
 }
 
@@ -382,6 +383,7 @@ fn new_bubble(path: &[PointF], look: &Look) -> Option<TextOrigin> {
             tail: Bubble::first_tail(at, size),
         },
         box_size,
+        alignment: look.alignment(),
     })
 }
 
@@ -420,7 +422,7 @@ mod tests {
     use super::*;
     use crate::document::{Fill, RgbaImage, Style};
     use crate::history::History;
-    use crate::text::{BoxSize, DEFAULT_TEXT_SIZE, LINE_HEIGHT, TextBlock};
+    use crate::text::{Alignment, BoxSize, DEFAULT_TEXT_SIZE, LINE_HEIGHT, TextBlock};
 
     fn point(x: f32, y: f32) -> PointF {
         PointF { x, y }
@@ -699,6 +701,7 @@ mod tests {
                 style: Look::default_for(Tool::Text).style(),
                 frame: TextFrame::Plain,
                 box_size: None,
+                alignment: Alignment::default(),
             }))
         };
         assert_eq!(press(point(30.0, 20.0)).start, new_box(point(30.0, 20.0)));
@@ -750,6 +753,7 @@ mod tests {
                     tail: Bubble::first_tail(at, DEFAULT_TEXT_SIZE),
                 },
                 box_size: None,
+                alignment: Alignment::default(),
             })
         );
     }
@@ -783,6 +787,7 @@ mod tests {
                     width: 5.0,
                     height: LINE_HEIGHT,
                 }),
+                alignment: Alignment::default(),
             }
         );
         let half_an_em_a_letter = |line: &str| line.chars().fold(0.0, |width, _| width + 0.5);

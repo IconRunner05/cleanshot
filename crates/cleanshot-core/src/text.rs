@@ -20,26 +20,77 @@ pub const INTER_ASCENT: u16 = 1984;
 pub const INTER_DESCENT: u16 = 494;
 
 /// A text shape: lines broken where the user pressed Enter and, in a box of set width, where a
-/// line would overflow it (F-34, D-119).
+/// line would overflow it (F-34, D-119), each placed in the box by its alignment (D-129).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextBlock {
     at: PointF,
     text: String,
     size: f32,
     width: Width,
+    /// Each line's width in ems, top to bottom, without the spaces a wrapped line ends in.
+    line_widths: Vec<f32>,
+    alignment: Alignment,
 }
 
-/// How wide a text block is, in ems: the widest line as DirectWrite or GPUI measured it, or a
-/// width set for it with the byte offsets where [`wrap`] started a new line to fit it, and the
-/// height set for its box, if any (D-128).
+/// How wide a text block is: as wide as its widest line, or a width set for it, in ems, with
+/// the byte offsets where [`wrap`] started a new line to fit it, and the height set for its
+/// box, if any (D-128).
 #[derive(Clone, Debug, PartialEq)]
 enum Width {
-    Measured(f32),
+    Measured,
     Wrapped {
         width: f32,
         height: Option<f32>,
         breaks: Vec<usize>,
     },
+}
+
+/// Where a text's lines sit in its box (D-129). A line narrower than the box moves across it;
+/// the lines together move down a box set higher than they are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Alignment {
+    pub horizontal: Horizontal,
+    pub vertical: Vertical,
+}
+
+/// Where each line sits across its box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Horizontal {
+    #[default]
+    Left,
+    Centre,
+    Right,
+}
+
+/// Where the lines together sit down a box set higher than they are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Vertical {
+    #[default]
+    Top,
+    Centre,
+    Bottom,
+}
+
+impl Horizontal {
+    /// The share of the room a line leaves in its box that goes before it.
+    fn share_before(self) -> f32 {
+        match self {
+            Self::Left => 0.0,
+            Self::Centre => 0.5,
+            Self::Right => 1.0,
+        }
+    }
+}
+
+impl Vertical {
+    /// The share of the room the lines leave in their box that goes above them.
+    fn share_before(self) -> f32 {
+        match self {
+            Self::Top => 0.0,
+            Self::Centre => 0.5,
+            Self::Bottom => 1.0,
+        }
+    }
 }
 
 /// The size of a text's box, in ems of its text, set when the box was dragged out (D-126,
@@ -60,8 +111,9 @@ pub enum TextBlockError {
 }
 
 impl TextBlock {
-    /// Text whose first line box has its top-left corner at `at`, `size` pixels high per em,
-    /// with `em_width` the widest line's layout width at size 1, measured for this `text`.
+    /// Left-aligned text whose first line box has its top-left corner at `at`, `size` pixels
+    /// high per em, with `em_width` the layout width at size 1 of each of its lines, measured
+    /// for this `text`; [`TextBlock::with_text`] measures each line on its own.
     ///
     /// # Errors
     ///
@@ -74,11 +126,14 @@ impl TextBlock {
         if !(em_width.is_finite() && em_width >= 0.0) {
             return Err(TextBlockError::WidthNotMeasured(em_width));
         }
+        let line_widths = text.split('\n').map(|_| em_width).collect();
         Ok(Self {
             at,
             text,
             size,
-            width: Width::Measured(em_width),
+            width: Width::Measured,
+            line_widths,
+            alignment: Alignment::default(),
         })
     }
 
@@ -94,29 +149,27 @@ impl TextBlock {
         text: String,
         measure: impl Fn(&str) -> f32,
     ) -> Result<Self, TextBlockError> {
-        let width = match self.width {
-            Width::Measured(_) => {
-                let mut widest = 0.0_f32;
+        match self.width {
+            Width::Measured => {
+                let mut line_widths = Vec::new();
                 for line in text.split('\n') {
                     let width = measure(line);
                     if !(width.is_finite() && width >= 0.0) {
                         return Err(TextBlockError::WidthNotMeasured(width));
                     }
-                    widest = widest.max(width);
+                    line_widths.push(width);
                 }
-                Width::Measured(widest)
+                Ok(Self {
+                    at: self.at,
+                    text,
+                    size: self.size,
+                    width: Width::Measured,
+                    line_widths,
+                    alignment: self.alignment,
+                })
             }
-            Width::Wrapped { width, height, .. } => Width::Wrapped {
-                width,
-                height,
-                breaks: wrap(&text, width, measure),
-            },
-        };
-        Ok(Self {
-            text,
-            width,
-            ..self.clone()
-        })
+            Width::Wrapped { width, height, .. } => Ok(self.wrapped(text, width, height, measure)),
+        }
     }
 
     /// This block with its left edge at `x`, wrapped in a box `width` ems wide, which the caller
@@ -130,11 +183,46 @@ impl TextBlock {
     ) -> Self {
         Self {
             at: PointF { x, y: self.at.y },
+            ..self.wrapped(self.text.clone(), width, height, measure)
+        }
+    }
+
+    /// `text` in this block's place, size and alignment, wrapped in a box `width` ems wide and at
+    /// least `height` ems high if set.
+    fn wrapped(
+        &self,
+        text: String,
+        width: f32,
+        height: Option<f32>,
+        measure: impl Fn(&str) -> f32,
+    ) -> Self {
+        let breaks = wrap(&text, width, &measure);
+        let line_widths = line_ranges(&text, &breaks)
+            .map(|line| measure(text[line].trim_end_matches(' ')))
+            .collect();
+        Self {
+            at: self.at,
+            text,
+            size: self.size,
             width: Width::Wrapped {
                 width,
                 height,
-                breaks: wrap(&self.text, width, measure),
+                breaks,
             },
+            line_widths,
+            alignment: self.alignment,
+        }
+    }
+
+    /// Where this block's lines sit in its box (D-129).
+    #[must_use]
+    pub fn alignment(&self) -> Alignment {
+        self.alignment
+    }
+
+    pub(crate) fn with_alignment(&self, alignment: Alignment) -> Self {
+        Self {
+            alignment,
             ..self.clone()
         }
     }
@@ -143,7 +231,7 @@ impl TextBlock {
     #[must_use]
     pub fn wrap_width(&self) -> Option<f32> {
         match self.width {
-            Width::Measured(_) => None,
+            Width::Measured => None,
             Width::Wrapped { width, .. } => Some(width),
         }
     }
@@ -151,7 +239,7 @@ impl TextBlock {
     /// The height in ems set for the box this block wraps in, if any (D-128).
     pub(crate) fn box_height(&self) -> Option<f32> {
         match self.width {
-            Width::Measured(_) => None,
+            Width::Measured => None,
             Width::Wrapped { height, .. } => height,
         }
     }
@@ -160,22 +248,10 @@ impl TextBlock {
     /// ends a line the user broke.
     pub fn line_ranges(&self) -> impl Iterator<Item = Range<usize>> + '_ {
         let breaks: &[usize] = match &self.width {
-            Width::Measured(_) => &[],
+            Width::Measured => &[],
             Width::Wrapped { breaks, .. } => breaks,
         };
-        let text = &self.text;
-        let mut breaks = breaks.iter().copied().peekable();
-        let mut start = Some(0);
-        std::iter::from_fn(move || {
-            let from = start?;
-            let hard_end = text[from..].find('\n').map(|at| from + at);
-            if let Some(soft) = breaks.next_if(|soft| hard_end.is_none_or(|end| *soft < end)) {
-                start = Some(soft);
-                return Some(from..soft);
-            }
-            start = hard_end.map(|end| end + 1);
-            Some(from..hard_end.unwrap_or(text.len()))
-        })
+        line_ranges(&self.text, breaks)
     }
 
     /// The top-left corner of the first line box, in image pixels.
@@ -209,20 +285,41 @@ impl TextBlock {
     /// (D-128).
     #[must_use]
     pub fn extent(&self) -> RectF {
-        let lines_height = self.line_ranges().fold(0.0, |lines, _| lines + 1.0) * LINE_HEIGHT;
-        let (ems, height) = match self.width {
-            Width::Measured(width) => (width, lines_height),
-            Width::Wrapped { width, height, .. } => (
-                width,
-                height.map_or(lines_height, |set| set.max(lines_height)),
-            ),
+        let lines_height = self.lines_height();
+        let height = match self.width {
+            Width::Measured => lines_height,
+            Width::Wrapped { height, .. } => {
+                height.map_or(lines_height, |set| set.max(lines_height))
+            }
         };
         RectF {
             x: self.at.x,
             y: self.at.y,
-            width: ems * self.size,
+            width: self.box_width() * self.size,
             height: height * self.size,
         }
+    }
+
+    /// The width of the box in ems: the set width, or the widest line's.
+    fn box_width(&self) -> f32 {
+        match self.width {
+            Width::Measured => self.line_widths.iter().copied().fold(0.0, f32::max),
+            Width::Wrapped { width, .. } => width,
+        }
+    }
+
+    /// The height of the lines together, in ems.
+    fn lines_height(&self) -> f32 {
+        self.line_widths
+            .iter()
+            .fold(0.0, |height, _| height + LINE_HEIGHT)
+    }
+
+    /// The top of the first line box, in image pixels: the box's top, or lower in a box set
+    /// higher than the lines, as the vertical alignment puts them (D-129).
+    fn lines_top(&self) -> f32 {
+        let spare = self.extent().height - self.lines_height() * self.size;
+        self.at.y + spare * self.alignment.vertical.share_before()
     }
 
     /// The line, from 0, whose line box holds the height `y` in image pixels; the first line above
@@ -232,7 +329,7 @@ impl TextBlock {
         let step = LINE_HEIGHT * self.size;
         self.line_ranges()
             .skip(1)
-            .scan(self.at.y + step, |top, _| {
+            .scan(self.lines_top() + step, |top, _| {
                 let line_top = *top;
                 *top += step;
                 Some(line_top)
@@ -242,21 +339,45 @@ impl TextBlock {
     }
 
     /// Each line's text and where its baseline starts, in image pixels: the line box's top,
-    /// plus half the leading Inter leaves in it, plus Inter's ascent.
+    /// plus half the leading Inter leaves in it, plus Inter's ascent; across, the line moves
+    /// into the room it leaves in the box as the alignment puts it (D-129).
     pub fn lines(&self) -> impl Iterator<Item = (&str, PointF)> {
-        let first = baseline(self.at.y, self.size);
+        let first = baseline(self.lines_top(), self.size);
         let step = LINE_HEIGHT * self.size;
-        let x = self.at.x;
-        self.line_ranges().scan(first, move |y, line| {
-            let baseline = PointF { x, y: *y };
-            *y += step;
-            Some((&self.text[line], baseline))
-        })
+        let box_width = self.box_width();
+        let share = self.alignment.horizontal.share_before();
+        self.line_ranges()
+            .zip(&self.line_widths)
+            .scan(first, move |y, (line, width)| {
+                let room = (box_width - width).max(0.0) * self.size;
+                let baseline = PointF {
+                    x: self.at.x + room * share,
+                    y: *y,
+                };
+                *y += step;
+                Some((&self.text[line], baseline))
+            })
     }
 
     pub(crate) fn moved_to(&self, at: PointF) -> Self {
         Self { at, ..self.clone() }
     }
+}
+
+/// The byte range of each line in `text`, broken at each `\n` and at each of `breaks`.
+fn line_ranges<'a>(text: &'a str, breaks: &'a [usize]) -> impl Iterator<Item = Range<usize>> + 'a {
+    let mut breaks = breaks.iter().copied().peekable();
+    let mut start = Some(0);
+    std::iter::from_fn(move || {
+        let from = start?;
+        let hard_end = text[from..].find('\n').map(|at| from + at);
+        if let Some(soft) = breaks.next_if(|soft| hard_end.is_none_or(|end| *soft < end)) {
+            start = Some(soft);
+            return Some(from..soft);
+        }
+        start = hard_end.map(|end| end + 1);
+        Some(from..hard_end.unwrap_or(text.len()))
+    })
 }
 
 /// The byte offsets in `text` where a line starts because the line before it would overflow a
@@ -509,6 +630,50 @@ mod tests {
 
     fn lines(block: &TextBlock) -> Vec<&str> {
         block.lines().map(|(line, _)| line).collect()
+    }
+
+    #[test]
+    fn d129_each_line_sits_across_its_box_and_the_lines_down_a_taller_box_as_aligned() {
+        let at = PointF { x: 10.0, y: 20.0 };
+        let measured = TextBlock::new(at, String::new(), 20.0, 0.0)
+            .unwrap()
+            .with_text("a\nbbb".into(), half_an_em_a_letter)
+            .unwrap();
+        let boxed = measured.in_box(10.0, 4.0, Some(5.0), half_an_em_a_letter);
+        let placed = |block: &TextBlock, horizontal, vertical| {
+            let aligned = block.with_alignment(Alignment {
+                horizontal,
+                vertical,
+            });
+            let starts: Vec<_> = aligned.lines().map(|(_, start)| start.x).collect();
+            let first_top = aligned.lines().next().unwrap().1.y - baseline(0.0, 20.0);
+            (starts, first_top)
+        };
+        assert_eq!(
+            placed(&boxed, Horizontal::Left, Vertical::Top),
+            (vec![10.0, 10.0], 20.0)
+        );
+        assert_eq!(
+            placed(&boxed, Horizontal::Centre, Vertical::Centre),
+            (vec![45.0, 35.0], 45.0),
+            "a 4 em box round lines of 0.5 and 1.5 ems, 100 px high round 50 px of lines"
+        );
+        assert_eq!(
+            placed(&boxed, Horizontal::Right, Vertical::Bottom),
+            (vec![80.0, 60.0], 70.0)
+        );
+        assert_eq!(
+            placed(&measured, Horizontal::Right, Vertical::Bottom),
+            (vec![30.0, 10.0], 20.0),
+            "unboxed text aligns to its widest line and is as high as its lines"
+        );
+        let low = boxed.with_alignment(Alignment {
+            horizontal: Horizontal::Left,
+            vertical: Vertical::Bottom,
+        });
+        assert_eq!(low.line_at(75.0), 0, "the first line's box starts at 70");
+        assert_eq!(low.line_at(96.0), 1);
+        assert_eq!(low.extent(), boxed.extent(), "alignment moves no box");
     }
 
     #[test]
