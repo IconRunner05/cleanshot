@@ -216,7 +216,7 @@ impl EditorView {
                 };
                 if let Some(command) = drag.command(shift, |line| line_width(line, window)) {
                     self.apply(command);
-                } else if let Some(origin) = drag.typed_on_click(self.tool) {
+                } else if let Some(origin) = drag.typed_on_release(self.tool) {
                     self.selected = None;
                     self.open_text_box(origin);
                 }
@@ -538,10 +538,10 @@ impl Render for EditorView {
                 over: Some(paint_text_box(text_box.clone(), input, self.focus.clone())),
             },
             None => Overlay {
-                preview: self
-                    .drag
-                    .as_ref()
-                    .and_then(|drag| drag.command(self.shift, |line| line_width(line, window))),
+                preview: self.drag.as_ref().and_then(|drag| {
+                    drag.preview(self.shift, |line| line_width(line, window))
+                        .expect("a look's text size is a text block's")
+                }),
                 selected: self.selected,
                 crop_handles: self.tool == Tool::Crop,
                 over: None,

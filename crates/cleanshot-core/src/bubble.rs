@@ -21,6 +21,22 @@ impl Bubble {
         Self { block, tail }
     }
 
+    /// Where the text of a new bubble whose box is dragged out over `area` starts, and the width
+    /// in ems it wraps in, for text of `size` pixels per em; `None` if `area` is narrower than one
+    /// em of text, as for a resize (D-119, D-126).
+    #[must_use]
+    pub fn text_box_in(area: RectF, size: f32) -> Option<(PointF, f32)> {
+        let padding = BUBBLE_PADDING * size;
+        let width = (area.width - 2.0 * padding) / size;
+        (width >= 1.0).then_some((
+            PointF {
+                x: area.x + padding,
+                y: area.y + padding,
+            },
+            width,
+        ))
+    }
+
     /// Where a new bubble's tail points when its text starts at `at` in `size` pixels per em:
     /// left of the box, level with the middle of its first line, so the text grows away from it.
     #[must_use]

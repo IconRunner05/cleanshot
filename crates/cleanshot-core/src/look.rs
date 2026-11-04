@@ -944,6 +944,7 @@ mod tests {
             size: DEFAULT_TEXT_SIZE,
             style: Look::default_for(Tool::Text).style(),
             frame: TextFrame::Plain,
+            width: None,
         };
         let added = looks.restyle_text(Property::TextSize(40.0), &mut new);
         assert_eq!(added, Ok(None));
