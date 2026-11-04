@@ -286,7 +286,7 @@ fn destroy_released(context: &ID3D11DeviceContext) {
     }
 }
 
-fn make_device(
+pub(crate) fn make_device(
     adapter: &IDXGIAdapter1,
 ) -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext, Duration)> {
     let mut device = None;

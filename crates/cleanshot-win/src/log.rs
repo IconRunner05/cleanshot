@@ -115,6 +115,15 @@ pub struct Usage {
 /// if it does not give its memory counters.
 pub fn usage() -> Result<Usage, LogError> {
     let times = process_times()?;
+    let counters = memory_counters().map_err(LogError::Memory)?;
+    Ok(Usage {
+        working_set_bytes: counters.WorkingSetSize,
+        private_working_set_bytes: counters.PrivateWorkingSetSize,
+        cpu: duration(ticks(times.kernel) + ticks(times.user)),
+    })
+}
+
+pub(crate) fn memory_counters() -> windows::core::Result<PROCESS_MEMORY_COUNTERS_EX2> {
     let mut counters = PROCESS_MEMORY_COUNTERS_EX2::default();
     // SAFETY: `counters` is writable and COUNTERS_SIZE is its size, which tells Windows it is the
     // EX2 layout, whose head is PROCESS_MEMORY_COUNTERS; the pseudo-handle needs no closing.
@@ -125,13 +134,8 @@ pub fn usage() -> Result<Usage, LogError> {
             COUNTERS_SIZE,
         )
     }
-    .ok()
-    .map_err(LogError::Memory)?;
-    Ok(Usage {
-        working_set_bytes: counters.WorkingSetSize,
-        private_working_set_bytes: counters.PrivateWorkingSetSize,
-        cpu: duration(ticks(times.kernel) + ticks(times.user)),
-    })
+    .ok()?;
+    Ok(counters)
 }
 
 struct ProcessTimes {

@@ -42,7 +42,7 @@ pub use crate::fade::animations_on;
 use crate::overlay::WINDOW_CLASS;
 
 use crate::Error;
-use crate::capture::monitor_handles;
+use crate::capture::{make_device, monitor_handles, shows_desktop};
 use crate::registry::{read_number, read_text};
 use crate::struct_size;
 use cleanshot_core::{Hotkey, HotkeyAction};
@@ -292,6 +292,65 @@ pub fn d3d11_feature_level(driver: Driver) -> Result<u32, windows::core::Error> 
         )
     }?;
     Ok(level.0.cast_unsigned())
+}
+
+/// What making the capture's Direct3D device costs on one adapter that shows the desktop, for
+/// pricing one made at start-up (P-01, P-03, P-04).
+#[derive(Debug)]
+pub struct DeviceCost {
+    /// The adapter's place in DXGI's list.
+    pub adapter_index: u32,
+    pub made: Duration,
+    /// Working set and private working set bytes while the device is held, less those before.
+    pub held: (isize, isize),
+    /// The same once the device is dropped again.
+    pub dropped: (isize, isize),
+}
+
+/// Makes and drops the capture's device on each adapter with an output on the desktop, one at
+/// a time, measuring each.
+///
+/// # Errors
+///
+/// The Windows error if DXGI cannot list the adapters, a device cannot be made or the
+/// process's memory counters cannot be read.
+pub fn capture_device_costs() -> windows::core::Result<Vec<DeviceCost>> {
+    // SAFETY: CreateDXGIFactory1 has no preconditions.
+    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }?;
+    let mut costs = Vec::new();
+    for adapter_index in 0.. {
+        // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
+        let adapter = match unsafe { factory.EnumAdapters1(adapter_index) } {
+            Ok(adapter) => adapter,
+            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
+            Err(error) => return Err(error),
+        };
+        if !shows_desktop(&adapter)? {
+            continue;
+        }
+        let before = held_bytes()?;
+        let (device, context, made) = make_device(&adapter)?;
+        let held = held_bytes()?;
+        drop((device, context));
+        let dropped = held_bytes()?;
+        costs.push(DeviceCost {
+            adapter_index,
+            made,
+            held: (held.0 - before.0, held.1 - before.1),
+            dropped: (dropped.0 - before.0, dropped.1 - before.1),
+        });
+    }
+    Ok(costs)
+}
+
+/// This process's working set and private working set, in bytes.
+fn held_bytes() -> windows::core::Result<(isize, isize)> {
+    let counters = crate::log::memory_counters()?;
+    let signed = |bytes: usize| isize::try_from(bytes).expect("a working set fits in isize");
+    Ok((
+        signed(counters.WorkingSetSize),
+        signed(counters.PrivateWorkingSetSize),
+    ))
 }
 
 /// Creates the tray, presses Ctrl+Shift+4 with `SendInput`, and pumps this thread's messages
@@ -554,6 +613,16 @@ fn read_clipboard() -> Result<String, windows::core::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn p04_a_capture_device_is_priced_on_every_adapter_that_shows_the_desktop() {
+        let costs = capture_device_costs().expect("the devices are made");
+        assert!(!costs.is_empty(), "the desktop is on some adapter");
+        assert!(
+            costs.iter().all(|cost| cost.made > Duration::ZERO),
+            "{costs:?}"
+        );
+    }
 
     #[test]
     fn the_probe_names_windows_11_from_build_22000_whatever_the_registry_product_name_says() {

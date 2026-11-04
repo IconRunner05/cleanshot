@@ -13,9 +13,9 @@ use cleanshot_editor::{BenchReport, bench};
 use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::dpi::{copy_at_scale, set_scale};
 use cleanshot_win::field_test::{
-    Driver, adapters, animations_on, clipboard_round_trip, copies_while_watched,
-    d3d11_feature_level, drive_tray, exit_running_tray, monitors, open_and_cancel_overlays,
-    rendering_params, windows_version,
+    Driver, adapters, animations_on, capture_device_costs, clipboard_round_trip,
+    copies_while_watched, d3d11_feature_level, drive_tray, exit_running_tray, monitors,
+    open_and_cancel_overlays, rendering_params, windows_version,
 };
 use cleanshot_win::log::since_start;
 
@@ -487,8 +487,28 @@ fn report_tray(report: &mut String) {
     }
 }
 
+/// P-01, P-03, P-04: what a capture device made at start-up would cost.
+fn report_device_costs(report: &mut String) {
+    match capture_device_costs() {
+        Ok(costs) => {
+            for cost in costs {
+                line(
+                    report,
+                    &format!("Capture device on adapter {}", cost.adapter_index),
+                    format!(
+                        "made in {:?}; held: working set {:+} bytes, private {:+} bytes; dropped: working set {:+} bytes, private {:+} bytes",
+                        cost.made, cost.held.0, cost.held.1, cost.dropped.0, cost.dropped.1
+                    ),
+                );
+            }
+        }
+        Err(error) => line(report, "Capture device", format!("error: {error}")),
+    }
+}
+
 fn report_capture(report: &mut String) {
     report.push_str("\n## Capture\n\n");
+    report_device_costs(report);
     for method in [Method::GdiBitBlt, Method::DesktopDuplication] {
         for attempt in 1..=CAPTURE_ATTEMPTS {
             let start = Instant::now();
