@@ -149,8 +149,7 @@ impl TextBlock {
     }
 
     /// The height in ems set for the box this block wraps in, if any (D-128).
-    #[must_use]
-    pub fn box_height(&self) -> Option<f32> {
+    pub(crate) fn box_height(&self) -> Option<f32> {
         match self.width {
             Width::Measured(_) => None,
             Width::Wrapped { height, .. } => height,
