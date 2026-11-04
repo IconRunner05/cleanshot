@@ -19,6 +19,7 @@ mod options_menu;
 mod policy;
 mod screen;
 mod selection;
+mod setting;
 mod settings;
 mod settings_change;
 mod startup;
@@ -46,7 +47,7 @@ pub use drag::{Drag, Press, Start, text_reopened_at};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Change, Command, CommandError, History, Restack};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key};
-pub use look::{Look, Looks, Property, PropertyError, Setting};
+pub use look::{Look, Looks, Property, PropertyError};
 pub use options_menu::{OptionsEntry, OptionsItem, Picked, options_menu};
 pub use policy::{
     POLICY_KEY, Policy, PolicyProblem, PolicySetting, PolicyValue, Saving, SavingOff,
@@ -56,6 +57,7 @@ pub use selection::{
     BoxHandle, Handle, box_handle_at, box_handles, handle_at, handles, hits, moved, resized,
     resized_box, shape_at,
 };
+pub use setting::Setting;
 pub use settings::{
     AfterCapture, Hotkey, HotkeyAction, HotkeyRefusal, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers,
     SaveFormat, Settings, SettingsProblem,
