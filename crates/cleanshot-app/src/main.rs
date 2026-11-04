@@ -5,6 +5,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::error::Error;
+use std::num::NonZeroIsize;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -559,7 +560,7 @@ fn open_editor(
     let monitor = monitor_of(from)
         .inspect_err(|error| session.log_failure("editor", "monitor_unread", error))
         .ok();
-    if let Err(error) = cleanshot_editor::open(
+    let opened = cleanshot_editor::open(
         cx,
         image,
         monitor,
@@ -573,8 +574,18 @@ fn open_editor(
             let logging = Rc::clone(session);
             move |event| logging.log_line("editor", |_| event.to_owned())
         },
-    ) {
-        session.warn(Warning::Failed("The editor could not open", &error));
+    );
+    match opened {
+        Ok(editor) => to_front(session, "editor", editor.win32_handle()),
+        Err(error) => session.warn(Warning::Failed("The editor could not open", &error)),
+    }
+}
+
+/// D-124: `window`, which Cleanshot has just shown, comes to the front, as the user's hotkey or
+/// click entitles it to; a refusal is logged under `kind`.
+fn to_front(session: &Session, kind: &str, window: NonZeroIsize) {
+    if let Err(error) = cleanshot_win::bring_to_front(window) {
+        session.log_failure(kind, "foreground_refused", &error);
     }
 }
 

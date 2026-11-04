@@ -119,7 +119,7 @@ The capture UI follows macOS Sequoia's Screenshot tool: a dimmed freeze-frame, a
 | F-20 | Copy | M1 | Clipboard gets `CF_DIBV5` and a registered `PNG` format. Pastes correctly into Outlook, Teams, Word, Paint and Edge (manual checklist). |
 | F-21 | Save | M1 | Writes to the configured folder (default: Pictures\Screenshots) using template `Screenshot {date} {time}`. PNG by default; JPG (quality 90) and BMP optional. Obeys C-15. Write is atomic (temp name in the same folder, then rename). |
 | F-22 | Save As | M1 | Ctrl+Shift+S opens the native save dialog. Choosing an existing file asks before replacing it; on yes the file is replaced atomically. |
-| F-23 | Edit | M2 | Opens the editor with the capture, sized round it at 100% where it fits (D-110). The overlay closes first. |
+| F-23 | Edit | M2 | Opens the editor with the capture, sized round it at 100% where it fits (D-110). The overlay closes first. It opens in front, with the keyboard (D-124). |
 | F-24 | Identical output | M2 | Copy/Save from the overlay and from the editor run the same export code; a golden test proves byte-identical PNG for the same document. |
 
 ### Editor
@@ -153,7 +153,7 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 | F-52 | PrtSc conflict | M1 | Detects Windows 11's "Use the Print screen key to open screen capture" setting at start. While it is on, a bare PrtSc region hotkey is replaced by the fallback Ctrl+Shift+4 for that run, and a tray balloon names the setting's place (Settings > Accessibility > Keyboard). Cleanshot does not open Settings itself (C-11). |
 | F-53 | Single instance | M1 | Obeys C-14; a second launch triggers region capture in the first instance. |
 | F-54 | Settings file | M1 | Obeys C-05 and C-13; unknown keys ignored; invalid values fall back to defaults with one warning. A `save_folder` over 10,752 UTF-8 bytes is an invalid value, so a file written back from what was read stays under the C-13 cap. A `save_folder` starting with two slashes of either kind or with `\??\` (a share or a device, such as `\\server\share`) is an invalid value (C-10, D-83). |
-| F-55 | Settings window | M4 | Hotkeys, save folder, format, after-capture default, thumbnail, start with Windows. |
+| F-55 | Settings window | M4 | Hotkeys, save folder, format, after-capture default, thumbnail, start with Windows. It opens in front, and asking for it while open brings it to the front (D-124). |
 | F-56 | Start with Windows | M4 | Per-user `HKCU\…\Run` entry, only when the user turns it on in the settings window, removed when they turn it off. The entry is the only record of the choice (D-93). Adds its row to `docs/security.md`. |
 | F-57 | Admin policy | M4 | Reads `HKLM\SOFTWARE\Policies\Cleanshot` (read-only): lock save folder, disable save (clipboard only), force PNG, hide settings. Adds its row to `docs/security.md`. |
 | F-58 | Themes and accessibility | M2 | Follows system light/dark; all controls keyboard-reachable and labelled. |
@@ -266,6 +266,7 @@ Only these direct dependencies are allowed. Adding one means a Decisions-log ent
 | --- | --- | --- | --- |
 | `gpui`, `gpui_windows` (git, pinned rev) | editor | UI framework | DirectX 11 + DirectWrite on Windows. `default-features = false`. Started only through the editor's restricted platform (D-15). Fallback: `eframe`/`egui` if M0 fails. Never bump the rev without a task. |
 | `futures`, `smallvec` | editor | Types named by GPUI's `Platform` trait | Same versions GPUI already uses; nothing else (D-16). |
+| `raw-window-handle` | editor | Read a GPUI window's Win32 handle, for the app to bring it to the front | The version GPUI already uses; owner, 2026-11-03 (D-16, D-124). |
 | `windows` | win | Win32, DWM, Direct2D, DXGI, OLE, Shell | Enable only the feature modules used. |
 | `windows-core` | win | `#[implement]`, for COM objects Windows calls back (the DirectWrite text renderer) | The version `windows` uses; `deny.toml` bans it everywhere else in the workspace (D-60). |
 | `tiny-skia` | render | Rasterise shapes for export | Pure Rust. |

@@ -1,3 +1,4 @@
+use std::num::NonZeroIsize;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -17,7 +18,7 @@ use gpui::{
 use crate::text::register_inter;
 use crate::theme::{ACCENT, Theme};
 use crate::tooltip::{hover_time, tooltip_text, with_tooltip};
-use crate::{Error, Log};
+use crate::{Error, Log, open_window, win32_handle};
 
 type Apply = Rc<dyn Fn(Settings) -> Applied>;
 /// Reads the settings file's own values as the app holds them now.
@@ -35,8 +36,8 @@ struct OpenSettings(WindowHandle<SettingsView>);
 
 impl Global for OpenSettings {}
 
-/// Shows the settings window (F-55) for the settings `current` reads, or brings forward the one
-/// already open.
+/// Shows the settings window (F-55) for the settings `current` reads, or finds the one already
+/// open, and returns its Win32 handle for the app to bring it to the front (D-124).
 /// Each change is first checked as the settings file would read it, then handed to `apply`,
 /// whose outcome the window shows. What `policy` sets is shown, not offered (D-86). The
 /// start-with-Windows switch shows `starts_with_windows` and calls `set_start_with_windows` with
@@ -55,17 +56,14 @@ pub fn open_settings(
     starts_with_windows: bool,
     set_start_with_windows: impl Fn(bool) -> Result<(), StartupEntryError> + 'static,
     log: impl Fn(&'static str) + 'static,
-) -> Result<(), Error> {
+) -> Result<NonZeroIsize, Error> {
     if policy.settings_hidden() {
         return Err(Error::SettingsHidden);
     }
     let open = cx.try_global::<OpenSettings>().map(|open| open.0);
-    if let Some(open) = open
-        && open
-            .update(cx, |_, window, _| window.activate_window())
-            .is_ok()
-    {
-        return Ok(());
+    // Err only means the user closed it, and a new one opens.
+    if let Some(Ok(win32)) = open.map(|open| open.update(cx, |_, window, _| win32_handle(window))) {
+        return Ok(win32);
     }
     register_inter(cx)?;
     let apply: Apply = Rc::new(apply);
@@ -87,15 +85,11 @@ pub fn open_settings(
         window_min_size: Some(size(px(400.0), px(400.0))),
         ..WindowOptions::default()
     };
-    let handle = cx
-        .open_window(options, |window, cx| {
-            cx.new(|cx| {
-                SettingsView::new(current, policy, apply, startup, Rc::new(log), window, cx)
-            })
-        })
-        .map_err(|error| Error::WindowOpen(error.into()))?;
+    let (handle, win32) = open_window(cx, options, |window, cx| {
+        cx.new(|cx| SettingsView::new(current, policy, apply, startup, Rc::new(log), window, cx))
+    })?;
     cx.set_global(OpenSettings(handle));
-    Ok(())
+    Ok(win32)
 }
 
 struct SettingsView {

@@ -9,9 +9,9 @@ use cleanshot_win::settings_file::{settings_path, write_settings};
 use cleanshot_win::startup::{remove_run_value, run_value, set_run_value};
 use cleanshot_win::tray::Request;
 
-use crate::{Session, Warning, region_hotkey};
+use crate::{Session, Warning, region_hotkey, to_front};
 
-/// F-55: opens the settings window, or brings it forward, or says in the tray why it could not.
+/// F-55: opens the settings window or brings it to the front (D-124), or says in the tray why it could not.
 pub(super) fn open_settings(cx: &mut cleanshot_editor::App, session: &Rc<Session>) {
     let reading = Rc::clone(session);
     let current = move || reading.settings.borrow().clone();
@@ -32,8 +32,9 @@ pub(super) fn open_settings(cx: &mut cleanshot_editor::App, session: &Rc<Session
             move |event| logging.log_line("settings", |_| event.to_owned())
         },
     );
-    if let Err(error) = opened {
-        session.warn(Warning::Failed("The settings window did not open", &error));
+    match opened {
+        Ok(window) => to_front(session, "settings", window),
+        Err(error) => session.warn(Warning::Failed("The settings window did not open", &error)),
     }
 }
 

@@ -63,6 +63,9 @@ section exists.
 
 ### Fixed
 
+- The editor could open behind the app you were in, so what you typed went to that app. The
+  editor now opens in front with the keyboard, and so does Settings, also when it was already
+  open (F-23, F-55).
 - After Print Screen the pointer over the capture overlay, the capture panel and the
   thumbnail is the arrow, not the busy cursor another app left up.
 - A highlight hid the text under it in the editor, though the copied or saved image showed

@@ -14,12 +14,14 @@ mod theme;
 mod toolbar;
 mod tooltip;
 
+use std::num::NonZeroIsize;
 use std::rc::Rc;
 
 use cleanshot_core::{CommandError, ImageError};
 pub use gpui::{App, AsyncApp};
-use gpui::{Application, QuitMode};
+use gpui::{Application, Entity, QuitMode, Render, Window, WindowHandle, WindowOptions};
 use gpui_windows::WindowsPlatform;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 pub use crate::bench::{BenchReport, bench};
 pub use crate::editor_window::{EditorWindow, Outputs, ask_save_path, open};
@@ -65,4 +67,34 @@ pub fn run(on_launch: impl FnOnce(&mut App) + 'static) -> Result<(), Error> {
         .with_quit_mode(QuitMode::Explicit)
         .run(on_launch);
     Ok(())
+}
+
+/// Opens a window with `options` on the view `build` makes, with its Win32 handle for the app to
+/// bring it to the front once shown (D-124).
+fn open_window<V: Render>(
+    cx: &mut App,
+    options: WindowOptions,
+    build: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
+) -> Result<(WindowHandle<V>, NonZeroIsize), Error> {
+    let mut win32 = None;
+    let window = cx
+        .open_window(options, |window, cx| {
+            win32 = Some(win32_handle(window));
+            build(window, cx)
+        })
+        .map_err(|error| Error::WindowOpen(error.into()))?;
+    Ok((
+        window,
+        win32.expect("open_window builds the view before it returns"),
+    ))
+}
+
+/// The Win32 handle of `window` (D-124).
+fn win32_handle(window: &Window) -> NonZeroIsize {
+    let handle = HasWindowHandle::window_handle(window)
+        .expect("a GPUI window on Windows always has its handle");
+    match handle.as_raw() {
+        RawWindowHandle::Win32(handle) => handle.hwnd,
+        other => unreachable!("GPUI on Windows gives a Win32 handle, not {other:?}"),
+    }
 }

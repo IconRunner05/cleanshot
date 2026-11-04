@@ -342,6 +342,7 @@ dependencies = [
  "gpui",
  "gpui_windows",
  "image",
+ "raw-window-handle",
  "smallvec",
  "thiserror",
 ]

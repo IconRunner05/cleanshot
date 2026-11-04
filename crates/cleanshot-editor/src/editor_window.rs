@@ -1,5 +1,6 @@
 mod text_input;
 
+use std::num::NonZeroIsize;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use crate::text_box::TextBox;
 use crate::theme::Theme;
 use crate::toolbar::{Replay, toolbar};
 use crate::tooltip::hover_time;
-use crate::{Error, Log};
+use crate::{Error, Log, open_window};
 use text_input::paint_text_box;
 
 type Deliver = Box<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
@@ -619,7 +620,10 @@ pub fn ask_save_path<L: Fn(&'static str) + 'static>(
 }
 
 /// An open editor window. Dropping it leaves the window open; [`EditorWindow::close`] closes it.
-pub struct EditorWindow(WindowHandle<EditorView>);
+pub struct EditorWindow {
+    window: WindowHandle<EditorView>,
+    win32: NonZeroIsize,
+}
 
 /// Opens an editor window on `capture`, with no shapes yet (F-23), sized round it and centred
 /// on `monitor`, the one it came from, or on the primary display for `None` (D-110). Copy, Save
@@ -663,12 +667,11 @@ pub(crate) fn open_with(
 ) -> Result<EditorWindow, Error> {
     register_inter(cx)?;
     let options = window_options(cx, document.base(), monitor);
-    cx.open_window(options, |window, cx| {
+    let (window, win32) = open_window(cx, options, |window, cx| {
         on_open(window, cx);
         cx.new(|cx| EditorView::new(document, outputs, log, window, cx))
-    })
-    .map(EditorWindow)
-    .map_err(|error| Error::WindowOpen(error.into()))
+    })?;
+    Ok(EditorWindow { window, win32 })
 }
 
 /// P-08's bench: draws the editor in `window` at `placement`, where a pan or zoom (F-39) would
@@ -722,10 +725,18 @@ fn bench_view(window: &Window) -> Entity<EditorView> {
 }
 
 impl EditorWindow {
+    /// The window's Win32 handle, for the app to bring it to the front once shown (D-124).
+    #[must_use]
+    pub fn win32_handle(&self) -> NonZeroIsize {
+        self.win32
+    }
+
     /// Closes the window. A window the user already closed is left as it is.
     pub fn close(self, cx: &mut App) {
         // Err only means the window is already gone, which is the state close asks for.
-        let _ = self.0.update(cx, |_, window, _| window.remove_window());
+        let _ = self
+            .window
+            .update(cx, |_, window, _| window.remove_window());
     }
 }
 

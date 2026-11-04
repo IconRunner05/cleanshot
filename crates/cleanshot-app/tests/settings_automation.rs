@@ -3,9 +3,12 @@
 //! file and Start with Windows sets and clears the HKCU Run value (D-30, D-93). A format picked
 //! from the Options menu (F-12) while the window is open is kept when the window next writes
 //! the file. Closing the window, the last one open, leaves GPUI running for the tray (F-55).
+//! A second open finds the window already open, and Windows brings its handle to the front
+//! (D-124).
 //! Run as for `toolbar_automation`: GPUI owns the window's thread and the walk ends the
 //! process.
 
+use std::num::NonZeroIsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::{Arc, Mutex, mpsc};
@@ -15,8 +18,9 @@ use std::time::{Duration, Instant};
 use cleanshot_core::{
     Applied, MAX_SETTINGS_BYTES, Policy, PolicyValue, SaveFormat, Settings, run_command, starts,
 };
-use cleanshot_editor::AsyncApp;
+use cleanshot_editor::{App, AsyncApp};
 use cleanshot_win::accessibility::{ControlKind, toggle_in_own_windows, wait_for_container};
+use cleanshot_win::bring_to_front;
 use cleanshot_win::settings_file::{read_settings, write_settings};
 use cleanshot_win::startup::{remove_run_value, run_value, set_run_value};
 
@@ -113,20 +117,44 @@ fn main() {
             },
             |_| {},
         );
-        match opened_now {
-            Ok(()) => opened
-                .send(Instant::now())
-                .expect("the walk thread waits for the window"),
+        let window = match opened_now {
+            Ok(window) => window,
             Err(error) => {
                 left_as_found.finish(Err(format!("the settings window did not open: {error}")))
             }
-        }
+        };
+        second_open_finds(cx, window, &left_as_found);
+        opened
+            .send(Instant::now())
+            .expect("the walk thread waits for the window");
         cx.spawn(async move |cx| close_after_walk(cx, &walk_verdict, &left_as_found).await)
             .detach();
     });
     stopped.finish(Err(format!(
         "GPUI stopped before the walk finished: {ran:?}"
     )));
+}
+
+/// D-124: a second Settings finds the open `window`, whose handle Windows brings to the front.
+fn second_open_finds(cx: &mut App, window: NonZeroIsize, left_as_found: &LeftAsFound) {
+    let stopped = left_as_found.clone();
+    let second = cleanshot_editor::open_settings(
+        cx,
+        Settings::default,
+        Policy::default(),
+        move |_| -> Applied { stopped.finish(Err("the second open applied a change".into())) },
+        false,
+        |_| Ok(()),
+        |_| {},
+    );
+    if second.as_ref().ok() != Some(&window) {
+        left_as_found.finish(Err(format!(
+            "a second open gave {second:?}, not the open window {window}"
+        )));
+    }
+    if let Err(error) = bring_to_front(window) {
+        left_as_found.finish(Err(format!("the settings window stayed behind: {error}")));
+    }
 }
 
 /// The settings file and HKCU Run value as the run found them, put back on every exit.
