@@ -16,38 +16,37 @@ pub(crate) fn tooltip_text(name: &str, keys: Option<&str>) -> SharedString {
     }
 }
 
-/// `element` showing `text` once the pointer has rested on it for `theme`'s tooltip delay, and
-/// hiding it on leave or press.
+/// `element` showing `text` once the pointer has rested on it for `theme`'s tooltip delay, or
+/// GPUI's own where it has none, and hiding it on leave or press.
 pub(crate) fn with_tooltip<E: StatefulInteractiveElement>(
     element: E,
     text: SharedString,
     theme: Theme,
 ) -> E {
-    element
-        .tooltip(move |_, cx| {
-            let text = text.clone();
-            cx.new(|_| Tooltip { text, theme }).into()
-        })
-        .tooltip_show_delay(theme.tooltip_delay)
+    let element = element.tooltip(move |_, cx| {
+        let text = text.clone();
+        cx.new(|_| Tooltip { text, theme }).into()
+    });
+    match theme.tooltip_delay {
+        Some(delay) => element.tooltip_show_delay(delay),
+        None => element,
+    }
 }
 
 /// Makes every tooltip wait `hover`, the Windows mouse hover time, before it shows (D-117).
-/// Call once, before any window opens; until then a tooltip waits GPUI's 500 ms.
+/// Call once, before any window opens; until then a tooltip waits GPUI's own delay.
 pub fn follow_hover_time(cx: &mut App, hover: Duration) {
     cx.set_global(HoverTime(hover));
 }
 
-/// How long a tooltip waits before it shows.
-pub(crate) fn hover_time(cx: &App) -> Duration {
-    cx.try_global::<HoverTime>()
-        .map_or(GPUI_TOOLTIP_DELAY, |HoverTime(hover)| *hover)
+/// How long a tooltip waits before it shows, once the app has said (D-117).
+pub(crate) fn hover_time(cx: &App) -> Option<Duration> {
+    cx.try_global::<HoverTime>().map(|HoverTime(hover)| *hover)
 }
 
 struct HoverTime(Duration);
 
 impl Global for HoverTime {}
-
-const GPUI_TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
 struct Tooltip {
     text: SharedString,

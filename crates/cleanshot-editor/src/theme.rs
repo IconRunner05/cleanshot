@@ -14,7 +14,8 @@ pub(crate) struct Theme {
     pub text: Rgba,
     /// Under a toolbar button the pointer is over.
     pub hover: Rgba,
-    pub tooltip_delay: Duration,
+    /// `None` leaves the delay to GPUI.
+    pub tooltip_delay: Option<Duration>,
 }
 
 /// The one accent, the same in both appearances: the current tool, selection handles, the crop.
@@ -34,7 +35,7 @@ pub(crate) const ON_ACCENT: Rgba = Rgba {
 };
 
 impl Theme {
-    pub fn for_appearance(appearance: WindowAppearance, tooltip_delay: Duration) -> Self {
+    pub fn for_appearance(appearance: WindowAppearance, tooltip_delay: Option<Duration>) -> Self {
         match appearance {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => Self {
                 backdrop: rgba(0x2c2c_2eff),
@@ -63,12 +64,12 @@ mod tests {
     #[test]
     fn f58_each_system_appearance_gets_its_charter_material_and_hairline() {
         for appearance in [WindowAppearance::Dark, WindowAppearance::VibrantDark] {
-            let dark = Theme::for_appearance(appearance, Duration::ZERO);
+            let dark = Theme::for_appearance(appearance, None);
             assert_eq!(dark.material, rgba(0x1c1c_1eb8), "rgba(28,28,30,0.72)");
             assert_eq!(dark.hairline, rgba(0xffff_ff1f), "white 12%");
         }
         for appearance in [WindowAppearance::Light, WindowAppearance::VibrantLight] {
-            let light = Theme::for_appearance(appearance, Duration::ZERO);
+            let light = Theme::for_appearance(appearance, None);
             assert_eq!(light.material, rgba(0xf6f6_f8b8), "rgba(246,246,248,0.72)");
             assert_eq!(light.hairline, rgba(0x0000_001a), "black 10%");
         }
