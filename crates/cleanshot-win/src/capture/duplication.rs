@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC,
-    DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
+    DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter1, IDXGIDevice3, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
     IDXGIOutputDuplication, IDXGIResource,
 };
 use windows::core::Interface;
@@ -69,9 +69,24 @@ pub struct Devices {
 
 impl Devices {
     /// P-04: lets every kept device go, with what its driver holds, so the next copy makes its
-    /// own.
+    /// own. Each is trimmed first, which has its driver drop the buffers it keeps to speed up
+    /// the next copy.
+    ///
+    /// # Panics
+    ///
+    /// If a kept device is not a DXGI 1.3 device, which Windows 11 rules out.
     pub fn release(&mut self) {
-        self.kept.clear();
+        for (_, device, context) in self.kept.drain(..) {
+            let device: IDXGIDevice3 = device
+                .cast()
+                .expect("a Direct3D 11 device on Windows 11 is a DXGI 1.3 device");
+            // SAFETY: plain calls on a device this thread made and its immediate context;
+            // Trim asks for ClearState first, so nothing of the device stays bound.
+            unsafe {
+                context.ClearState();
+                device.Trim();
+            }
+        }
     }
 
     fn take(&mut self, adapter: LUID) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
