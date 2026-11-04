@@ -19,11 +19,11 @@ mod options_menu;
 mod policy;
 mod screen;
 mod selection;
-mod setting;
 mod settings;
 mod settings_change;
 mod startup;
 mod step;
+mod strip;
 mod text;
 mod text_edit;
 mod timer;
@@ -57,7 +57,6 @@ pub use selection::{
     BoxHandle, Handle, box_handle_at, box_handles, handle_at, handles, hits, moved, resized,
     resized_box, shape_at,
 };
-pub use setting::Setting;
 pub use settings::{
     AfterCapture, Hotkey, HotkeyAction, HotkeyRefusal, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers,
     SaveFormat, Settings, SettingsProblem,
@@ -65,6 +64,7 @@ pub use settings::{
 pub use settings_change::{Applied, SettingsNotice, SettingsSaveError, settings_notice};
 pub use startup::{StartupEntryError, run_command, starts};
 pub use step::{STEP_DIAMETER, Step};
+pub use strip::Setting;
 pub use text::{
     Alignment, BoxSize, DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, Horizontal, INTER,
     INTER_ASCENT, INTER_DESCENT, INTER_UNITS_PER_EM, LINE_HEIGHT, Label, TextBlock, TextBlockError,

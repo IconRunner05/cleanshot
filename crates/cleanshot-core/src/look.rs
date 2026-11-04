@@ -439,7 +439,7 @@ mod tests {
     use super::*;
     use crate::document::{Document, PointF, RectF, RgbaImage, ShapeId};
     use crate::drag::{Drag, Start};
-    use crate::setting::Setting;
+    use crate::strip::Setting;
     use crate::text::{Horizontal, TextBlock, Vertical};
     use crate::text_edit::TextOrigin;
 
