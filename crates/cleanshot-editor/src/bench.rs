@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, HighlightStrength, History, PointF, RectF, RedactMode,
-    RedactStrength, RgbaImage, Shape, Style, TextBlock,
+    BorderWidth, Color, Command, Document, Fill, HighlightStrength, History, Look, PointF,
+    Property, RectF, RedactMode, RedactStrength, RgbaImage, Shape, Style, TextBlock, Tool,
 };
 use gpui::{App, Pixels, Point, Window, point, px};
 
@@ -300,13 +300,12 @@ fn synthetic_shape(index: u32) -> Command {
             },
             255,
         ),
-        7 => (
-            Shape::Text(
+        7 => {
+            return bordered_text(
                 TextBlock::new(from, format!("Shape {index}\nof {SHAPES}"), 24.0, 6.0)
                     .expect("24 px and 6 ems make a valid text block"),
-            ),
-            255,
-        ),
+            );
+        }
         _ => (
             Shape::Redact {
                 rect,
@@ -322,15 +321,29 @@ fn synthetic_shape(index: u32) -> Command {
     };
     Command::Add {
         shape,
-        style: Style::new(
-            Color {
-                r: 230,
-                g: 60,
-                b: 50,
-                a: alpha,
-            },
-            4.0,
-        ),
+        style: Style::new(Color { a: alpha, ..RED }, 4.0),
+    }
+}
+
+const RED: Color = Color {
+    r: 230,
+    g: 60,
+    b: 50,
+    a: 255,
+};
+
+/// Text in the bench's red with the thickest border, the one the canvas paints most often
+/// (D-131).
+fn bordered_text(block: TextBlock) -> Command {
+    let style = Look::default_for(Tool::Text)
+        .with(Property::Color(RED))
+        .and_then(|look| look.with(Property::Border(true)))
+        .and_then(|look| look.with(Property::BorderWidth(BorderWidth::Thick)))
+        .expect("a text look takes any colour and a border of any width")
+        .style_for(Tool::Text);
+    Command::Add {
+        shape: Shape::Text(block),
+        style,
     }
 }
 
@@ -368,6 +381,26 @@ mod tests {
         );
         let halfway = drag_corner(25, 50);
         assert_eq!((halfway.x, halfway.y), (1920.0, 1080.0));
+    }
+
+    #[test]
+    fn p08_every_text_in_the_bench_has_a_thick_border() {
+        let texts: Vec<_> = (0..SHAPES)
+            .map(synthetic_shape)
+            .filter_map(|command| {
+                if let Command::Add {
+                    shape: Shape::Text(_),
+                    style,
+                } = command
+                {
+                    Some(style.border().map(|border| border.width))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(texts.len(), 22);
+        assert!(texts.iter().all(|width| *width == Some(BorderWidth::Thick)));
     }
 
     #[test]
