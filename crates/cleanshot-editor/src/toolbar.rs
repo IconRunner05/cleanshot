@@ -4,7 +4,8 @@ use cleanshot_core::{Change, CommandError, History, KeyAction, Output, Tool};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AssetSource, BoxShadow, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Rgba,
-    Role, SharedString, StatefulInteractiveElement, Styled, Toggled, div, hsla, point, px, svg,
+    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Toggled, div, hsla, point,
+    px, svg,
 };
 
 use crate::theme::{ACCENT, ON_ACCENT, Theme};
@@ -157,16 +158,10 @@ where
 {
     let replays = REPLAYS.map(|(icon, verb, keys, next, replay)| {
         let step = next(history).map(|change| step_name(verb, change));
-        let button = div()
-            .id(verb)
+        let button = button(verb)
             .role(Role::Button)
             .aria_label(step.clone().unwrap_or_else(|| verb.to_owned()))
-            .aria_keyshortcuts(keys)
-            .size(px(28.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(7.0));
+            .aria_keyshortcuts(keys);
         let Some(step) = step else {
             return button
                 .map(|element| with_tooltip(element, nothing_to(verb), theme))
@@ -190,16 +185,10 @@ where
     });
     let outputs = OUTPUTS.map(|(icon, name, keys, action)| {
         let on_output = on_output.clone();
-        div()
-            .id(name)
+        button(name)
             .role(Role::Button)
             .aria_label(name)
             .aria_keyshortcuts(keys)
-            .size(px(28.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(7.0))
             .focusable()
             .tab_stop(true)
             .focus_visible(|button| button.border_2().border_color(ACCENT))
@@ -212,8 +201,7 @@ where
         let name = tool_name(tool);
         let on_pick = on_pick.clone();
         let picked = tool == current;
-        div()
-            .id(ElementId::Name(name.into()))
+        button(ElementId::Name(name.into()))
             .focusable()
             .tab_stop(true)
             .role(Role::RadioButton)
@@ -226,11 +214,6 @@ where
                 Toggled::False
             })
             .focus_visible(|button| button.border_2().border_color(ACCENT))
-            .size(px(28.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(7.0))
             .when(picked, |button| button.bg(ACCENT))
             .when(!picked, |button| {
                 button.hover(move |button| button.bg(theme.hover))
@@ -248,6 +231,17 @@ where
         .children(replays)
         .child(divider(theme))
         .children(outputs)
+}
+
+/// CHARTER 4: a 28 px toolbar button with 7 px corners, its icon centred.
+fn button(id: impl Into<ElementId>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(28.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.0))
 }
 
 fn divider(theme: Theme) -> Div {
