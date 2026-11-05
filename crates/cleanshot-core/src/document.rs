@@ -335,7 +335,7 @@ impl RedactStrength {
 
     /// Whether cells this small can leave text readable: finer than [`Self::FINE`] (D-132).
     #[must_use]
-    pub const fn may_be_readable(self) -> bool {
+    pub(crate) const fn may_be_readable(self) -> bool {
         self.0 < Self::FINE.0
     }
 
