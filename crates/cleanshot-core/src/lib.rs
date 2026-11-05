@@ -15,6 +15,7 @@ mod drawing;
 mod history;
 mod keys;
 mod look;
+mod looks;
 mod options_menu;
 mod policy;
 mod screen;
@@ -47,7 +48,8 @@ pub use drag::{Drag, Press, Start, text_reopened_at};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
 pub use history::{Change, Command, CommandError, History, Restack};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key};
-pub use look::{Look, Looks, Property, PropertyError};
+pub use look::{Look, Property, PropertyError};
+pub use looks::Looks;
 pub use options_menu::{OptionsEntry, OptionsItem, Picked, options_menu};
 pub use policy::{
     POLICY_KEY, Policy, PolicyProblem, PolicySetting, PolicyValue, Saving, SavingOff,
