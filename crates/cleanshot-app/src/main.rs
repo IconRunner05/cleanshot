@@ -195,6 +195,8 @@ fn started(
         logging.then(|| (stage, memory::counted()))
     };
     let tray_ready = count("tray_ready");
+    // P-04: what the process holds before any graphics, to set against the after-use account.
+    session.log_memory("before_graphics");
     // D-137: prewarm on the overlay thread once the tray is ready (D-76).
     let unwarmed = Overlay::prewarm().err();
     session.perf(|since_start| format!("P-03 overlay_prewarmed_ms={}", since_start.as_millis()));
