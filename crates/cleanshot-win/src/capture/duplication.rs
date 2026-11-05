@@ -403,23 +403,32 @@ pub(super) fn choose(
     duplicated.into_iter().collect()
 }
 
-/// P-01: every attached output's frame is acquired before any is copied, so their waits for
-/// the next present overlap, and every copy is queued on the GPU before the first is read.
+/// P-01, D-139: every attached output's duplication is made before any frame is acquired, so
+/// one present gives each its first frame; every frame is acquired before any is copied, and
+/// every copy is queued on the GPU before the first is read.
 fn duplicate_listed(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
     listed: Vec<(IDXGIOutput, OutputReport)>,
     duplicates: &mut Duplicates,
 ) {
-    let acquired: Vec<_> = listed
+    let opened: Vec<_> = listed
         .into_iter()
-        .map(|(output, mut report)| {
-            let acquired = report.attached.then(|| {
+        .map(|(output, report)| {
+            let opened = report.attached.then(|| {
                 output
                     .cast::<IDXGIOutput1>()
                     .map_err(Error::Capture)
-                    .and_then(|output| acquire(device, &output, report.bounds, &mut report.frame))
+                    .and_then(|output| open(device, &output, report.bounds))
             });
+            (report, opened)
+        })
+        .collect();
+    let acquired: Vec<_> = opened
+        .into_iter()
+        .map(|(mut report, opened)| {
+            let acquired =
+                opened.map(|opened| opened.and_then(|opened| acquire(opened, &mut report.frame)));
             (report, acquired)
         })
         .collect();
@@ -480,12 +489,15 @@ struct Staged {
     copying: Instant,
 }
 
-fn acquire(
-    device: &ID3D11Device,
-    output: &IDXGIOutput1,
+/// An output's duplication, made and not yet acquired from.
+struct Opened {
+    duplication: IDXGIOutputDuplication,
+    format: i32,
+    duplicate: Duration,
     bounds: RECT,
-    frame: &mut Option<FrameReport>,
-) -> Result<Acquired, Error> {
+}
+
+fn open(device: &ID3D11Device, output: &IDXGIOutput1, bounds: RECT) -> Result<Opened, Error> {
     let (width, height) = size_of_rect(bounds)?;
     let duplicating = Instant::now();
     // SAFETY: `device` belongs to this output's adapter.
@@ -494,7 +506,21 @@ fn acquire(
     // SAFETY: a read of the duplication's own description.
     let description = unsafe { duplication.GetDesc() };
     copyable(&description, width, height)?;
-    let format = description.ModeDesc.Format.0;
+    Ok(Opened {
+        duplication,
+        format: description.ModeDesc.Format.0,
+        duplicate,
+        bounds,
+    })
+}
+
+fn acquire(opened: Opened, frame: &mut Option<FrameReport>) -> Result<Acquired, Error> {
+    let Opened {
+        duplication,
+        format,
+        duplicate,
+        bounds,
+    } = opened;
     let acquiring = Instant::now();
     let (frame_info, resource) = desktop_frame(&duplication)?;
     let acquire = acquiring.elapsed();

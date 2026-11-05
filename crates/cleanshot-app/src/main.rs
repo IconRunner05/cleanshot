@@ -502,6 +502,16 @@ impl Session {
         for output in outputs {
             self.log_line("capture", |_| format!("output {output:?}"));
         }
+        // D-139: the outputs after the first should find their first frame already waiting.
+        let acquires: Vec<_> = outputs
+            .iter()
+            .filter_map(|output| Some(output.frame.as_ref()?.acquire.as_micros()))
+            .collect();
+        if let [first, later @ ..] = acquires.as_slice()
+            && let Some(later) = later.iter().max()
+        {
+            self.perf(|_| format!("P-01 first_acquire_us={first} later_acquire_us={later}"));
+        }
         for monitor in monitors {
             self.log_line("capture", |_| {
                 format!(

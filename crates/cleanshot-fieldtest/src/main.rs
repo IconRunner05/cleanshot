@@ -299,12 +299,33 @@ fn open_overlays_after_start(log: &Path) -> Result<(), String> {
         shown,
     )
     .map_err(|error| error.to_string())?;
+    report_acquires(log)?;
     // P-04: the judge reads the after-use sample, or says it is missing.
     let waited = Instant::now();
     while perf_lines(log, "P-04", "private_working_set_bytes") == 0
         && waited.elapsed() < AFTER_USE_TIMEOUT
     {
         std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(())
+}
+
+/// D-139: how long the first output and the slowest later one waited for their first frame,
+/// over the presses that duplicated two or more outputs.
+fn report_acquires(log: &Path) -> Result<(), String> {
+    let text =
+        std::fs::read_to_string(log).map_err(|error| format!("{}: {error}", log.display()))?;
+    let median = |key| {
+        let mut values = budgets::perf_values(&text, "P-01", key);
+        values.sort_unstable();
+        values.get(values.len() / 2).copied()
+    };
+    match (median("first_acquire_us"), median("later_acquire_us")) {
+        (Some(first), Some(later)) => println!(
+            "D-139 acquire, reported, not judged: median wait for a first frame {first} us on \
+             the first output, {later} us on the slowest later one"
+        ),
+        _ => println!("D-139 acquire, reported, not judged: no press duplicated two outputs"),
     }
     Ok(())
 }
