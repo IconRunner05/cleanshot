@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -10,9 +11,10 @@ use cleanshot_core::{
 };
 use gpui::{App, Pixels, Point, Window, point, px};
 
-use crate::Error;
+use crate::canvas::Previews;
 use crate::editor_window::{drag_redaction, open_with, show_at};
 use crate::placement::Placement;
+use crate::{Error, Log, MasksFor};
 
 const WIDTH: u32 = 3840;
 const HEIGHT: u32 = 2160;
@@ -40,6 +42,11 @@ pub struct BenchReport {
     pub redaction_drag_p50: Duration,
     /// F-36, D-58: 95th-percentile interval of the same drag.
     pub redaction_drag_p95: Duration,
+    /// Part of P-07: the first call to the mask maker, made before the first frame.
+    pub text_masks: Duration,
+    /// Making every preview image for the bench's document again, with its masks in hand,
+    /// after the first frame: the rest of the previews' share of P-07.
+    pub previews: Duration,
 }
 
 type OnDone = Box<dyn FnOnce(&mut App, Result<BenchReport, Error>)>;
@@ -50,6 +57,10 @@ type OnDone = Box<dyn FnOnce(&mut App, Result<BenchReport, Error>)>;
 /// timings to `on_done`, which is called exactly once.
 ///
 /// The window ignores close requests until the run ends.
+///
+/// # Panics
+///
+/// If the editor draws its first frame without asking for its texts' masks.
 pub fn bench(
     cx: &mut App,
     redraws: NonZeroU32,
@@ -62,38 +73,58 @@ pub fn bench(
     };
     let kept = document.kept_area();
     let mut on_done: Option<OnDone> = Some(Box::new(on_done));
+    let replayed = document.clone();
+    let first_masks: Rc<RefCell<Option<FirstMasks>>> = Rc::default();
+    let recorder = Rc::clone(&first_masks);
+    let timed: MasksFor = Rc::new(move |document: &Document| {
+        let started = Instant::now();
+        let made = masks(document);
+        let mut first = recorder.borrow_mut();
+        if first.is_none() {
+            *first = Some(FirstMasks {
+                took: started.elapsed(),
+                made: made.clone(),
+            });
+        }
+        made
+    });
     let start = Instant::now();
     // The bench runs from cleanshot-fieldtest, a console tool whose stderr is read.
-    let log = Rc::new(|event| eprintln!("{event}"));
-    let opened = open_with(
-        cx,
-        document,
-        None,
-        None,
-        Rc::new(masks),
-        log,
-        |window, cx| {
-            let Some(on_done) = on_done.take() else {
-                return;
-            };
-            window.on_window_should_close(cx, |_, _| false);
-            window.on_next_frame(move |window, cx| {
-                let now = Instant::now();
-                let canvas = window.viewport_size();
-                Run {
-                    fitted: Placement::fitted(canvas, kept, window.scale_factor()),
-                    centre: point(canvas.width / 2.0, canvas.height / 2.0),
-                    first_frame: now - start,
-                    last_frame: now,
-                    intervals: Vec::with_capacity(redraws.get() as usize),
-                    drag_intervals: Vec::new(),
-                    redraws,
-                    on_done,
-                }
-                .continue_after(window, cx);
-            });
-        },
-    );
+    let log: Log = Rc::new(|event| eprintln!("{event}"));
+    let replay_log = Rc::clone(&log);
+    let opened = open_with(cx, document, None, None, timed, log, |window, cx| {
+        let Some(on_done) = on_done.take() else {
+            return;
+        };
+        window.on_window_should_close(cx, |_, _| false);
+        window.on_next_frame(move |window, cx| {
+            let now = Instant::now();
+            let FirstMasks {
+                took: text_masks,
+                made,
+            } = first_masks
+                .borrow_mut()
+                .take()
+                .expect("the bench's bordered texts have their masks made before its first frame");
+            let replay = Instant::now();
+            Previews::new(Rc::new(move |_| made.clone()), replay_log).update(&replayed);
+            let previews = replay.elapsed();
+            let canvas = window.viewport_size();
+            Run {
+                fitted: Placement::fitted(canvas, kept, window.scale_factor()),
+                centre: point(canvas.width / 2.0, canvas.height / 2.0),
+                first_frame: now - start,
+                text_masks,
+                previews,
+                last_frame: Instant::now(),
+                intervals: Vec::with_capacity(redraws.get() as usize),
+                drag_intervals: Vec::new(),
+                redraws,
+                on_done,
+            }
+            .continue_after(window, cx);
+        });
+    });
     if let Err(error) = opened
         && let Some(on_done) = on_done.take()
     {
@@ -101,10 +132,18 @@ pub fn bench(
     }
 }
 
+/// The first call to the mask maker: how long it took and what it made.
+struct FirstMasks {
+    took: Duration,
+    made: Option<TextMasks>,
+}
+
 struct Run {
     fitted: Placement,
     centre: Point<Pixels>,
     first_frame: Duration,
+    text_masks: Duration,
+    previews: Duration,
     last_frame: Instant,
     intervals: Vec<Duration>,
     drag_intervals: Vec<Duration>,
@@ -166,6 +205,8 @@ impl Run {
             worst: nearest_rank(&self.intervals, 100),
             redaction_drag_p50: nearest_rank(&self.drag_intervals, 50),
             redaction_drag_p95: nearest_rank(&self.drag_intervals, 95),
+            text_masks: self.text_masks,
+            previews: self.previews,
         }
     }
 }
