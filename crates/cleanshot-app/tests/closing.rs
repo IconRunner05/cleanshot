@@ -3,8 +3,9 @@
 //! window is gone, whether the app closed it with `EditorWindow::close` or the window closed
 //! itself, and at once when asked after the window is gone. GPUI holds no graphics device
 //! before the first window opens or once the last one closes, and takes one again for the next
-//! (D-138), and tells the app each time it gives it back. Runs real windows, so only on
-//! Windows; the test ends the process.
+//! (D-138), and tells the app each time it gives it back. An editor closed by Windows, as its
+//! close button does, gives its memory back (D-140). Runs real windows, so only on Windows; the
+//! test ends the process.
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -20,8 +21,15 @@ const ON_CLOSED: &str = "an_editor_tells_its_opener_once_when_its_window_is_gone
 const GRAPHICS: &str =
     "d138_gpui_holds_a_graphics_device_only_while_a_window_is_open_and_a_reopened_editor_draws";
 const RELEASED: &str = "d138_the_app_is_told_each_time_gpui_gives_its_graphics_device_back";
+const USER_CLOSE: &str = "d140_an_editor_closed_as_a_user_does_gives_its_memory_back";
+/// What a closed editor may leave held: well under the 19.8 MB its 3440x1440 image's texture
+/// takes, which on the software renderer is the process's own memory.
+const LEFT_HELD: usize = 8 * 1024 * 1024;
 /// Long enough for the windows to open, draw and, once closed, be released.
 const SETTLE: Duration = Duration::from_secs(2);
+/// Long enough for GPUI to free a closed window's renderer, which took up to 5 s on
+/// windows-latest.
+const FREED: Duration = Duration::from_secs(10);
 
 fn main() {
     let ran = cleanshot_editor::run(|cx| {
@@ -41,7 +49,10 @@ fn main() {
             reopen_and_close(cx, &closings).await;
             graphics_released(cx, &releases, 2, "the reopened editor");
             println!("{GRAPHICS} ... ok");
-            finish(RELEASED, Ok(()))
+            close_as_a_user_does(cx, &closings).await;
+            graphics_released(cx, &releases, 3, "a user-closed editor");
+            println!("{RELEASED} ... ok");
+            finish(USER_CLOSE, Ok(()))
         })
         .detach();
     });
@@ -55,8 +66,8 @@ fn main() {
 async fn close_two_editors_and_settings(cx: &mut AsyncApp, closings: &Rc<Cell<u32>>) {
     let (by_the_app, by_ctrl_w) = cx.update(|cx| {
         let editors = (
-            open_editor(cx, closings, |_| {}),
-            open_editor(cx, closings, |_| {}),
+            open_editor(cx, closings, grey(320, 240), |_| {}),
+            open_editor(cx, closings, grey(320, 240), |_| {}),
         );
         if let Err(error) = open_settings(cx) {
             finish(
@@ -135,7 +146,8 @@ fn graphics_released(cx: &mut AsyncApp, releases: &Cell<u32>, expected: u32, clo
 async fn reopen_and_close(cx: &mut AsyncApp, closings: &Rc<Cell<u32>>) {
     let drawn = Rc::new(Cell::new(false));
     let first_frame = Rc::clone(&drawn);
-    let reopened = cx.update(|cx| open_editor(cx, closings, move |_| first_frame.set(true)));
+    let reopened =
+        cx.update(|cx| open_editor(cx, closings, grey(320, 240), move |_| first_frame.set(true)));
     cx.background_executor().timer(SETTLE).await;
     if !drawn.get() {
         finish(
@@ -147,15 +159,60 @@ async fn reopen_and_close(cx: &mut AsyncApp, closings: &Rc<Cell<u32>>) {
     cx.background_executor().timer(SETTLE).await;
 }
 
+/// D-140: an editor on a monitor-sized image, closed with `WM_CLOSE` as its close button and
+/// Alt+F4 do, leaves the process holding about what it held before the editor opened.
+async fn close_as_a_user_does(cx: &mut AsyncApp, closings: &Rc<Cell<u32>>) {
+    cx.background_executor().timer(FREED).await;
+    let before = private_bytes();
+    let editor = cx.update(|cx| open_editor(cx, closings, grey(3440, 1440), |_| {}));
+    cx.background_executor().timer(SETTLE).await;
+    if let Err(error) = cleanshot_win::accessibility::ask_to_close(editor.win32_handle()) {
+        finish(USER_CLOSE, Err(format!("WM_CLOSE was not posted: {error}")));
+    }
+    cx.background_executor().timer(FREED).await;
+    let left = cx.update(|cx| cx.windows().len());
+    if left != 0 {
+        finish(
+            USER_CLOSE,
+            Err(format!("{left} windows open after WM_CLOSE")),
+        );
+    }
+    let after = private_bytes();
+    println!(
+        "{USER_CLOSE}: private working set {before} before the editor opened, {after} after it closed"
+    );
+    if after > before + LEFT_HELD {
+        finish(
+            USER_CLOSE,
+            Err(format!(
+                "the closed editor left {} bytes held",
+                after - before
+            )),
+        );
+    }
+}
+
+fn private_bytes() -> usize {
+    cleanshot_win::log::usage()
+        .expect("Windows gives this process its memory counters")
+        .private_working_set_bytes
+}
+
+fn grey(width: u32, height: u32) -> RgbaImage {
+    RgbaImage::new(width, height, vec![128; (width * height * 4) as usize])
+        .expect("a grey image's bytes match its size")
+}
+
 fn open_editor(
     cx: &mut App,
     closings: &Rc<Cell<u32>>,
+    image: RgbaImage,
     on_first_frame: impl FnOnce(Instant) + 'static,
 ) -> EditorWindow {
     let closings = Rc::clone(closings);
     let opened = cleanshot_editor::open(
         cx,
-        RgbaImage::new(320, 240, vec![128; 320 * 240 * 4]).expect("320x240 RGBA"),
+        image,
         None,
         Outputs::new(
             |_, _| Err(DeliveryError::ClipboardBusy),

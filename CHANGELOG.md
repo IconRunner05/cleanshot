@@ -64,6 +64,8 @@ section exists.
   so the capture overlay opens sooner (D-139).
 - Cleanshot gives back the editor's graphics memory when the last editor or settings
   window closes, and starts without it, so it holds less memory in the tray (D-138).
+- Closing the editor or the settings window with its close button or Alt+F4 now gives back
+  its graphics memory, as Ctrl+W did (D-140).
 - In the region overlay a click picks the window under the pointer, which lights up as the
   pointer moves until something is selected; dragging still selects a region (F-08).
 - The property strip's Border and Shadow for the whole image sit under the label Image

@@ -132,7 +132,8 @@ fn hold_graphics(cx: &mut App) -> Result<(), Error> {
 
 /// Opens a window with `options` on the view `build` makes, with its Win32 handle for the app to
 /// bring it to the front once shown (D-124). GPUI takes a graphics device first if it holds none
-/// (D-138).
+/// (D-138). A close from Windows (the caption's button, Alt+F4, `WM_CLOSE`) closes the window as
+/// the app does (D-140).
 ///
 /// # Errors
 ///
@@ -152,6 +153,7 @@ fn open_window<V: Render>(
     let window = cx
         .open_window(options, |window, cx| {
             win32 = Some(win32_handle(window));
+            window.on_window_should_close(cx, close_as_the_app_does);
             build(window, cx)
         })
         .map_err(|error| Error::WindowOpen(error.into()))?;
@@ -159,6 +161,14 @@ fn open_window<V: Render>(
         window,
         win32.expect("open_window builds the view before it returns"),
     ))
+}
+
+/// D-140: GPUI lets go of a window's renderer, and with it the graphics device, only when it
+/// revokes the window's drop target, which fails once Windows has destroyed the window. So
+/// Windows is told no, and GPUI closes the window itself while it still exists.
+fn close_as_the_app_does(window: &mut Window, _: &mut App) -> bool {
+    window.remove_window();
+    false
 }
 
 /// The Win32 handle of `window` (D-124).
