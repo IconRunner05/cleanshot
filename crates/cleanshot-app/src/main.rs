@@ -70,14 +70,11 @@ fn main() {
     let (settings, warning) = load_settings();
     let (policy, policy_problems) = read_policy();
     let (hotkeys, fallback) = tray_hotkeys(&settings);
-    // P-04: counters only at each start-up stage, as a full account would slow P-03.
-    let logging = log.is_some();
-    let count = move |stage| logging.then(|| (stage, memory::counted()));
-    let mut counts = vec![count("log_opened")];
+    // P-04: counters only, as a full account would slow P-03.
+    let log_opened = log.is_some().then(memory::counted);
     let log = Rc::new(RefCell::new(log));
     cleanshot_editor::run(move |cx| {
         let gpui_started = since_start();
-        counts.push(count("gpui_started"));
         let app = cx.to_async();
         let session = Rc::new_cyclic(|session: &Weak<Session>| {
             let (session, closing_log) = (session.clone(), Rc::clone(&log));
@@ -96,7 +93,7 @@ fn main() {
             policy_problems,
             [warning, log_warning, fallback],
             [("main_entered", entered), ("gpui_started", gpui_started)],
-            std::mem::take(&mut counts),
+            log_opened,
         );
     })
     .expect("the Windows platform starts");
@@ -160,7 +157,7 @@ fn started(
     policy_problems: Vec<PolicyProblem>,
     earlier: [Option<String>; 3],
     marks: [(&str, Result<Duration, LogError>); 2],
-    counts: Vec<Option<(&str, Result<Counted, LogError>)>>,
+    log_opened: Option<Result<Counted, LogError>>,
 ) {
     // D-117: read once; unread, tooltips keep GPUI's delay.
     match cleanshot_win::hover_time() {
@@ -208,7 +205,8 @@ fn started(
             &error,
         ));
     }
-    for (stage, counted) in counts.into_iter().chain([tray_ready, prewarmed]).flatten() {
+    let log_opened = log_opened.map(|counted| ("log_opened", counted));
+    for (stage, counted) in [log_opened, tray_ready, prewarmed].into_iter().flatten() {
         match counted {
             Ok(counted) => session.log_line("memory", |_| format!("P-04 at={stage} {counted}")),
             Err(error) => session.log_failure("memory", "counters_unread", &error),
