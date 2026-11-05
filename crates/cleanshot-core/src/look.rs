@@ -170,14 +170,13 @@ impl Look {
     /// (D-131) where they take them. Nothing else gives a shape a shadow or a border.
     #[must_use]
     pub fn style_for(&self, tool: Tool) -> Style {
-        let takes = takes_shadow_and_border(tool);
         let border = Border {
             color: self.border_color,
             width: self.border_width,
         };
         self.style
-            .with_shadow(self.shadow && takes)
-            .with_border((self.border && takes).then_some(border))
+            .with_shadow(self.shadow && takes_shadow(tool))
+            .with_border((self.border && takes_border(tool)).then_some(border))
     }
 
     pub(crate) fn dress_text(&self, block: &TextBlock) -> TextBlock {
@@ -312,8 +311,8 @@ pub enum Property {
     BorderWidth(BorderWidth),
 }
 
-/// Whether the shapes `tool` draws can cast a shadow (D-114) and have a border (D-131).
-pub(crate) fn takes_shadow_and_border(tool: Tool) -> bool {
+/// Whether the shapes `tool` draws can cast a shadow (D-114).
+pub(crate) fn takes_shadow(tool: Tool) -> bool {
     match tool {
         Tool::Arrow
         | Tool::Line
@@ -328,6 +327,23 @@ pub(crate) fn takes_shadow_and_border(tool: Tool) -> bool {
         | Tool::Redact
         | Tool::Crop
         | Tool::Spotlight => false,
+    }
+}
+
+/// Whether the shapes `tool` draws can have a border (D-131, D-134): a redaction never does
+/// (C-22).
+pub(crate) fn takes_border(tool: Tool) -> bool {
+    match tool {
+        Tool::Arrow
+        | Tool::Line
+        | Tool::Rectangle
+        | Tool::Ellipse
+        | Tool::Text
+        | Tool::Step
+        | Tool::Bubble
+        | Tool::Highlighter
+        | Tool::Spotlight => true,
+        Tool::Select | Tool::Pen | Tool::Redact | Tool::Crop => false,
     }
 }
 
@@ -422,6 +438,7 @@ mod tests {
             Tool::Highlighter,
             Tool::Text,
             Tool::Redact,
+            Tool::Spotlight,
         ] {
             let look = Look::default_for(tool);
             for setting in Setting::for_tool(tool) {

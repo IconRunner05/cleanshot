@@ -29,7 +29,7 @@ pub enum Setting {
 
 impl Setting {
     /// The settings the strip shows for what `tool` draws, in strip order: none for the select
-    /// and crop tools, which draw nothing.
+    /// and crop tools, which draw nothing, and a spotlight's border alone (D-134).
     #[must_use]
     pub fn for_tool(tool: Tool) -> &'static [Self] {
         match tool {
@@ -51,7 +51,13 @@ impl Setting {
                 Self::BorderColor,
                 Self::BorderWidth,
             ],
-            Tool::Highlighter => &[Self::Color, Self::HighlightStrength],
+            Tool::Highlighter => &[
+                Self::Color,
+                Self::HighlightStrength,
+                Self::Border,
+                Self::BorderColor,
+                Self::BorderWidth,
+            ],
             Tool::Redact => &[Self::Redact, Self::RedactStrength],
             Tool::Text => &[
                 Self::Color,
@@ -79,7 +85,8 @@ impl Setting {
                 Self::BorderColor,
                 Self::BorderWidth,
             ],
-            Tool::Select | Tool::Crop | Tool::Spotlight => &[],
+            Tool::Spotlight => &[Self::Border, Self::BorderColor, Self::BorderWidth],
+            Tool::Select | Tool::Crop => &[],
         }
     }
 

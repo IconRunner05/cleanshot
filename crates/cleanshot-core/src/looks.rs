@@ -165,7 +165,7 @@ mod tests {
         RedactStrength, RgbaImage, Shape,
     };
     use crate::drag::{Drag, Start};
-    use crate::look::{HIGHLIGHTER_YELLOW, WHITE, takes_shadow_and_border};
+    use crate::look::{HIGHLIGHTER_YELLOW, WHITE, takes_border, takes_shadow};
     use crate::strip::Setting;
     use crate::text::{Alignment, DEFAULT_TEXT_SIZE, Horizontal, Vertical};
 
@@ -290,7 +290,7 @@ mod tests {
         assert!(!shadow_of(Tool::Highlighter), "nor does a highlight");
         for tool in TOOLS_FOR_TEST {
             let offered = Setting::for_tool(tool).contains(&Setting::Shadow);
-            assert_eq!(offered, takes_shadow_and_border(tool), "{tool:?}");
+            assert_eq!(offered, takes_shadow(tool), "{tool:?}");
         }
         let Some(Command::Add { shape, style }) = drawn(&looks, Tool::Arrow) else {
             panic!("an arrow");
@@ -399,7 +399,7 @@ mod tests {
         }
         for tool in TOOLS_FOR_TEST {
             let border = looks.look(tool).style_for(tool).border();
-            let expected = takes_shadow_and_border(tool).then_some(Border {
+            let expected = takes_border(tool).then_some(Border {
                 color: BLUE,
                 width: BorderWidth::Thick,
             });

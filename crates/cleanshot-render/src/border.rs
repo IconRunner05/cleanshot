@@ -1,5 +1,5 @@
 use cleanshot_core::{
-    BorderWidth, Color, Fill, GlyphMask, PointF, Shape, ShapeEntry, TextMasks, arrow_head,
+    BorderWidth, Color, Fill, GlyphMask, PointF, RectF, Shape, ShapeEntry, TextMasks, arrow_head,
 };
 use tiny_skia::{BlendMode, LineCap, LineJoin, Path, PathBuilder, Pixmap, Stroke, Transform};
 
@@ -31,8 +31,9 @@ pub fn shape_border(
 
 /// Draws `entry`'s border, if it has one, where the shape is about to be drawn over it
 /// (D-131): a stroke is drawn again wider, an outline round a filled shape is a stroke along
-/// its edge that the fill then covers on the inside, and text is its glyphs grown by the
-/// border's width. Pen strokes, highlights, redactions and spotlights draw none.
+/// its edge that the fill then covers on the inside, text is its glyphs grown by the
+/// border's width, and a highlight's or spotlight's is a band just outside its rectangle, so
+/// it never covers what the rectangle marks (D-134). Pen strokes and redactions draw none.
 ///
 /// # Errors
 ///
@@ -105,7 +106,17 @@ pub(crate) fn draw_border(
                 glyphs(pixmap, &grown(layer, border.width), border.color);
             }
         }
-        Shape::Pen(_) | Shape::Highlight { .. } | Shape::Redact { .. } | Shape::Spotlight(_) => {}
+        Shape::Highlight { rect, .. } | Shape::Spotlight(rect) => {
+            let half = reach / 2.0;
+            let around = RectF {
+                x: rect.x - half,
+                y: rect.y - half,
+                width: rect.width + reach,
+                height: rect.height + reach,
+            };
+            stroke_path(skia_rect(around).map(PathBuilder::from_rect), reach);
+        }
+        Shape::Pen(_) | Shape::Redact { .. } => {}
     }
     Ok(())
 }
@@ -169,8 +180,11 @@ fn steps(width: BorderWidth) -> Vec<(i8, i8)> {
 #[cfg(test)]
 mod tests {
     use cleanshot_core::{
-        Command, Document, History, Look, PointF, Property, RgbaImage, TextBlock, Tool,
+        Command, Document, HighlightStrength, History, Look, PointF, Property, RedactMode,
+        RedactStrength, RgbaImage, TextBlock, Tool,
     };
+
+    use crate::flatten::flatten;
     use std::sync::Arc;
 
     use super::*;
@@ -204,5 +218,70 @@ mod tests {
         let corner = &patch.pixels.pixels()[..4];
         assert_eq!(corner[3], 0, "growth is round, so the corner stays clear");
         assert_eq!(shape_border(entry, 32, 32, None).unwrap(), None);
+    }
+
+    #[test]
+    fn d134_a_highlight_or_spotlight_border_rings_its_rect_outside_and_a_redaction_has_none() {
+        const MARKED: RectF = RectF {
+            x: 10.0,
+            y: 10.0,
+            width: 20.0,
+            height: 12.0,
+        };
+        let shapes = [
+            Shape::Highlight {
+                rect: MARKED,
+                strength: HighlightStrength::Strong,
+            },
+            Shape::Spotlight(MARKED),
+        ];
+        let flat = |shape: &Shape, border: bool| {
+            let (shape, style) = Look::default_for(Tool::drawing(shape))
+                .with(Property::Border(border))
+                .unwrap()
+                .dress(shape.clone());
+            let mut history = History::new(Document::new(Arc::new(
+                RgbaImage::new(40, 32, vec![255; 40 * 32 * 4]).unwrap(),
+            )));
+            history.apply(Command::Add { shape, style }).unwrap();
+            let entry = history.document().shapes()[0].clone();
+            let image = flatten(history.document(), &TextMasks::default())
+                .unwrap()
+                .image()
+                .clone();
+            (entry, image)
+        };
+        let pixel =
+            |image: &RgbaImage, x: usize, y: usize| image.pixels().as_chunks::<4>().0[y * 40 + x];
+        let inside = |x: usize, y: usize| (10..30).contains(&x) && (10..22).contains(&y);
+        for shape in &shapes {
+            let (entry, bordered) = flat(shape, true);
+            let (_, plain) = flat(shape, false);
+            let color = entry.style.border().unwrap().color;
+            for y in 0..32 {
+                for x in 0..40 {
+                    if inside(x, y) {
+                        assert_eq!(pixel(&bordered, x, y), pixel(&plain, x, y), "{shape:?}");
+                    }
+                }
+            }
+            assert_eq!(
+                pixel(&bordered, 9, 15),
+                [color.r, color.g, color.b, 255],
+                "{shape:?}: the band hugs the rect and is not dimmed"
+            );
+            assert_eq!(pixel(&bordered, 7, 15), pixel(&plain, 7, 15), "{shape:?}");
+            let patch = shape_border(&entry, 40, 32, None).unwrap().unwrap();
+            assert_eq!((patch.left, patch.top), (8, 8), "{shape:?}");
+        }
+        let (redaction, _) = flat(
+            &Shape::Redact {
+                rect: MARKED,
+                mode: RedactMode::Pixelate,
+                strength: RedactStrength::FINE,
+            },
+            true,
+        );
+        assert_eq!(redaction.style.border(), None);
     }
 }
