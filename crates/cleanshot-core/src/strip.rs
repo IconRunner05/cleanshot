@@ -31,7 +31,7 @@ impl Setting {
     /// The settings the strip shows for what `tool` draws, in strip order: none for the select
     /// and crop tools, which draw nothing, and a spotlight's border alone (D-134).
     #[must_use]
-    pub fn for_tool(tool: Tool) -> &'static [Self] {
+    pub(crate) fn for_tool(tool: Tool) -> &'static [Self] {
         match tool {
             Tool::Arrow | Tool::Line => &[
                 Self::Color,
