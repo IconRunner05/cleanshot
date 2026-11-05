@@ -260,6 +260,10 @@ jobs:
           (( ${failed:-0} == 0 )) || { echo "FAIL D-62: the overlay run stopped (exit ${failed})"; exit 1; }
           (( ${exited:-0} == 0 )) || { echo "FAIL F-50: Cleanshot did not exit cleanly from its tray"; exit 1; }
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner --overlays "$run/cleanshot.log"
+          # D-137: the prewarm runs once the tray is ready, so P-03 does not wait for it.
+          ready=$(grep -n ' perf P-03 tray_ready_ms=' "$run/cleanshot.log" | cut -d: -f1)
+          prewarmed=$(grep -n ' perf P-03 overlay_prewarmed_ms=' "$run/cleanshot.log" | cut -d: -f1)
+          (( ${prewarmed:-0} > ${ready:-0} && ${ready:-0} > 0 )) || { echo "FAIL D-137: the overlay prewarm was not logged after the tray was ready"; exit 1; }
 
       - name: Release exe logs its memory after an editor closes (P-04, reported, not judged)
         shell: bash

@@ -78,12 +78,6 @@ fn main() {
     cleanshot_editor::run(move |cx| {
         let gpui_started = since_start();
         counts.push(count("gpui_started"));
-        // D-76: prewarm on the overlay thread before the tray is ready.
-        let unwarmed = Overlay::prewarm()
-            .err()
-            .map(|error| format!("The capture overlay could not be prepared: {error}."));
-        let prewarmed = since_start();
-        counts.push(count("overlay_prewarmed"));
         let app = cx.to_async();
         let session = Rc::new_cyclic(|session: &Weak<Session>| {
             let (session, closing_log) = (session.clone(), Rc::clone(&log));
@@ -100,12 +94,8 @@ fn main() {
             cx,
             session,
             policy_problems,
-            [warning, log_warning, fallback, unwarmed],
-            [
-                ("main_entered", entered),
-                ("gpui_started", gpui_started),
-                ("overlay_prewarmed", prewarmed),
-            ],
+            [warning, log_warning, fallback],
+            [("main_entered", entered), ("gpui_started", gpui_started)],
             std::mem::take(&mut counts),
         );
     })
@@ -168,8 +158,8 @@ fn started(
     cx: &mut cleanshot_editor::App,
     session: Rc<Session>,
     policy_problems: Vec<PolicyProblem>,
-    earlier: [Option<String>; 4],
-    marks: [(&str, Result<Duration, LogError>); 3],
+    earlier: [Option<String>; 3],
+    marks: [(&str, Result<Duration, LogError>); 2],
     counts: Vec<Option<(&str, Result<Counted, LogError>)>>,
 ) {
     // D-117: read once; unread, tooltips keep GPUI's delay.
@@ -203,12 +193,22 @@ fn started(
         }
     }
     session.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
-    let tray_ready = session
-        .log
-        .borrow()
-        .is_some()
-        .then(|| ("tray_ready", memory::counted()));
-    for (stage, counted) in counts.into_iter().chain([tray_ready]).flatten() {
+    let count = |stage| {
+        let logging = session.log.borrow().is_some();
+        logging.then(|| (stage, memory::counted()))
+    };
+    let tray_ready = count("tray_ready");
+    // D-137: prewarm on the overlay thread once the tray is ready (D-76).
+    let unwarmed = Overlay::prewarm().err();
+    session.perf(|since_start| format!("P-03 overlay_prewarmed_ms={}", since_start.as_millis()));
+    let prewarmed = count("overlay_prewarmed");
+    if let Some(error) = unwarmed {
+        session.warn(Warning::Failed(
+            "The capture overlay could not be prepared",
+            &error,
+        ));
+    }
+    for (stage, counted) in counts.into_iter().chain([tray_ready, prewarmed]).flatten() {
         match counted {
             Ok(counted) => session.log_line("memory", |_| format!("P-04 at={stage} {counted}")),
             Err(error) => session.log_failure("memory", "counters_unread", &error),
@@ -266,7 +266,7 @@ fn tray_hotkeys(settings: &Settings) -> ([(Request, Hotkey); 5], Option<String>)
 
 /// What start-up has to tell the user, in one line: `earlier`, then each hotkey another program
 /// holds (F-51: shown, not swallowed).
-fn start_warnings(tray: &Tray, earlier: [Option<String>; 4]) -> String {
+fn start_warnings(tray: &Tray, earlier: [Option<String>; 3]) -> String {
     let taken = tray
         .hotkeys()
         .filter(|(_, _, registered)| registered.is_err())
