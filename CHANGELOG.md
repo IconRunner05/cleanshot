@@ -40,8 +40,9 @@ section exists.
 - Arrows, lines, rectangles, ellipses, text, numbered steps and speech bubbles can cast a
   soft shadow, turned on by Shadow on the property strip (F-44).
 - The same shapes can have a border, an outline in a second colour drawn under them: tick
-  Border on the property strip and pick its colour and a width of 2, 4 or 6 pixels. It can
-  be changed after drawing, and each change can be undone (F-44, D-131).
+  Border on the property strip and pick its colour and a width of 2, 4 or 6 pixels, which
+  show once Border is ticked. It can be changed after drawing, and each change can be
+  undone (F-44, D-131, D-135).
 - Copy, Save and Save As buttons at the end of the editor toolbar, each doing what Ctrl+C,
   Ctrl+S or Ctrl+Shift+S does, with the shortcut in its tooltip (F-40, F-22).
 - Undo and Redo buttons at the end of the editor toolbar. Each is greyed out when there is

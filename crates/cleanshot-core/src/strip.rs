@@ -83,6 +83,35 @@ impl Setting {
         }
     }
 
+    /// The settings the strip shows for `tool` drawing in `look`: [`Self::for_tool`]'s, less
+    /// those that only set something `look` has switched off, as the border's colour and width
+    /// while Border is off (D-135).
+    #[must_use]
+    pub fn shown_for(tool: Tool, look: &Look) -> Vec<Self> {
+        Self::for_tool(tool)
+            .iter()
+            .copied()
+            .filter(|setting| setting.is_switched_on(look))
+            .collect()
+    }
+
+    fn is_switched_on(self, look: &Look) -> bool {
+        match self {
+            Self::BorderColor | Self::BorderWidth => look.border(),
+            Self::Color
+            | Self::StrokeWidth
+            | Self::Fill
+            | Self::Redact
+            | Self::RedactStrength
+            | Self::HighlightStrength
+            | Self::TextSize
+            | Self::Shadow
+            | Self::Alignment
+            | Self::HorizontalAlignment
+            | Self::Border => true,
+        }
+    }
+
     /// What the strip and a screen reader call this setting.
     #[must_use]
     pub fn name(self) -> &'static str {
@@ -386,6 +415,33 @@ mod tests {
             Some(200.0)
         );
         assert_eq!(Setting::Color.typed(&text), None);
+    }
+
+    #[test]
+    fn d135_the_border_colour_and_width_show_only_while_border_is_ticked() {
+        let border_rows = [Setting::BorderColor, Setting::BorderWidth];
+        for tool in [
+            Tool::Arrow,
+            Tool::Rectangle,
+            Tool::Text,
+            Tool::Bubble,
+            Tool::Step,
+        ] {
+            let off = Look::default_for(tool);
+            assert!(!off.border(), "{tool:?}");
+            let shown = Setting::shown_for(tool, &off);
+            assert!(shown.contains(&Setting::Border), "{tool:?}");
+            assert!(
+                !border_rows.iter().any(|row| shown.contains(row)),
+                "{tool:?}"
+            );
+            let on = off.with(Property::Border(true)).unwrap();
+            assert_eq!(
+                Setting::shown_for(tool, &on),
+                Setting::for_tool(tool),
+                "{tool:?}"
+            );
+        }
     }
 
     #[test]

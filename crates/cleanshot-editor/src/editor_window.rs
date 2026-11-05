@@ -523,7 +523,7 @@ impl EditorView {
             let selected = self.selected.and_then(|id| self.document.shape(id));
             self.looks.shown(self.tool, selected)
         };
-        let settings = Setting::for_tool(strip_tool);
+        let settings = Setting::shown_for(strip_tool, &look);
         property_strip(
             settings,
             look,

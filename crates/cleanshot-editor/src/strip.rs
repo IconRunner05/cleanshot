@@ -20,7 +20,7 @@ use crate::tooltip::{tooltip_text, with_tooltip};
 /// frame toggles (F-44, D-131). `on_set` is called with the choice picked and `on_document`
 /// with the document change, by click, Enter or Space.
 pub(crate) fn property_strip(
-    settings: &[Setting],
+    settings: Vec<Setting>,
     look: Look,
     frame: Frame,
     dim: Option<SpotlightDim>,
@@ -29,8 +29,8 @@ pub(crate) fn property_strip(
     on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
     let (shape, own): (Vec<Setting>, Vec<Setting>) = settings
-        .iter()
-        .partition(|&&setting| in_shape_group(setting));
+        .into_iter()
+        .partition(|&setting| in_shape_group(setting));
     let groups = own
         .iter()
         .enumerate()
