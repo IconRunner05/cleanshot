@@ -393,12 +393,23 @@ pub enum BorderWidth {
 impl BorderWidth {
     /// The width in image pixels.
     #[must_use]
-    pub const fn pixels(self) -> f32 {
+    pub const fn pixels(self) -> u8 {
         match self {
-            Self::Thin => 2.0,
-            Self::Medium => 4.0,
-            Self::Thick => 6.0,
+            Self::Thin => 2,
+            Self::Medium => 4,
+            Self::Thick => 6,
         }
+    }
+
+    /// The whole-pixel steps, none further than this width, at which text is drawn again to
+    /// grow its glyphs into their border (D-131).
+    pub fn steps(self) -> impl Iterator<Item = (i8, i8)> {
+        let reach = self.pixels().cast_signed();
+        (-reach..=reach)
+            .flat_map(move |down| (-reach..=reach).map(move |across| (across, down)))
+            .filter(move |&(across, down)| {
+                i16::from(across).pow(2) + i16::from(down).pow(2) <= i16::from(reach).pow(2)
+            })
     }
 }
 

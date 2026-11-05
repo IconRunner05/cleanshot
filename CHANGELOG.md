@@ -38,6 +38,9 @@ section exists.
   (F-38). Right-clicking a shape opens a menu with the same four moves.
 - Arrows, lines, rectangles, ellipses, text, numbered steps and speech bubbles can cast a
   soft shadow, turned on by Shadow on the property strip (F-44).
+- The same shapes can have a border, an outline in a second colour drawn under them: tick
+  Border on the property strip and pick its colour and a width of 2, 4 or 6 pixels. It can
+  be changed after drawing, and each change can be undone (F-44, D-131).
 - Undo and Redo buttons at the end of the editor toolbar. Each is greyed out when there is
   nothing to undo or redo, and otherwise names the step, as in "Undo arrow" (F-38).
 - A speech bubble's box can be resized by its sides and corners. The text wraps inside
@@ -53,8 +56,10 @@ section exists.
 
 - In the region overlay a click picks the window under the pointer, which lights up as the
   pointer moves until something is selected; dragging still selects a region (F-08).
-- The property strip's Border and Shadow for the whole image now sit under the label
-  Image frame, apart from a shape's own Shadow (F-44).
+- The property strip's Border and Shadow for the whole image sit under the label Image
+  frame. While a drawing tool is picked or a shape is selected, that place holds the Shape
+  group instead, with the shape's own Shadow and Border, so the strip never shows two
+  Shadow boxes (F-44, D-131).
 - The editor opens sized round the capture at 100%, with the toolbar above it, instead of
   at 80% of the primary display (F-23). A capture too large for the screen opens fitted to
   it. The capture, fitted or not, now sits below the toolbar instead of under it.

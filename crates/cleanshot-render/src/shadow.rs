@@ -20,10 +20,19 @@ pub fn shape_shadow(entry: &ShapeEntry, width: u32, height: u32) -> Result<Optio
     draw(&mut layer, entry, None)?;
     let mut shadow = Pixmap::new(width, height).ok_or_else(too_large)?;
     cast_shadow(&mut shadow, &layer);
-    let Some(bounds) = covered_bounds(&shadow) else {
+    drawn_patch(&shadow)
+}
+
+/// What is drawn on `pixmap`, cut to the smallest rectangle holding it; `None` if nothing is.
+///
+/// # Errors
+///
+/// [`Error::Output`] if the cut pixels do not form an image.
+pub(crate) fn drawn_patch(pixmap: &Pixmap) -> Result<Option<Patch>, Error> {
+    let Some(bounds) = covered_bounds(pixmap) else {
         return Ok(None);
     };
-    let Some(patch) = shadow.clone_rect(bounds) else {
+    let Some(patch) = pixmap.clone_rect(bounds) else {
         return Ok(None);
     };
     let pixels =

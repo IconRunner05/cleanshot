@@ -4,9 +4,9 @@ use cleanshot_core::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Div, ElementId, Entity, InteractiveElement, IntoElement, KeyDownEvent,
-    ParentElement, RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled, Toggled, Window,
-    anchored, deferred, div, point, px,
+    App, Div, ElementId, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
+    RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled, Toggled, Window, anchored,
+    deferred, div, point, px,
 };
 
 use crate::canvas::rgba;
@@ -31,14 +31,10 @@ pub(crate) fn property_strip(
     let (shape, own): (Vec<Setting>, Vec<Setting>) = settings
         .iter()
         .partition(|&&setting| in_shape_group(setting));
-    let groups = own.iter().enumerate().map(|(index, &setting)| {
-        group(setting.name(), Role::Group, index > 0, theme).child(controls(
-            setting,
-            look,
-            theme,
-            on_set.clone(),
-        ))
-    });
+    let groups = own
+        .iter()
+        .enumerate()
+        .map(|(index, &setting)| setting_group(setting, index > 0, look, theme, on_set.clone()));
     let after = !own.is_empty() || dim.is_some();
     let last = if shape.is_empty() {
         image_frame_group(frame, after, theme, on_document.clone())
@@ -48,7 +44,7 @@ pub(crate) fn property_strip(
             .children(
                 shape
                     .iter()
-                    .map(|&setting| controls(setting, look, theme, on_set.clone())),
+                    .map(|&setting| setting_group(setting, false, look, theme, on_set.clone())),
             )
     };
     panel(theme)
@@ -77,32 +73,34 @@ fn in_shape_group(setting: Setting) -> bool {
     }
 }
 
-/// The buttons that set `setting`: a check box for an on-or-off one, the alignment picker, or
-/// a radio group of its choices with the box to type a value where it takes one.
-fn controls(
+/// The buttons that set `setting`, `after` another group: a check box for an on-or-off one,
+/// which names itself, or a group named for the setting holding the alignment picker or its
+/// choices, with the box to type a value where it takes one. Each is named once, so a screen
+/// reader says it once.
+fn setting_group(
     setting: Setting,
+    after: bool,
     look: Look,
     theme: Theme,
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
-) -> AnyElement {
+) -> Stateful<Div> {
     let name = setting.name();
     let check = |checked: bool, toggled: Property| {
         let on_set = on_set.clone();
         strip_button(name.to_owned(), Role::CheckBox, name, checked, theme)
             .on_click(move |_, window, cx| on_set(toggled, window, cx))
             .child(div().text_xs().text_color(theme.text).child(name))
-            .into_any_element()
     };
     match setting {
         Setting::Shadow => check(look.shadow(), Property::Shadow(!look.shadow())),
         Setting::Border => check(look.border(), Property::Border(!look.border())),
-        Setting::Alignment | Setting::HorizontalAlignment => AlignmentPicker {
-            setting,
-            look,
-            theme,
-            on_set,
-        }
-        .into_any_element(),
+        Setting::Alignment | Setting::HorizontalAlignment => group(name, Role::Group, after, theme)
+            .child(AlignmentPicker {
+                setting,
+                look,
+                theme,
+                on_set,
+            }),
         Setting::Color
         | Setting::StrokeWidth
         | Setting::Fill
@@ -125,16 +123,9 @@ fn controls(
                 theme,
                 on_set: on_set.clone(),
             });
-            div()
-                .id(ElementId::Name(format!("{name}: choices").into()))
-                .role(Role::RadioGroup)
-                .aria_label(name)
-                .flex()
-                .items_center()
-                .gap(px(2.0))
+            group(name, Role::RadioGroup, after, theme)
                 .children(choices)
                 .children(typed)
-                .into_any_element()
         }
     }
 }
@@ -504,7 +495,7 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
         }
         Property::BorderWidth(width) => div()
             .w(px(16.0))
-            .h(px(width.pixels()))
+            .h(px(f32::from(width.pixels())))
             .rounded_full()
             .bg(theme.text),
         Property::Fill(Fill::Hollow) => div()

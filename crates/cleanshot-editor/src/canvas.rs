@@ -22,7 +22,7 @@ use crate::theme::ACCENT;
 mod previews;
 
 pub(crate) use previews::Previews;
-use previews::{RedactionPreviews, ShadowPreviews, paint_shadow};
+use previews::{RedactionPreviews, ShapePatches, paint_border, paint_shadow};
 
 const ELLIPSE_SEGMENTS: u16 = 64;
 
@@ -93,8 +93,6 @@ const HANDLE_SIZE: f32 = 8.0;
 const ZOOM_PER_WHEEL_LINE: f32 = 1.2;
 const PIXELS_PER_WHEEL_LINE: f32 = 20.0;
 
-/// Draws the document's base image scaled to fit the element, its shapes with `overlay`'s
-/// preview on top, and reports the pointer to `on_pointer`, following a drag outside the element.
 /// `document`'s shapes in drawing order as the canvas shows them: the one `preview` changes in
 /// its changed form, and the one it adds last, without an id.
 fn shown_shapes<'a>(
@@ -124,6 +122,8 @@ fn shown_shapes<'a>(
         .collect()
 }
 
+/// Draws the document's base image scaled to fit the element, its shapes with `overlay`'s
+/// preview on top, and reports the pointer to `on_pointer`, following a drag outside the element.
 pub(crate) fn document_canvas(
     document: Rc<Document>,
     base: Arc<RenderImage>,
@@ -176,13 +176,18 @@ pub(crate) fn document_canvas(
                         fit: &fit,
                         redactions: &previews.redactions,
                         shadows: &previews.shadows,
+                        borders: &previews.borders,
                         dimmed: &dimmed,
                         dim,
                         number,
                     };
                     let shadow = paint_shadow(id, shape, *style, &painting, window, cx);
+                    let border = paint_border(id, shape, *style, &painting, window, cx);
                     let painted = paint_shape(shape, *style, &painting, window, cx);
-                    for unpainted in [shadow, painted].into_iter().filter_map(Result::err) {
+                    for unpainted in [shadow, border, painted]
+                        .into_iter()
+                        .filter_map(Result::err)
+                    {
                         (previews.log)(unpainted.event());
                     }
                     if id.is_some() && overlay.selected == id {
@@ -375,12 +380,13 @@ fn paint_handle(centre: Point<Pixels>, window: &mut Window) {
     ));
 }
 
-/// What a shape is painted against: the fit, the redaction previews, the spotlights' dimmed
-/// areas, and the number a step at this place in the drawing order shows.
+/// What a shape is painted against: the fit, the redaction, shadow and border previews, the
+/// spotlights' dimmed areas, and the number a step at this place in the drawing order shows.
 struct Painting<'a> {
     fit: &'a Fit,
     redactions: &'a RedactionPreviews,
-    shadows: &'a ShadowPreviews,
+    shadows: &'a ShapePatches,
+    borders: &'a ShapePatches,
     dimmed: &'a [RectF],
     dim: Color,
     number: usize,
@@ -397,6 +403,7 @@ fn paint_shape(
         fit,
         redactions,
         shadows: _,
+        borders: _,
         dimmed,
         dim,
         number,
@@ -528,10 +535,10 @@ fn paint_bubble(
     tail.and(text)
 }
 
-/// Lays the spotlight dim over each of `areas`, cut to `within` (F-43, D-78).
 /// What the canvas lays over the image outside the crop while it is being changed (F-37).
 const OUTSIDE_CROP: Color = SpotlightDim::Medium.color();
 
+/// Lays the spotlight dim over each of `areas`, cut to `within` (F-43, D-78).
 fn paint_dim(
     areas: &[RectF],
     color: Color,

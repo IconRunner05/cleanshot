@@ -210,7 +210,7 @@ impl Drag {
         };
         Ok(Some(Command::Add {
             shape: origin.frame().around(origin.block(String::new(), |_| 0.0)?),
-            style: look.style(),
+            style: look.style_for(Tool::Bubble),
         }))
     }
 

@@ -6,7 +6,7 @@ use cleanshot_core::{
     Color, Document, Fill, HighlightStrength, Label, RectF, RedactMode, RedactStrength, RgbaImage,
     Shape, ShapeEntry, ShapeId, Style,
 };
-use cleanshot_render::{Patch, highlighted, redacted, shape_shadow};
+use cleanshot_render::{Error, Patch, highlighted, redacted, shape_border, shape_shadow};
 use gpui::{
     App, Bounds, BoxShadow, Corners, Pixels, RenderImage, Rgba, Window, fill, hsla, point, px,
 };
@@ -21,7 +21,8 @@ use crate::text::paint_label;
 #[derive(Clone)]
 pub(crate) struct Previews {
     pub(super) redactions: RedactionPreviews,
-    pub(super) shadows: ShadowPreviews,
+    pub(super) shadows: ShapePatches,
+    pub(super) borders: ShapePatches,
     highlights: HighlightPreviews,
     pub(super) log: Log,
 }
@@ -30,7 +31,8 @@ impl Previews {
     pub(crate) fn new(log: Log) -> Self {
         Self {
             redactions: RedactionPreviews::new(Rc::clone(&log)),
-            shadows: ShadowPreviews::new(Rc::clone(&log)),
+            shadows: ShapePatches::new(PatchKind::Shadow, Rc::clone(&log)),
+            borders: ShapePatches::new(PatchKind::Border, Rc::clone(&log)),
             highlights: HighlightPreviews::new(Rc::clone(&log)),
             log,
         }
@@ -40,6 +42,7 @@ impl Previews {
     pub(crate) fn update(&mut self, document: &Document) {
         self.redactions.update(document);
         self.shadows.update(document);
+        self.borders.update(document);
         self.highlights.update(document);
     }
 
@@ -301,23 +304,66 @@ fn redaction_preview(
     }
 }
 
-/// What the canvas shows under each shadowed shape whose shadow GPUI cannot draw as a box: the
-/// shadow the export draws there (D-114), made once for each shape rather than every frame.
+/// What the canvas shows under each shape of a shadow or border GPUI cannot draw: the pixels
+/// the export draws there (D-114, D-131), made once for each shape rather than every frame.
 #[derive(Clone)]
-pub(super) struct ShadowPreviews {
-    previews: HashMap<ShapeId, ShadowPreview>,
+pub(super) struct ShapePatches {
+    kind: PatchKind,
+    previews: HashMap<ShapeId, PatchPreview>,
     log: Log,
 }
 
+/// Which of a shape's surroundings a [`ShapePatches`] shows.
+#[derive(Clone, Copy)]
+pub(super) enum PatchKind {
+    /// The shadows GPUI cannot draw as a box shadow.
+    Shadow,
+    /// Every border but bare text's, which the canvas paints from its glyphs.
+    Border,
+}
+
+impl PatchKind {
+    fn wanted(self, entry: &ShapeEntry) -> bool {
+        match self {
+            Self::Shadow => entry.style.shadow() && box_shadow(&entry.shape).is_none(),
+            Self::Border => {
+                entry.style.border().is_some() && !matches!(entry.shape, Shape::Text(_))
+            }
+        }
+    }
+
+    fn patch(self, entry: &ShapeEntry, width: u32, height: u32) -> Result<Option<Patch>, Error> {
+        match self {
+            Self::Shadow => shape_shadow(entry, width, height),
+            Self::Border => shape_border(entry, width, height),
+        }
+    }
+
+    fn not_made(self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow_preview not_made",
+            Self::Border => "border_preview not_made",
+        }
+    }
+
+    fn not_painted(self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow_preview not_painted",
+            Self::Border => "border_preview not_painted",
+        }
+    }
+}
+
 #[derive(Clone)]
-struct ShadowPreview {
+struct PatchPreview {
     of: ShapeEntry,
     image: Option<(RectF, Arc<RenderImage>)>,
 }
 
-impl ShadowPreviews {
-    pub(crate) fn new(log: Log) -> Self {
+impl ShapePatches {
+    pub(crate) fn new(kind: PatchKind, log: Log) -> Self {
         Self {
+            kind,
             previews: HashMap::new(),
             log,
         }
@@ -325,19 +371,19 @@ impl ShadowPreviews {
 
     /// Keeps a preview for each such shape in `document`, remaking it when the shape changed and
     /// dropping the ones no longer there. A shape being dragged is not in the document, so its
-    /// shadow shows again on release.
+    /// shadow or border shows again on release.
     pub(crate) fn update(&mut self, document: &Document) {
         let (width, height) = (document.base().width(), document.base().height());
         let mut kept = HashMap::new();
         for entry in document.shapes() {
-            if !entry.style.shadow() || box_shadow(&entry.shape).is_some() {
+            if !self.kind.wanted(entry) {
                 continue;
             }
             let preview = match self.previews.remove(&entry.id) {
                 Some(preview) if preview.of == *entry => preview,
-                Some(_) | None => ShadowPreview {
+                Some(_) | None => PatchPreview {
                     of: entry.clone(),
-                    image: shadow_image(entry, width, height, &*self.log),
+                    image: self.image(entry, width, height),
                 },
             };
             kept.insert(entry.id, preview);
@@ -346,7 +392,7 @@ impl ShadowPreviews {
     }
 
     fn paint(&self, id: ShapeId, shape: &Shape, style: Style, fit: &Fit, window: &mut Window) {
-        let Some(ShadowPreview {
+        let Some(PatchPreview {
             of,
             image: Some((bounds, image)),
         }) = self.previews.get(&id)
@@ -359,23 +405,23 @@ impl ShadowPreviews {
         let bounds = fit.bounds(*bounds);
         let painted = window.paint_image(bounds, bounds, 0.0.into(), Arc::clone(image), 0, false);
         if painted.is_err() {
-            (self.log)("shadow_preview not_painted");
+            (self.log)(self.kind.not_painted());
         }
     }
-}
 
-fn shadow_image(
-    entry: &ShapeEntry,
-    width: u32,
-    height: u32,
-    log: &dyn Fn(&'static str),
-) -> Option<(RectF, Arc<RenderImage>)> {
-    match shape_shadow(entry, width, height) {
-        Ok(Some(patch)) => Some(placed(&patch)),
-        Ok(None) => None,
-        Err(_) => {
-            log("shadow_preview not_made");
-            None
+    fn image(
+        &self,
+        entry: &ShapeEntry,
+        width: u32,
+        height: u32,
+    ) -> Option<(RectF, Arc<RenderImage>)> {
+        match self.kind.patch(entry, width, height) {
+            Ok(Some(patch)) => Some(placed(&patch)),
+            Ok(None) => None,
+            Err(_) => {
+                (self.log)(self.kind.not_made());
+                None
+            }
         }
     }
 }
@@ -455,6 +501,40 @@ pub(super) fn paint_shadow(
     }
     if let Some(id) = id {
         painting.shadows.paint(id, shape, style, fit, window);
+    }
+    Ok(())
+}
+
+/// Paints `shape`'s border under it (D-131): bare text's as its glyphs drawn again at each step
+/// of the border's width, every other kind's as the export draws it.
+pub(super) fn paint_border(
+    id: Option<ShapeId>,
+    shape: &Shape,
+    style: Style,
+    painting: &Painting,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), Unpainted> {
+    let Some(border) = style.border() else {
+        return Ok(());
+    };
+    let fit = painting.fit;
+    if let Shape::Text(block) = shape {
+        for (across, down) in border.width.steps() {
+            let step = point(
+                px(f32::from(across) * fit.scale),
+                px(f32::from(down) * fit.scale),
+            );
+            let moved = Fit {
+                origin: fit.origin + step,
+                ..*fit
+            };
+            paint_label(&Label::Block(block), rgba(border.color), &moved, window, cx)?;
+        }
+        return Ok(());
+    }
+    if let Some(id) = id {
+        painting.borders.paint(id, shape, style, fit, window);
     }
     Ok(())
 }
@@ -551,12 +631,11 @@ mod tests {
         history
             .apply(shadowed(rect(Fill::Hollow), Fill::Hollow))
             .unwrap();
-        let image_of = |previews: &ShadowPreviews, id: ShapeId| match &previews.previews[&id].image
-        {
+        let image_of = |previews: &ShapePatches, id: ShapeId| match &previews.previews[&id].image {
             Some((_, image)) => Arc::clone(image),
             None => panic!("a shadow image for {id:?}"),
         };
-        let mut previews = ShadowPreviews::new(Rc::new(|_| {}));
+        let mut previews = ShapePatches::new(PatchKind::Shadow, Rc::new(|_| {}));
         previews.update(history.document());
         let ids: Vec<_> = history
             .document()
@@ -588,6 +667,59 @@ mod tests {
             .unwrap();
         previews.update(history.document());
         assert!(!Arc::ptr_eq(&first, &image_of(&previews, arrow_id)));
+    }
+
+    #[test]
+    fn d131_a_border_image_is_made_for_a_bordered_arrow_or_solid_box_and_not_for_bare_text() {
+        use cleanshot_core::{Look, Property, TextBlock, Tool};
+
+        let image = RgbaImage::new(64, 48, vec![200; 64 * 48 * 4]).unwrap();
+        let bordered = |shape: Shape, fill| {
+            let (shape, style) = Look::default_for(Tool::drawing(&shape))
+                .with(Property::Fill(fill))
+                .and_then(|look| look.with(Property::Border(true)))
+                .unwrap()
+                .dress(shape);
+            Command::Add { shape, style }
+        };
+        let arrow = Shape::Arrow {
+            from: PointF { x: 4.0, y: 4.0 },
+            to: PointF { x: 40.0, y: 30.0 },
+        };
+        let solid = Shape::Rect {
+            rect: RectF {
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 10.0,
+            },
+            fill: Fill::Solid,
+        };
+        let text = TextBlock::new(PointF { x: 2.0, y: 2.0 }, "hi".into(), 12.0, 1.0).unwrap();
+        let mut history = History::new(Document::new(Arc::new(image)));
+        history.apply(bordered(arrow, Fill::Hollow)).unwrap();
+        history.apply(bordered(solid, Fill::Solid)).unwrap();
+        history
+            .apply(bordered(Shape::Text(text), Fill::Hollow))
+            .unwrap();
+        let mut previews = ShapePatches::new(PatchKind::Border, Rc::new(|_| {}));
+        previews.update(history.document());
+        let ids: Vec<_> = history
+            .document()
+            .shapes()
+            .iter()
+            .map(|entry| entry.id)
+            .collect();
+        for id in &ids[..2] {
+            assert!(
+                previews.previews[id].image.is_some(),
+                "a border image for {id:?}"
+            );
+        }
+        assert!(
+            !previews.previews.contains_key(&ids[2]),
+            "bare text's border is painted from its glyphs"
+        );
     }
 
     #[test]

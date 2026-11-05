@@ -848,6 +848,24 @@ mod tests {
             };
             assert!(style.shadow(), "{tool:?}");
         }
+        let Some(Start::Drag(mut dragged)) = Drag::press(
+            &document,
+            Tool::Bubble,
+            looks.look(Tool::Bubble),
+            None,
+            at,
+            4.0,
+        )
+        .start
+        else {
+            panic!("a bubble-tool press on bare image starts a drag");
+        };
+        dragged.extend(PointF { x: 7.0, y: 7.0 });
+        let preview = dragged.preview(false, |_| 0.0).unwrap();
+        assert!(
+            matches!(preview, Some(Command::Add { style, .. }) if style.shadow()),
+            "a bubble shows its shadow while dragged out, not {preview:?}"
+        );
         let mut new = TextOrigin::New {
             at,
             size: DEFAULT_TEXT_SIZE,

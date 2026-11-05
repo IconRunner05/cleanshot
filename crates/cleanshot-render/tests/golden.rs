@@ -8,8 +8,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Color, Command, Document, Fill, GlyphMask, HighlightStrength, History, Look, PointF, Property,
-    RectF, RedactMode, RedactStrength, RgbaImage, Shape, Style, TextBlock, TextMasks, Tool,
+    BorderWidth, Bubble, Color, Command, Document, Fill, GlyphMask, HighlightStrength, History,
+    Look, PointF, Property, RectF, RedactMode, RedactStrength, RgbaImage, Shape, Style, TextBlock,
+    TextMasks, Tool,
 };
 use cleanshot_render::Format;
 
@@ -144,6 +145,12 @@ const YELLOW: Color = Color {
     b: 0,
     a: 255,
 };
+const BLUE: Color = Color {
+    r: 0,
+    g: 122,
+    b: 255,
+    a: 255,
+};
 const TRANSLUCENT_BLACK: Color = Color {
     r: 0,
     g: 0,
@@ -159,6 +166,7 @@ fn scenes() -> Vec<(&'static str, Vec<Command>)> {
         ("redact", redact()),
         ("crop", crop()),
         ("shadows", shadows()),
+        ("borders", borders()),
     ]
 }
 
@@ -312,6 +320,7 @@ fn text_scenes() -> Vec<(&'static str, Vec<Step>)> {
         ("text", text()),
         ("text_redact_crop", text_redact_crop()),
         ("text_shadow", text_shadow()),
+        ("text_border", text_border()),
     ]
 }
 
@@ -443,4 +452,99 @@ fn text_shadow() -> Vec<Step> {
         shadowed(Shape::Text(block), WHITE, 1.0, Fill::Hollow),
         Some(vec![solid(10, 10, 30, 12, None), ramp(50, 30, 30, 16)]),
     )]
+}
+
+/// `shape` in `color`, `stroke_width` and `fill`, with a border of `border` and `width`
+/// where its tool gives one: only a look can (D-131).
+fn bordered(
+    shape: Shape,
+    (color, stroke_width, fill): (Color, f32, Fill),
+    border: Color,
+    width: BorderWidth,
+) -> Command {
+    let (shape, style) = Look::default_for(Tool::drawing(&shape))
+        .with(Property::Color(color))
+        .and_then(|look| look.with(Property::StrokeWidth(stroke_width)))
+        .and_then(|look| look.with(Property::Fill(fill)))
+        .and_then(|look| look.with(Property::Border(true)))
+        .and_then(|look| look.with(Property::BorderColor(border)))
+        .and_then(|look| look.with(Property::BorderWidth(width)))
+        .unwrap()
+        .dress(shape);
+    Command::Add { shape, style }
+}
+
+fn borders() -> Vec<Command> {
+    vec![
+        bordered(
+            Shape::Line {
+                from: point(8.0, 8.0),
+                to: point(40.0, 8.0),
+            },
+            (RED, 3.0, Fill::Hollow),
+            WHITE,
+            BorderWidth::Thin,
+        ),
+        bordered(
+            Shape::Arrow {
+                from: point(52.0, 24.0),
+                to: point(88.0, 8.0),
+            },
+            (RED, 3.0, Fill::Hollow),
+            WHITE,
+            BorderWidth::Medium,
+        ),
+        bordered(
+            Shape::Rect {
+                rect: rect(10.0, 22.0, 28.0, 18.0),
+                fill: Fill::Hollow,
+            },
+            (RED, 2.0, Fill::Hollow),
+            BLUE,
+            BorderWidth::Thick,
+        ),
+        bordered(
+            Shape::Ellipse {
+                rect: rect(52.0, 34.0, 32.0, 22.0),
+                fill: Fill::Solid,
+            },
+            (WHITE, 1.0, Fill::Solid),
+            RED,
+            BorderWidth::Thin,
+        ),
+        bordered(
+            Shape::Highlight {
+                rect: rect(8.0, 48.0, 32.0, 10.0),
+                strength: HighlightStrength::Strong,
+            },
+            (YELLOW, 1.0, Fill::Hollow),
+            BLUE,
+            BorderWidth::Thick,
+        ),
+    ]
+}
+
+fn text_border() -> Vec<Step> {
+    let block = TextBlock::new(point(0.0, 0.0), "synthetic".into(), 12.0, 1.0).unwrap();
+    let bubble_text = TextBlock::new(point(60.0, 40.0), "hi".into(), 10.0, 1.0).unwrap();
+    vec![
+        (
+            bordered(
+                Shape::Text(block),
+                (WHITE, 1.0, Fill::Hollow),
+                BLUE,
+                BorderWidth::Medium,
+            ),
+            Some(vec![solid(10, 10, 30, 12, None), ramp(44, 8, 30, 10)]),
+        ),
+        (
+            bordered(
+                Shape::Bubble(Bubble::new(bubble_text, point(46.0, 60.0))),
+                (BLUE, 1.0, Fill::Hollow),
+                WHITE,
+                BorderWidth::Medium,
+            ),
+            Some(vec![solid(62, 42, 10, 8, None)]),
+        ),
+    ]
 }

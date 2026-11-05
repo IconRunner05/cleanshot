@@ -9,6 +9,7 @@ use tiny_skia::{
     Pixmap, PremultipliedColorU8, Rect, Stroke, Transform,
 };
 
+use crate::border::draw_border;
 use crate::frame::framed;
 use crate::gamma::coverage_table;
 use crate::redact::redact;
@@ -221,12 +222,14 @@ impl Covered {
     }
 }
 
-/// Draws `entry` on `pixmap`, its text from `masks`, or without its text when there are none.
+/// Draws `entry` on `pixmap` over its border (D-131), its text from `masks`, or without its
+/// text when there are none.
 pub(crate) fn draw(
     pixmap: &mut Pixmap,
     entry: &ShapeEntry,
     masks: Option<&TextMasks>,
 ) -> Result<(), Error> {
+    draw_border(pixmap, entry, masks)?;
     let paint = paint(entry.style.color, BlendMode::SourceOver);
     let stroke = Stroke {
         width: entry.style.stroke_width,
@@ -302,7 +305,7 @@ pub(crate) fn draw(
 }
 
 /// `rect` with each corner a quarter circle of `radius`, drawn as cubic Beziers.
-fn rounded_rect(rect: RectF, radius: f32) -> Option<Path> {
+pub(crate) fn rounded_rect(rect: RectF, radius: f32) -> Option<Path> {
     // The control-point distance that makes a cubic Bezier follow a quarter circle.
     const KAPPA: f32 = 0.552_284_8;
     let radius = radius.min(rect.width / 2.0).min(rect.height / 2.0);
@@ -363,7 +366,7 @@ fn text(
 
 /// Paints `color` through one glyph layer's coverage, gamma corrected as GPUI draws it on
 /// screen, source over, clipped to the image.
-fn glyphs(pixmap: &mut Pixmap, mask: &GlyphMask, color: Color) {
+pub(crate) fn glyphs(pixmap: &mut Pixmap, mask: &GlyphMask, color: Color) {
     if mask.width() == 0 || mask.height() == 0 {
         return;
     }
@@ -440,7 +443,7 @@ fn fill(pixmap: &mut Pixmap, path: Option<Path>, paint: &Paint) {
     }
 }
 
-fn paint(color: Color, blend_mode: BlendMode) -> Paint<'static> {
+pub(crate) fn paint(color: Color, blend_mode: BlendMode) -> Paint<'static> {
     let mut paint = Paint {
         blend_mode,
         anti_alias: true,
@@ -451,7 +454,7 @@ fn paint(color: Color, blend_mode: BlendMode) -> Paint<'static> {
 }
 
 /// `None` for fewer than two points: a path with no length draws nothing.
-fn polyline(points: &[PointF]) -> Option<Path> {
+pub(crate) fn polyline(points: &[PointF]) -> Option<Path> {
     let (first, rest) = points.split_first()?;
     let mut builder = PathBuilder::new();
     builder.move_to(first.x, first.y);
@@ -462,7 +465,7 @@ fn polyline(points: &[PointF]) -> Option<Path> {
 }
 
 /// `None` for an empty or non-finite rectangle, which draws nothing.
-fn skia_rect(rect: RectF) -> Option<Rect> {
+pub(crate) fn skia_rect(rect: RectF) -> Option<Rect> {
     Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
 }
 

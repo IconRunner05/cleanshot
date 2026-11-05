@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+mod border;
 mod encode;
 mod flatten;
 mod frame;
@@ -14,6 +15,7 @@ mod thumbnail;
 
 use cleanshot_core::{ImageError, RectF, RgbaImage, ShapeId};
 
+pub use border::shape_border;
 pub use encode::{Format, encode};
 pub use flatten::{Flattened, flatten};
 pub use gamma::TEXT_GAMMA_RATIOS;
