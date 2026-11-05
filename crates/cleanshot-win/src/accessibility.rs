@@ -1,8 +1,10 @@
+use std::ffi::c_void;
+use std::num::NonZeroIsize;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
@@ -13,7 +15,9 @@ use windows::Win32::UI::Accessibility::{
     UIA_CheckBoxControlTypeId, UIA_GroupControlTypeId, UIA_ImageControlTypeId, UIA_InvokePatternId,
     UIA_RadioButtonControlTypeId, UIA_TogglePatternId, UIA_ToolBarControlTypeId,
 };
-use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+};
 use windows::core::BOOL;
 
 use crate::Error;
@@ -166,6 +170,25 @@ pub fn toggle_in_own_windows(name: &str) -> Result<bool, Error> {
                 .Toggle()
         }
     })
+}
+
+/// Asks `window` to close as its close button does, by posting it `WM_CLOSE`, and returns
+/// without waiting for it to close.
+///
+/// # Errors
+///
+/// [`Error::CloseNotPosted`] if Windows refuses the post, as for a window already gone.
+pub fn ask_to_close(window: NonZeroIsize) -> Result<(), Error> {
+    // SAFETY: WM_CLOSE carries no pointers; a handle to no window fails the post.
+    unsafe {
+        PostMessageW(
+            Some(HWND(window.get() as *mut c_void)),
+            WM_CLOSE,
+            WPARAM(0),
+            LPARAM(0),
+        )
+    }
+    .map_err(Error::CloseNotPosted)
 }
 
 fn act_on_own_control(

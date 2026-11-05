@@ -166,6 +166,9 @@ pub enum Error {
     #[cfg(feature = "ui-automation-test")]
     #[error("UI Automation could not read this process's windows")]
     Accessibility(#[source] windows::core::Error),
+    #[cfg(feature = "ui-automation-test")]
+    #[error("Windows would not ask the window to close")]
+    CloseNotPosted(#[source] windows::core::Error),
     #[error("the pointer is on no captured monitor")]
     NoMonitorAtPointer,
     #[error("no display output could be duplicated")]
