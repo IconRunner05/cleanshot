@@ -774,6 +774,21 @@ impl EditorWindow {
         self.win32
     }
 
+    /// Runs `on_closed` once the window is gone, whether the user or [`EditorWindow::close`]
+    /// closed it; at once if it is gone already. Called from inside this window's own update,
+    /// the window is busy and `on_closed` runs at once, so callers ask from outside it.
+    pub fn on_closed(&self, cx: &mut App, on_closed: impl FnOnce(&mut App) + 'static) {
+        let mut waiting = Some(on_closed);
+        let watched = self.window.update(cx, |_, _, cx| {
+            if let Some(on_closed) = waiting.take() {
+                cx.on_release(move |_, cx| on_closed(cx)).detach();
+            }
+        });
+        if let (Err(_), Some(on_closed)) = (watched, waiting) {
+            on_closed(cx);
+        }
+    }
+
     /// Closes the window. A window the user already closed is left as it is.
     pub fn close(self, cx: &mut App) {
         // Err only means the window is already gone, which is the state close asks for.

@@ -33,6 +33,10 @@ harness = false
 name = "settings_automation"
 harness = false
 
+[[test]]
+name = "closing"
+harness = false
+
 [dependencies]
 cleanshot-core.workspace = true
 cleanshot-render.workspace = true
