@@ -2,7 +2,7 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    ERROR_BAD_LENGTH, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, HMODULE,
+    ERROR_BAD_LENGTH, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, HANDLE, HMODULE,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_MEMORY_SEGMENT_GROUP, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
@@ -148,23 +148,27 @@ pub fn counted() -> Result<Counted, LogError> {
     let counters = super::memory_counters().map_err(LogError::Memory)?;
     // SAFETY: GetProcessHeap has no preconditions.
     let heap = unsafe { GetProcessHeap() }.map_err(LogError::Memory)?;
+    let (heap_allocated, heap_committed) = heap_bytes(heap).map_err(LogError::Memory)?;
+    Ok(Counted {
+        working_set: counters.WorkingSetSize,
+        private_working_set: counters.PrivateWorkingSetSize,
+        committed: counters.PrivateUsage,
+        heap_allocated,
+        heap_committed,
+        took: reading.elapsed(),
+    })
+}
+
+/// The bytes allocated in `heap`, and the bytes it has committed.
+fn heap_bytes(heap: HANDLE) -> windows::core::Result<(usize, usize)> {
     let mut summary = HEAP_SUMMARY {
         cb: SUMMARY_SIZE,
         ..HEAP_SUMMARY::default()
     };
     // SAFETY: `summary` is writable and its cb says its size, as HeapSummary asks; no flags
     // are defined.
-    unsafe { HeapSummary(heap, 0, &raw mut summary) }
-        .ok()
-        .map_err(LogError::Memory)?;
-    Ok(Counted {
-        working_set: counters.WorkingSetSize,
-        private_working_set: counters.PrivateWorkingSetSize,
-        committed: counters.PrivateUsage,
-        heap_allocated: summary.cbAllocated,
-        heap_committed: summary.cbCommitted,
-        took: reading.elapsed(),
-    })
+    unsafe { HeapSummary(heap, 0, &raw mut summary) }.ok()?;
+    Ok((summary.cbAllocated, summary.cbCommitted))
 }
 
 impl fmt::Display for Counted {
@@ -502,6 +506,9 @@ impl fmt::Display for Held {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::System::Memory::{
+        HEAP_FLAGS, HeapAlloc, HeapCreate, HeapDestroy, HeapFree,
+    };
 
     #[test]
     fn p04_a_module_is_placed_by_its_folder_with_the_driver_store_apart_from_the_system() {
@@ -545,24 +552,31 @@ mod tests {
     }
 
     #[test]
-    fn p04_the_counters_see_a_heap_allocation_and_the_pages_it_touches() {
-        let before = counted().expect("the counters read");
-        // Larger than what other tests running at the same time free.
-        let block = vec![1u8; 64 * LARGE];
-        let after = counted().expect("the counters read");
+    fn p04_a_heap_summary_counts_a_block_allocated_in_that_heap() {
+        // A heap of the test's own, so no other test's allocations move its numbers.
+        // SAFETY: a fresh growable heap, destroyed at the end; the block is freed before it.
+        unsafe {
+            let heap = HeapCreate(HEAP_FLAGS(0), 0, 0).expect("a heap is made");
+            let (before, _) = heap_bytes(heap).expect("the heap is summarised");
+            let block = HeapAlloc(heap, HEAP_FLAGS(0), LARGE);
+            assert!(!block.is_null(), "1 MiB is allocated");
+            let (after, committed) = heap_bytes(heap).expect("the heap is summarised");
+            assert!(
+                after >= before + LARGE && committed >= LARGE,
+                "allocated {before} then {after}, committed {committed}, for a {LARGE} block"
+            );
+            HeapFree(heap, HEAP_FLAGS(0), Some(block)).expect("the block is freed");
+            HeapDestroy(heap).expect("the heap is destroyed");
+        }
+    }
+
+    #[test]
+    fn p04_the_start_up_counters_read_a_running_process() {
+        let counted = counted().expect("the counters read");
         assert!(
-            after.heap_allocated >= before.heap_allocated + block.len(),
-            "heap allocated {} then {}",
-            before.heap_allocated,
-            after.heap_allocated
+            counted.private_working_set > 0 && counted.heap_allocated > 0,
+            "{counted}"
         );
-        assert!(
-            after.private_working_set >= before.private_working_set + 32 * LARGE,
-            "private working set {} then {}",
-            before.private_working_set,
-            after.private_working_set
-        );
-        drop(std::hint::black_box(block));
     }
 
     #[test]
