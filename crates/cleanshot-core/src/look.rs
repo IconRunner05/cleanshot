@@ -129,9 +129,9 @@ impl Look {
         self.highlight_strength
     }
 
-    /// `shape` drawn in this look: in its style, and with its fill, redaction, text size or
-    /// shadow where `shape` has one. New shapes and restyled ones both take their look through
-    /// here, and nothing else gives a shape a shadow (D-114).
+    /// `shape` drawn in this look: in its tool's style ([`Self::style_for`]), and with its fill,
+    /// redaction, highlight strength, text size or alignment where `shape` has one. New shapes
+    /// and restyled ones both take their look through here.
     #[must_use]
     pub fn dress(&self, shape: Shape) -> (Shape, Style) {
         let style = self.style_for(Tool::drawing(&shape));
@@ -167,7 +167,7 @@ impl Look {
     }
 
     /// The style `tool`'s shapes are drawn in: this look's, with its shadow (D-114) and border
-    /// (D-131) where they take them.
+    /// (D-131) where they take them. Nothing else gives a shape a shadow or a border.
     #[must_use]
     pub fn style_for(&self, tool: Tool) -> Style {
         let takes = takes_shadow_and_border(tool);
@@ -245,8 +245,8 @@ impl Look {
         }
     }
 
-    /// The look `entry` is drawn in: its own style, fill, redaction or text size, and the rest
-    /// from `rest`.
+    /// The look `entry` is drawn in: its own style, shadow, border, fill, redaction, highlight
+    /// strength, text size or alignment, and the rest from `rest`.
     pub(crate) fn of(entry: &ShapeEntry, rest: Self) -> Self {
         let look = Self {
             style: entry.style.with_shadow(false).with_border(None),
