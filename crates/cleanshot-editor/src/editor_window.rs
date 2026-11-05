@@ -9,8 +9,8 @@ use std::time::Instant;
 use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
     KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError, Restack,
-    RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextOrigin, Tool, action_for_key,
-    delivery_notice, save_as_notice, shape_at, text_reopened_at,
+    RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextMasks, TextOrigin, Tool,
+    action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
 };
 use gpui::{
     App, AppContext, Bounds, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
@@ -28,7 +28,7 @@ use crate::text_box::TextBox;
 use crate::theme::Theme;
 use crate::toolbar::{Replay, toolbar};
 use crate::tooltip::hover_time;
-use crate::{Error, Log, open_window};
+use crate::{Error, Log, MasksFor, open_window};
 use text_input::paint_text_box;
 
 type Deliver = Box<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
@@ -101,6 +101,7 @@ impl EditorView {
     fn new(
         document: Document,
         outputs: Option<Outputs>,
+        masks: MasksFor,
         log: Log,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -127,7 +128,7 @@ impl EditorView {
             text_box: None,
             menu: None,
             looks: Looks::default(),
-            previews: Rc::new(Previews::new(Rc::clone(&log))),
+            previews: Rc::new(Previews::new(masks, Rc::clone(&log))),
             log,
             shift: false,
             placement: None,
@@ -651,6 +652,7 @@ pub fn open(
     capture: RgbaImage,
     monitor: Option<Monitor>,
     outputs: Outputs,
+    masks: impl Fn(&Document) -> Option<TextMasks> + 'static,
     on_first_frame: impl FnOnce(Instant) + 'static,
     log: impl Fn(&'static str) + 'static,
 ) -> Result<EditorWindow, Error> {
@@ -660,6 +662,7 @@ pub fn open(
         document,
         monitor,
         Some(outputs),
+        Rc::new(masks),
         Rc::new(log),
         move |window, _| {
             window.on_next_frame(move |_, _| on_first_frame(Instant::now()));
@@ -674,6 +677,7 @@ pub(crate) fn open_with(
     document: Document,
     monitor: Option<Monitor>,
     outputs: Option<Outputs>,
+    masks: MasksFor,
     log: Log,
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
@@ -681,7 +685,7 @@ pub(crate) fn open_with(
     let options = window_options(cx, document.base(), monitor);
     let (window, win32) = open_window(cx, options, |window, cx| {
         on_open(window, cx);
-        cx.new(|cx| EditorView::new(document, outputs, log, window, cx))
+        cx.new(|cx| EditorView::new(document, outputs, masks, log, window, cx))
     })?;
     Ok(EditorWindow { window, win32 })
 }

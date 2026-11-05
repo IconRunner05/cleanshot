@@ -1,20 +1,21 @@
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
     Color, Document, Fill, HighlightStrength, Label, RectF, RedactMode, RedactStrength, RgbaImage,
-    Shape, ShapeEntry, ShapeId, Style,
+    Shape, ShapeEntry, ShapeId, Style, TextMasks,
 };
-use cleanshot_render::{Error, Patch, highlighted, redacted, shape_border, shape_shadow};
+use cleanshot_render::{Patch, highlighted, redacted, shape_border, shape_shadow};
 use gpui::{
     App, Bounds, BoxShadow, Corners, Pixels, RenderImage, Rgba, Window, fill, hsla, point, px,
 };
 
 use super::{Painting, Unpainted, render_image, rgba};
-use crate::Log;
 use crate::placement::Fit;
 use crate::text::paint_label;
+use crate::{Log, MasksFor};
 
 /// What the canvas shows as the export draws it, made once rather than every frame (D-58,
 /// D-114, D-125), and the log the canvas reports what it could not paint to (D-120).
@@ -28,11 +29,11 @@ pub(crate) struct Previews {
 }
 
 impl Previews {
-    pub(crate) fn new(log: Log) -> Self {
+    pub(crate) fn new(masks: MasksFor, log: Log) -> Self {
         Self {
             redactions: RedactionPreviews::new(Rc::clone(&log)),
             shadows: ShapePatches::new(PatchKind::Shadow, Rc::clone(&log)),
-            borders: ShapePatches::new(PatchKind::Border, Rc::clone(&log)),
+            borders: ShapePatches::new(PatchKind::Border(masks), Rc::clone(&log)),
             highlights: HighlightPreviews::new(Rc::clone(&log)),
             log,
         }
@@ -314,42 +315,33 @@ pub(super) struct ShapePatches {
 }
 
 /// Which of a shape's surroundings a [`ShapePatches`] shows.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) enum PatchKind {
     /// The shadows GPUI cannot draw as a box shadow.
     Shadow,
-    /// Every border but bare text's, which the canvas paints from its glyphs.
-    Border,
+    /// Every border, a text's grown from the glyph masks this gives.
+    Border(MasksFor),
 }
 
 impl PatchKind {
-    fn wanted(self, entry: &ShapeEntry) -> bool {
+    fn wanted(&self, entry: &ShapeEntry) -> bool {
         match self {
             Self::Shadow => entry.style.shadow() && box_shadow(&entry.shape).is_none(),
-            Self::Border => {
-                entry.style.border().is_some() && !matches!(entry.shape, Shape::Text(_))
-            }
+            Self::Border(_) => entry.style.border().is_some(),
         }
     }
 
-    fn patch(self, entry: &ShapeEntry, width: u32, height: u32) -> Result<Option<Patch>, Error> {
-        match self {
-            Self::Shadow => shape_shadow(entry, width, height),
-            Self::Border => shape_border(entry, width, height),
-        }
-    }
-
-    fn not_made(self) -> &'static str {
+    fn not_made(&self) -> &'static str {
         match self {
             Self::Shadow => "shadow_preview not_made",
-            Self::Border => "border_preview not_made",
+            Self::Border(_) => "border_preview not_made",
         }
     }
 
-    fn not_painted(self) -> &'static str {
+    fn not_painted(&self) -> &'static str {
         match self {
             Self::Shadow => "shadow_preview not_painted",
-            Self::Border => "border_preview not_painted",
+            Self::Border(_) => "border_preview not_painted",
         }
     }
 }
@@ -371,9 +363,10 @@ impl ShapePatches {
 
     /// Keeps a preview for each such shape in `document`, remaking it when the shape changed and
     /// dropping the ones no longer there. A shape being dragged is not in the document, so its
-    /// shadow or border shows again on release.
+    /// shadow or border shows again on release. Text masks are made at most once a call, and
+    /// only when a bordered text is remade.
     pub(crate) fn update(&mut self, document: &Document) {
-        let (width, height) = (document.base().width(), document.base().height());
+        let masks = OnceCell::new();
         let mut kept = HashMap::new();
         for entry in document.shapes() {
             if !self.kind.wanted(entry) {
@@ -383,7 +376,7 @@ impl ShapePatches {
                 Some(preview) if preview.of == *entry => preview,
                 Some(_) | None => PatchPreview {
                     of: entry.clone(),
-                    image: self.image(entry, width, height),
+                    image: self.image(entry, document, &masks),
                 },
             };
             kept.insert(entry.id, preview);
@@ -409,13 +402,31 @@ impl ShapePatches {
         }
     }
 
+    /// `entry`'s image, with `masks` made for `document` the first time a text needs them. A
+    /// text whose masks could not be made shows without its border; the maker logged why.
     fn image(
         &self,
         entry: &ShapeEntry,
-        width: u32,
-        height: u32,
+        document: &Document,
+        masks: &OnceCell<Option<TextMasks>>,
     ) -> Option<(RectF, Arc<RenderImage>)> {
-        match self.kind.patch(entry, width, height) {
+        let (width, height) = (document.base().width(), document.base().height());
+        let made = match &self.kind {
+            PatchKind::Shadow => shape_shadow(entry, width, height),
+            PatchKind::Border(masks_for) => {
+                let text_masks = if let Shape::Text(_) = entry.shape {
+                    let Some(text_masks) = masks.get_or_init(|| masks_for(document)) else {
+                        (self.log)("border_preview no_text_masks");
+                        return None;
+                    };
+                    Some(text_masks)
+                } else {
+                    None
+                };
+                shape_border(entry, width, height, text_masks)
+            }
+        };
+        match made {
             Ok(Some(patch)) => Some(placed(&patch)),
             Ok(None) => None,
             Err(_) => {
@@ -505,38 +516,21 @@ pub(super) fn paint_shadow(
     Ok(())
 }
 
-/// Paints `shape`'s border under it (D-131): bare text's as its glyphs drawn again at each step
-/// of the border's width, every other kind's as the export draws it.
+/// Paints `shape`'s border under it as the export draws it (D-131), in one image.
 pub(super) fn paint_border(
     id: Option<ShapeId>,
     shape: &Shape,
     style: Style,
     painting: &Painting,
     window: &mut Window,
-    cx: &mut App,
-) -> Result<(), Unpainted> {
-    let Some(border) = style.border() else {
-        return Ok(());
-    };
-    let fit = painting.fit;
-    if let Shape::Text(block) = shape {
-        for (across, down) in border.width.steps() {
-            let step = point(
-                px(f32::from(across) * fit.scale),
-                px(f32::from(down) * fit.scale),
-            );
-            let moved = Fit {
-                origin: fit.origin + step,
-                ..*fit
-            };
-            paint_label(&Label::Block(block), rgba(border.color), &moved, window, cx)?;
-        }
-        return Ok(());
+) {
+    if let Some(id) = id
+        && style.border().is_some()
+    {
+        painting
+            .borders
+            .paint(id, shape, style, painting.fit, window);
     }
-    if let Some(id) = id {
-        painting.borders.paint(id, shape, style, fit, window);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -670,8 +664,10 @@ mod tests {
     }
 
     #[test]
-    fn d131_a_border_image_is_made_for_a_bordered_arrow_or_solid_box_and_not_for_bare_text() {
-        use cleanshot_core::{Look, Property, TextBlock, Tool};
+    fn d131_a_border_image_is_made_once_per_shape_a_texts_from_its_masks_and_none_if_they_fail() {
+        use std::cell::{Cell, RefCell};
+
+        use cleanshot_core::{GlyphMask, Look, Property, TextBlock, Tool};
 
         let image = RgbaImage::new(64, 48, vec![200; 64 * 48 * 4]).unwrap();
         let bordered = |shape: Shape, fill| {
@@ -702,24 +698,42 @@ mod tests {
         history
             .apply(bordered(Shape::Text(text), Fill::Hollow))
             .unwrap();
-        let mut previews = ShapePatches::new(PatchKind::Border, Rc::new(|_| {}));
-        previews.update(history.document());
-        let ids: Vec<_> = history
-            .document()
-            .shapes()
-            .iter()
-            .map(|entry| entry.id)
-            .collect();
-        for id in &ids[..2] {
+        let document = history.document();
+        let ids: Vec<_> = document.shapes().iter().map(|entry| entry.id).collect();
+        let calls = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&calls);
+        let masks: MasksFor = Rc::new(move |document: &Document| {
+            counted.set(counted.get() + 1);
+            let mut masks = TextMasks::default();
+            for entry in document.shapes() {
+                if let Shape::Text(_) = entry.shape {
+                    let glyph = GlyphMask::new(4, 4, 6, 6, vec![255; 36], None).unwrap();
+                    masks.insert(entry.id, vec![glyph]);
+                }
+            }
+            Some(masks)
+        });
+        let mut previews = ShapePatches::new(PatchKind::Border(masks), Rc::new(|_| {}));
+        previews.update(document);
+        for id in &ids {
             assert!(
                 previews.previews[id].image.is_some(),
                 "a border image for {id:?}"
             );
         }
-        assert!(
-            !previews.previews.contains_key(&ids[2]),
-            "bare text's border is painted from its glyphs"
+        assert_eq!(calls.get(), 1, "the text's masks are made once");
+        previews.update(document);
+        assert_eq!(calls.get(), 1, "an unchanged text keeps its border image");
+        let logged = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&logged);
+        let mut failing = ShapePatches::new(
+            PatchKind::Border(Rc::new(|_| None)),
+            Rc::new(move |event| log.borrow_mut().push(event)),
         );
+        failing.update(document);
+        assert!(failing.previews[&ids[0]].image.is_some());
+        assert!(failing.previews[&ids[2]].image.is_none());
+        assert_eq!(*logged.borrow(), ["border_preview no_text_masks"]);
     }
 
     #[test]

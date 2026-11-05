@@ -36,6 +36,10 @@ pub use crate::tooltip::follow_hover_time;
 /// text, which can name a path or hold what the user typed (C-23).
 type Log = Rc<dyn Fn(&'static str)>;
 
+/// The glyph masks of every text in a document as the export draws them, or `None` when they
+/// could not be made, which the giver has logged (D-131).
+type MasksFor = Rc<dyn Fn(&cleanshot_core::Document) -> Option<cleanshot_core::TextMasks>>;
+
 /// Why the editor could not start, open a window or run the bench.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

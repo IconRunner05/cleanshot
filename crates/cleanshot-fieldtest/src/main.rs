@@ -121,7 +121,12 @@ fn main() {
     let finished = Rc::new(RefCell::new(None));
     let result = Rc::clone(&finished);
     let started = cleanshot_editor::run(move |cx| {
-        bench(cx, BENCH_REDRAWS, move |cx, report| {
+        let masks = |document: &_| {
+            cleanshot_win::text::masks(document)
+                .inspect_err(|error| eprintln!("text_masks not_made: {error}"))
+                .ok()
+        };
+        bench(cx, BENCH_REDRAWS, masks, move |cx, report| {
             *result.borrow_mut() = Some(report);
             cx.quit();
         });

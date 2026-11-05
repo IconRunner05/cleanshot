@@ -400,17 +400,6 @@ impl BorderWidth {
             Self::Thick => 6,
         }
     }
-
-    /// The whole-pixel steps, none further than this width, at which text is drawn again to
-    /// grow its glyphs into their border (D-131).
-    pub fn steps(self) -> impl Iterator<Item = (i8, i8)> {
-        let reach = self.pixels().cast_signed();
-        (-reach..=reach)
-            .flat_map(move |down| (-reach..=reach).map(move |across| (across, down)))
-            .filter(move |&(across, down)| {
-                i16::from(across).pow(2) + i16::from(down).pow(2) <= i16::from(reach).pow(2)
-            })
-    }
 }
 
 // D-114: a shape's shadow is smaller than the image frame's (D-80).

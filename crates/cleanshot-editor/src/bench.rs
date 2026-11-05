@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use cleanshot_core::{
     BorderWidth, Color, Command, Document, Fill, HighlightStrength, History, Look, PointF,
-    Property, RectF, RedactMode, RedactStrength, RgbaImage, Shape, Style, TextBlock, Tool,
+    Property, RectF, RedactMode, RedactStrength, RgbaImage, Shape, Style, TextBlock, TextMasks,
+    Tool,
 };
 use gpui::{App, Pixels, Point, Window, point, px};
 
@@ -43,14 +44,16 @@ pub struct BenchReport {
 
 type OnDone = Box<dyn FnOnce(&mut App, Result<BenchReport, Error>)>;
 
-/// Opens the editor on a synthetic 4K image with 200 shapes, forces `redraws` redraws while
-/// panning and zooming as F-39 does, then drags a redaction for a third as many frames, closes
-/// the window and passes the timings to `on_done`, which is called exactly once.
+/// Opens the editor on a synthetic 4K image with 200 shapes, its texts' glyph masks made by
+/// `masks` as the editor's are, forces `redraws` redraws while panning and zooming as F-39
+/// does, then drags a redaction for a third as many frames, closes the window and passes the
+/// timings to `on_done`, which is called exactly once.
 ///
 /// The window ignores close requests until the run ends.
 pub fn bench(
     cx: &mut App,
     redraws: NonZeroU32,
+    masks: impl Fn(&Document) -> Option<TextMasks> + 'static,
     on_done: impl FnOnce(&mut App, Result<BenchReport, Error>) + 'static,
 ) {
     let document = match synthetic_document() {
@@ -62,27 +65,35 @@ pub fn bench(
     let start = Instant::now();
     // The bench runs from cleanshot-fieldtest, a console tool whose stderr is read.
     let log = Rc::new(|event| eprintln!("{event}"));
-    let opened = open_with(cx, document, None, None, log, |window, cx| {
-        let Some(on_done) = on_done.take() else {
-            return;
-        };
-        window.on_window_should_close(cx, |_, _| false);
-        window.on_next_frame(move |window, cx| {
-            let now = Instant::now();
-            let canvas = window.viewport_size();
-            Run {
-                fitted: Placement::fitted(canvas, kept, window.scale_factor()),
-                centre: point(canvas.width / 2.0, canvas.height / 2.0),
-                first_frame: now - start,
-                last_frame: now,
-                intervals: Vec::with_capacity(redraws.get() as usize),
-                drag_intervals: Vec::new(),
-                redraws,
-                on_done,
-            }
-            .continue_after(window, cx);
-        });
-    });
+    let opened = open_with(
+        cx,
+        document,
+        None,
+        None,
+        Rc::new(masks),
+        log,
+        |window, cx| {
+            let Some(on_done) = on_done.take() else {
+                return;
+            };
+            window.on_window_should_close(cx, |_, _| false);
+            window.on_next_frame(move |window, cx| {
+                let now = Instant::now();
+                let canvas = window.viewport_size();
+                Run {
+                    fitted: Placement::fitted(canvas, kept, window.scale_factor()),
+                    centre: point(canvas.width / 2.0, canvas.height / 2.0),
+                    first_frame: now - start,
+                    last_frame: now,
+                    intervals: Vec::with_capacity(redraws.get() as usize),
+                    drag_intervals: Vec::new(),
+                    redraws,
+                    on_done,
+                }
+                .continue_after(window, cx);
+            });
+        },
+    );
     if let Err(error) = opened
         && let Some(on_done) = on_done.take()
     {

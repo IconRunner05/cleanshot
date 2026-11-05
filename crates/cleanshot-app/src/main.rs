@@ -593,6 +593,14 @@ fn open_editor(
             editor_save_as_start(session),
             editor_save_to(session),
         ),
+        {
+            let logging = Rc::clone(session);
+            move |document: &Document| {
+                cleanshot_win::text::masks(document)
+                    .inspect_err(|error| logging.log_failure("editor", "text_masks_failed", error))
+                    .ok()
+            }
+        },
         editor_first_frame(session),
         {
             let logging = Rc::clone(session);

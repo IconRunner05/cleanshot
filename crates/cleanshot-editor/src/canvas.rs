@@ -182,12 +182,9 @@ pub(crate) fn document_canvas(
                         number,
                     };
                     let shadow = paint_shadow(id, shape, *style, &painting, window, cx);
-                    let border = paint_border(id, shape, *style, &painting, window, cx);
+                    paint_border(id, shape, *style, &painting, window);
                     let painted = paint_shape(shape, *style, &painting, window, cx);
-                    for unpainted in [shadow, border, painted]
-                        .into_iter()
-                        .filter_map(Result::err)
-                    {
+                    for unpainted in [shadow, painted].into_iter().filter_map(Result::err) {
                         (previews.log)(unpainted.event());
                     }
                     if id.is_some() && overlay.selected == id {

@@ -84,6 +84,7 @@ fn main() {
                 || Ok((PathBuf::new(), String::new())),
                 |_, _| Err(DeliveryError::ClipboardBusy),
             ),
+            |_| None,
             move |at| {
                 // Each walk waits for the first frame on the same channel.
                 for _ in WALKS {
