@@ -26,7 +26,7 @@ pub fn shape_border(entry: &ShapeEntry, width: u32, height: u32) -> Result<Optio
 /// Draws `entry`'s border, if it has one, where the shape is about to be drawn over it
 /// (D-131): a stroke is drawn again wider, an outline round a filled shape is a stroke along
 /// its edge that the fill then covers on the inside, and text is its glyphs grown by the
-/// border's width. Highlights, redactions and spotlights draw none.
+/// border's width. Pen strokes, highlights, redactions and spotlights draw none.
 ///
 /// # Errors
 ///
@@ -61,7 +61,6 @@ pub(crate) fn draw_border(
             let head = arrow_head(*from, *to, entry.style.stroke_width);
             stroke_path(polyline(&head), casing);
         }
-        Shape::Pen(points) => stroke_path(polyline(points), casing),
         Shape::Rect { rect, fill } => {
             let width = match fill {
                 Fill::Hollow => casing,
@@ -100,7 +99,7 @@ pub(crate) fn draw_border(
                 glyphs(pixmap, &grown(layer, border.width), border.color);
             }
         }
-        Shape::Highlight { .. } | Shape::Redact { .. } | Shape::Spotlight(_) => {}
+        Shape::Pen(_) | Shape::Highlight { .. } | Shape::Redact { .. } | Shape::Spotlight(_) => {}
     }
     Ok(())
 }
