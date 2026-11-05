@@ -223,6 +223,12 @@ fn started(
         })
         .detach();
     }
+    if session.log.borrow().is_some() {
+        let sampling = Rc::clone(&session);
+        cleanshot_editor::on_graphics_released(cx, move |cx| {
+            Rc::clone(&sampling).sample_graphics_released(cx);
+        });
+    }
     cx.on_app_quit(move |_| {
         match session.tray.borrow().remove_icon() {
             Ok(()) => session.log_line("tray", |_| "icon_removed".to_owned()),
@@ -448,6 +454,17 @@ impl Session {
                 }
             }),
         );
+    }
+
+    /// D-140: accounts for memory as GPUI gives its graphics device back, and again
+    /// [`RENDERER_FREED`] later, once the closed window's renderer has been freed.
+    fn sample_graphics_released(self: Rc<Self>, cx: &mut cleanshot_editor::App) {
+        self.log_memory("graphics_released");
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(RENDERER_FREED).await;
+            self.log_memory("graphics_released_6s");
+        })
+        .detach();
     }
 
     /// Under --log, logs the private working set past [`GRAPHICS_IDLE`] and
@@ -766,6 +783,8 @@ const AFTER_USE_SAMPLE: Duration = Duration::from_secs(10);
 /// P-01 against P-04: captures this close together share one Direct2D device; after a
 /// longer pause it is let go, before [`AFTER_USE_SAMPLE`] measures what stays.
 const GRAPHICS_IDLE: Duration = Duration::from_secs(5);
+/// How long after GPUI gives its device back the closed window's renderer is gone too (D-140).
+const RENDERER_FREED: Duration = Duration::from_secs(6);
 
 fn open_log() -> Result<Log, String> {
     let settings = settings_path().map_err(|error| error.to_string())?;
