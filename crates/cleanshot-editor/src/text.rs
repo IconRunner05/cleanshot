@@ -84,8 +84,8 @@ pub(crate) fn line_width(line: &str, window: &Window) -> f32 {
 ///
 /// # Errors
 ///
-/// [`Error::FontLoad`] if Inter cannot be registered, [`Error::WindowOpen`] if the window does
-/// not open.
+/// [`Error::FontLoad`] if Inter cannot be registered, [`Error::GraphicsStart`] or
+/// [`Error::WindowOpen`] if the window does not open.
 #[cfg(feature = "drift-test")]
 pub fn em_widths(texts: &[&str], cx: &mut App) -> Result<Vec<f32>, Error> {
     use gpui::{AppContext as _, EmptyView, WindowOptions};
@@ -97,19 +97,17 @@ pub fn em_widths(texts: &[&str], cx: &mut App) -> Result<Vec<f32>, Error> {
         ..WindowOptions::default()
     };
     let mut widths = Vec::new();
-    let window = cx
-        .open_window(options, |window, cx| {
-            widths = texts
-                .iter()
-                .map(|text| {
-                    text.split('\n')
-                        .map(|line| line_width(line, window))
-                        .fold(0.0, f32::max)
-                })
-                .collect();
-            cx.new(|_| EmptyView)
-        })
-        .map_err(|error| Error::WindowOpen(error.into()))?;
+    let (window, _) = crate::open_window(cx, options, |window, cx| {
+        widths = texts
+            .iter()
+            .map(|text| {
+                text.split('\n')
+                    .map(|line| line_width(line, window))
+                    .fold(0.0, f32::max)
+            })
+            .collect();
+        cx.new(|_| EmptyView)
+    })?;
     // Err only means the window is already gone, which is the state this leaves it in.
     let _ = window.update(cx, |_, window, _| window.remove_window());
     Ok(widths)

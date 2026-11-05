@@ -437,8 +437,9 @@ fn report_bench(report: &mut String, timings: BenchReport) {
     let refresh = refresh.map_or_else(String::new, |hertz| format!(" refresh_hz={hertz}"));
     writeln!(
         report,
-        "- perf P-07 first_frame_us={} text_masks_us={} previews_us={}\n- perf P-08 p95_us={}{refresh}",
+        "- perf P-07 first_frame_us={} graphics_us={} text_masks_us={} previews_us={}\n- perf P-08 p95_us={}{refresh}",
         timings.first_frame.as_micros(),
+        timings.graphics.as_micros(),
         timings.text_masks.as_micros(),
         timings.previews.as_micros(),
         timings.p95.as_micros()

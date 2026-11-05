@@ -14,7 +14,7 @@ use gpui::{App, Pixels, Point, Window, point, px};
 use crate::canvas::Previews;
 use crate::editor_window::{drag_redaction, open_with, show_at};
 use crate::placement::Placement;
-use crate::{Error, Log, MasksFor};
+use crate::{Error, Log, MasksFor, hold_graphics};
 
 const WIDTH: u32 = 3840;
 const HEIGHT: u32 = 2160;
@@ -42,6 +42,9 @@ pub struct BenchReport {
     pub redaction_drag_p50: Duration,
     /// F-36, D-58: 95th-percentile interval of the same drag.
     pub redaction_drag_p95: Duration,
+    /// Part of P-07: GPUI taking its graphics device for the bench's window, none being open
+    /// before it (D-138).
+    pub graphics: Duration,
     /// Part of P-07: the first call to the mask maker, made before the first frame.
     pub text_masks: Duration,
     /// Making every preview image for the bench's document again, with its masks in hand,
@@ -87,6 +90,13 @@ pub fn bench(
         made
     });
     let start = Instant::now();
+    if let Err(error) = hold_graphics(cx) {
+        if let Some(on_done) = on_done.take() {
+            on_done(cx, Err(error));
+        }
+        return;
+    }
+    let graphics = start.elapsed();
     // The bench runs from cleanshot-fieldtest, a console tool whose stderr is read.
     let log: Log = Rc::new(|event| eprintln!("{event}"));
     let replay_log = Rc::clone(&log);
@@ -109,6 +119,7 @@ pub fn bench(
                 fitted: Placement::fitted(canvas, kept, window.scale_factor()),
                 centre: point(canvas.width / 2.0, canvas.height / 2.0),
                 first_frame: now - start,
+                graphics,
                 text_masks,
                 previews,
                 last_frame: Instant::now(),
@@ -131,6 +142,7 @@ struct Run {
     fitted: Placement,
     centre: Point<Pixels>,
     first_frame: Duration,
+    graphics: Duration,
     text_masks: Duration,
     previews: Duration,
     last_frame: Instant,
@@ -194,6 +206,7 @@ impl Run {
             worst: nearest_rank(&self.intervals, 100),
             redaction_drag_p50: nearest_rank(&self.drag_intervals, 50),
             redaction_drag_p95: nearest_rank(&self.drag_intervals, 95),
+            graphics: self.graphics,
             text_masks: self.text_masks,
             previews: self.previews,
         }

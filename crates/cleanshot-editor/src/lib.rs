@@ -18,8 +18,12 @@ use std::num::NonZeroIsize;
 use std::rc::Rc;
 
 use cleanshot_core::{CommandError, ImageError};
+use futures::FutureExt;
 pub use gpui::{App, AsyncApp, Keystroke};
-use gpui::{Application, Entity, QuitMode, Render, Window, WindowHandle, WindowOptions};
+use gpui::{
+    Application, Entity, GraphicalEnvironment, QuitMode, Render, Task, Window, WindowHandle,
+    WindowOptions, WindowingRequest,
+};
 use gpui_windows::WindowsPlatform;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -49,6 +53,8 @@ pub enum Error {
     FontLoad(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the editor window did not open")]
     WindowOpen(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("the graphics device for a window did not start")]
+    GraphicsStart(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the bench image could not be built")]
     SyntheticImage(#[source] ImageError),
     #[error("the bench shapes could not be added")]
@@ -59,6 +65,7 @@ pub enum Error {
 
 /// Runs the GPUI event loop on this thread until something calls `quit`, calling `on_launch`
 /// once it is ready. Closing the last window does not quit: the tray outlives every window.
+/// GPUI holds a graphics device only while a window is open (D-138).
 ///
 /// # Errors
 ///
@@ -69,18 +76,64 @@ pub fn run(on_launch: impl FnOnce(&mut App) + 'static) -> Result<(), Error> {
     Application::with_platform(Rc::new(RestrictedPlatform(platform)))
         .with_assets(Icons)
         .with_quit_mode(QuitMode::Explicit)
-        .run(on_launch);
+        .with_windowing(WindowingRequest::Headless)
+        .run(|cx| {
+            cx.on_window_closed(|cx, _| release_graphics_when_unused(cx))
+                .detach();
+            on_launch(cx);
+        });
     Ok(())
 }
 
+/// D-138: with no window left open, GPUI gives back its graphics device, swap chains and glyph
+/// caches, which on an integrated GPU are the process's own memory.
+fn release_graphics_when_unused(cx: &mut App) {
+    if !cx.windows().is_empty() || cx.graphical_environment().is_none() {
+        return;
+    }
+    switched(cx.request_windowing(WindowingRequest::Headless))
+        .expect("a windowed platform with no window open can go headless");
+}
+
+/// What a windowing switch came to; the Windows platform switches before it returns the task.
+fn switched(switch: Task<gpui::Result<()>>) -> gpui::Result<()> {
+    switch
+        .now_or_never()
+        .expect("the Windows platform switches windowing modes at once")
+}
+
+/// D-138: GPUI takes a graphics device if it holds none.
+///
+/// # Errors
+///
+/// [`Error::GraphicsStart`] if no graphics device can be made.
+fn hold_graphics(cx: &mut App) -> Result<(), Error> {
+    if cx.graphical_environment().is_some() {
+        return Ok(());
+    }
+    let windowed = WindowingRequest::Windowed(GraphicalEnvironment::detect());
+    switched(cx.request_windowing(windowed)).map_err(|error| Error::GraphicsStart(error.into()))
+}
+
 /// Opens a window with `options` on the view `build` makes, with its Win32 handle for the app to
-/// bring it to the front once shown (D-124).
+/// bring it to the front once shown (D-124). GPUI takes a graphics device first if it holds none
+/// (D-138).
+///
+/// # Errors
+///
+/// [`Error::GraphicsStart`] if no graphics device can be made; [`Error::WindowOpen`] if the
+/// platform cannot create the window.
 fn open_window<V: Render>(
     cx: &mut App,
     options: WindowOptions,
     build: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
 ) -> Result<(WindowHandle<V>, NonZeroIsize), Error> {
+    hold_graphics(cx)?;
     let mut win32 = None;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one door: the device is held above (D-138)"
+    )]
     let window = cx
         .open_window(options, |window, cx| {
             win32 = Some(win32_handle(window));

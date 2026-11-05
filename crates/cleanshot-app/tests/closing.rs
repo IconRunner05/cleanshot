@@ -1,28 +1,37 @@
 //! Closing Cleanshot's GPUI windows. Ctrl+W closes the editor and the settings window as
 //! their caption's close button does (D-136). An editor tells its opener exactly once that its
 //! window is gone, whether the app closed it with `EditorWindow::close` or the window closed
-//! itself, and at once when asked after the window is gone. Runs real windows, so only on
-//! Windows; the test ends the process.
+//! itself, and at once when asked after the window is gone. GPUI holds no graphics device
+//! before the first window opens or once the last one closes, and takes one again for the next
+//! (D-138). Runs real windows, so only on Windows; the test ends the process.
 
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::process::exit;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cleanshot_core::{Applied, DeliveryError, Policy, RgbaImage, Settings};
 use cleanshot_editor::{App, EditorWindow, Keystroke, Outputs};
 
 const CTRL_W: &str = "d136_ctrl_w_closes_the_editor_and_settings_as_their_close_button_does";
 const ON_CLOSED: &str = "an_editor_tells_its_opener_once_when_its_window_is_gone";
+const GRAPHICS: &str =
+    "d138_gpui_holds_a_graphics_device_only_while_a_window_is_open_and_a_reopened_editor_draws";
 /// Long enough for the windows to open, draw and, once closed, be released.
 const SETTLE: Duration = Duration::from_secs(2);
 
 fn main() {
     let ran = cleanshot_editor::run(|cx| {
+        if cx.graphical_environment().is_some() {
+            finish(
+                GRAPHICS,
+                Err("a graphics device before any window opened".into()),
+            );
+        }
         let closings = Rc::new(Cell::new(0_u32));
-        let by_the_app = open_editor(cx, &closings);
-        let by_ctrl_w = open_editor(cx, &closings);
+        let by_the_app = open_editor(cx, &closings, |_| {});
+        let by_ctrl_w = open_editor(cx, &closings, |_| {});
         if let Err(error) = open_settings(cx) {
             finish(
                 CTRL_W,
@@ -65,16 +74,42 @@ fn main() {
             }
             let late = Rc::clone(&closings);
             cx.update(|cx| by_ctrl_w.on_closed(cx, move |_| late.set(late.get() + 1)));
-            match closings.get() {
-                3 => finish(ON_CLOSED, Ok(())),
-                told => finish(
+            if closings.get() != 3 {
+                let told = closings.get() - 2;
+                finish(
                     ON_CLOSED,
                     Err(format!(
-                        "asked after its window was gone, told {} times",
-                        told - 2
+                        "asked after its window was gone, told {told} times"
                     )),
-                ),
+                );
             }
+            println!("{ON_CLOSED} ... ok");
+            if cx.update(|cx| cx.graphical_environment().is_some()) {
+                finish(
+                    GRAPHICS,
+                    Err("the graphics device outlived the last window".into()),
+                );
+            }
+            let drawn = Rc::new(Cell::new(false));
+            let first_frame = Rc::clone(&drawn);
+            let reopened =
+                cx.update(|cx| open_editor(cx, &closings, move |_| first_frame.set(true)));
+            cx.background_executor().timer(SETTLE).await;
+            if !drawn.get() {
+                finish(
+                    GRAPHICS,
+                    Err("the reopened editor drew no first frame".into()),
+                );
+            }
+            cx.update(|cx| reopened.close(cx));
+            cx.background_executor().timer(SETTLE).await;
+            if cx.update(|cx| cx.graphical_environment().is_some()) {
+                finish(
+                    GRAPHICS,
+                    Err("the graphics device outlived the reopened editor".into()),
+                );
+            }
+            finish(GRAPHICS, Ok(()))
         })
         .detach();
     });
@@ -84,7 +119,11 @@ fn main() {
     );
 }
 
-fn open_editor(cx: &mut App, closings: &Rc<Cell<u32>>) -> EditorWindow {
+fn open_editor(
+    cx: &mut App,
+    closings: &Rc<Cell<u32>>,
+    on_first_frame: impl FnOnce(Instant) + 'static,
+) -> EditorWindow {
     let closings = Rc::clone(closings);
     let opened = cleanshot_editor::open(
         cx,
@@ -96,7 +135,7 @@ fn open_editor(cx: &mut App, closings: &Rc<Cell<u32>>) -> EditorWindow {
             |_, _| Err(DeliveryError::ClipboardBusy),
         ),
         |_| None,
-        |_| {},
+        on_first_frame,
         |_| {},
     );
     let editor = opened.unwrap_or_else(|error| {
