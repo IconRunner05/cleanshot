@@ -193,8 +193,6 @@ fn judge(inputs: &[String]) -> i32 {
     i32::from(!verdicts.iter().all(|verdict| verdict.met))
 }
 
-/// The text at `path`, or no text when it cannot be read: each budget it holds then fails as
-/// missing, and the reason is printed.
 /// F-50: exits the running Cleanshot from its tray and checks its log says the shell removed
 /// its icon. Returns the exit code: 0 when it did, 1 otherwise.
 fn exit_from_tray(log: &Path) -> i32 {
@@ -264,6 +262,8 @@ fn start_split() -> i32 {
     i32::from(failed > 0)
 }
 
+/// The text at `path`, or no text when it cannot be read: each budget it holds then fails as
+/// missing, and the reason is printed.
 fn log_text(path: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|error| {
         eprintln!("{path}: {error}");

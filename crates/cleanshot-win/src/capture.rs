@@ -367,8 +367,6 @@ mod tests {
         );
     }
 
-    /// A 3840x2160 monitor at 200% left of a 1920x1080 one at 100%, as a per-monitor-aware
-    /// process sees them: both in physical pixels, so neither side is scaled to the other.
     #[test]
     fn f01_a_region_across_a_monitor_above_the_primary_takes_each_side_from_its_own_monitor() {
         let captures = [
@@ -387,6 +385,8 @@ mod tests {
         );
     }
 
+    /// A 3840x2160 monitor at 200% left of a 1920x1080 one at 100%, as a per-monitor-aware
+    /// process sees them: both in physical pixels, so neither side is scaled to the other.
     #[test]
     fn d71_a_region_across_a_200_percent_monitor_and_a_100_percent_one_keeps_physical_pixels() {
         let shade =
