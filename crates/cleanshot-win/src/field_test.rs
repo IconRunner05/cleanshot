@@ -332,7 +332,6 @@ pub fn capture_device_costs() -> windows::core::Result<Vec<DeviceCost>> {
     Ok(costs)
 }
 
-/// This process's working set and private working set, in bytes.
 /// One part of [`Overlay::prewarm`], or the release of its Direct2D factory after it.
 #[derive(Debug)]
 pub struct PrewarmPart {
@@ -382,6 +381,7 @@ pub fn prewarm_costs() -> Result<Vec<PrewarmPart>, PrewarmCostError> {
         .collect()
 }
 
+/// This process's working set and private working set, in bytes.
 fn held_bytes() -> windows::core::Result<(isize, isize)> {
     let counters = crate::log::memory_counters()?;
     let signed = |bytes: usize| isize::try_from(bytes).expect("a working set fits in isize");

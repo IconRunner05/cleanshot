@@ -563,7 +563,6 @@ fn report_tray(report: &mut String) {
     }
 }
 
-/// P-01, P-03, P-04: what a capture device made at start-up would cost.
 fn report_prewarm(report: &mut String) {
     match prewarm_costs() {
         Ok(parts) => {
@@ -579,6 +578,7 @@ fn report_prewarm(report: &mut String) {
     }
 }
 
+/// P-01, P-03, P-04: what a capture device made at start-up would cost.
 fn report_device_costs(report: &mut String) {
     match capture_device_costs() {
         Ok(costs) => {
