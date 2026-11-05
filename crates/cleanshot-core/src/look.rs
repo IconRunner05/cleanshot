@@ -118,9 +118,7 @@ impl Look {
     /// here, and nothing else gives a shape a shadow (D-114).
     #[must_use]
     pub fn dress(&self, shape: Shape) -> (Shape, Style) {
-        let style = self
-            .style
-            .with_shadow(self.shadow && casts_shadow(Tool::drawing(&shape)));
+        let style = self.style_for(Tool::drawing(&shape));
         let shape = match shape {
             Shape::Rect { rect, .. } => Shape::Rect {
                 rect,
@@ -150,6 +148,13 @@ impl Look {
             | Shape::Spotlight(_)) => shape,
         };
         (shape, style)
+    }
+
+    /// The style `tool`'s shapes are drawn in: this look's, with its shadow where they cast
+    /// one (D-114).
+    #[must_use]
+    pub fn style_for(&self, tool: Tool) -> Style {
+        self.style.with_shadow(self.shadow && casts_shadow(tool))
     }
 
     fn dress_text(&self, block: &TextBlock) -> TextBlock {
@@ -405,7 +410,8 @@ impl Looks {
             } => {
                 self.set(property, frame.tool(), None)?;
                 let look = self.look(frame.tool());
-                (*size, *style, *alignment) = (look.text_size, look.style, look.alignment);
+                (*size, *style, *alignment) =
+                    (look.text_size, look.style_for(frame.tool()), look.alignment);
                 Ok(None)
             }
             TextOrigin::Existing {
@@ -417,7 +423,7 @@ impl Looks {
                 let entry = text_entry(*id, block, *style, *frame);
                 let restyled = self.set(property, frame.tool(), Some(&entry))?;
                 let look = Look::of(&entry, self.look(frame.tool())).with(property)?;
-                (*block, *style) = (look.dress_text(block), look.style);
+                (*block, *style) = (look.dress_text(block), look.style_for(frame.tool()));
                 Ok(restyled)
             }
         }
@@ -716,6 +722,42 @@ mod tests {
             panic!("a new text box");
         };
         assert_eq!((size, style.color), (36.0, BLUE));
+    }
+
+    #[test]
+    fn d114_a_new_text_or_bubble_casts_the_shadow_its_tool_is_set_to() {
+        let mut looks = Looks::default();
+        let image = RgbaImage::new(8, 8, vec![0; 8 * 8 * 4]).unwrap();
+        let document = Document::new(Arc::new(image));
+        let at = PointF { x: 2.0, y: 2.0 };
+        for tool in [Tool::Text, Tool::Bubble] {
+            looks.set(Property::Shadow(true), tool, None).unwrap();
+            let pressed = Drag::press(&document, tool, looks.look(tool), None, at, 4.0);
+            let origin = match pressed.start {
+                Some(Start::Type(origin)) => Some(origin),
+                Some(Start::Drag(drag)) => drag.typed_on_release(tool),
+                None => None,
+            };
+            let Some(TextOrigin::New { style, .. }) = origin else {
+                panic!("{tool:?} opens a new box, not {origin:?}");
+            };
+            assert!(style.shadow(), "{tool:?}");
+        }
+        let mut new = TextOrigin::New {
+            at,
+            size: DEFAULT_TEXT_SIZE,
+            style: Look::default_for(Tool::Text).style(),
+            frame: TextFrame::Plain,
+            box_size: None,
+            alignment: Alignment::default(),
+        };
+        looks
+            .restyle_text(Property::Shadow(false), &mut new)
+            .unwrap();
+        looks
+            .restyle_text(Property::Shadow(true), &mut new)
+            .unwrap();
+        assert!(matches!(new, TextOrigin::New { style, .. } if style.shadow()));
     }
 
     #[test]

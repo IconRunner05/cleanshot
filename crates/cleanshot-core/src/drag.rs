@@ -352,7 +352,7 @@ fn text_origin(hit: Option<&ShapeEntry>, at: PointF, look: Look) -> TextOrigin {
     hit.and_then(existing_text).unwrap_or(TextOrigin::New {
         at,
         size: look.text_size(),
-        style: look.style(),
+        style: look.style_for(Tool::Text),
         frame: TextFrame::Plain,
         box_size: None,
         alignment: look.alignment(),
@@ -378,7 +378,7 @@ fn new_bubble(path: &[PointF], look: &Look) -> Option<TextOrigin> {
     Some(TextOrigin::New {
         at,
         size,
-        style: look.style(),
+        style: look.style_for(Tool::Bubble),
         frame: TextFrame::Bubble {
             tail: Bubble::first_tail(at, size),
         },
