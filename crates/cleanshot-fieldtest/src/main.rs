@@ -336,7 +336,8 @@ fn edit_after_start(log: &Path) -> Result<(), String> {
     std::thread::sleep(AFTER_IDLE_EXTRA);
     let shown = || perf_lines(log, "P-01", "overlay_visible_ms") >= 2;
     open_and_cancel_full_screen(OVERLAY_TIMEOUT, shown).map_err(|error| error.to_string())?;
-    let text = std::fs::read_to_string(log).expect("cleanshot.exe was started with --log here");
+    let text =
+        std::fs::read_to_string(log).map_err(|error| format!("{}: {error}", log.display()))?;
     let Some(after_idle) = budgets::perf_values(&text, "P-01", "overlay_visible_ms")
         .get(1)
         .copied()

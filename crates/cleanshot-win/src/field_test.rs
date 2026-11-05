@@ -529,7 +529,7 @@ fn open_and_cancel(
     timeout: Duration,
     shown: impl FnMut() -> bool,
 ) -> Result<(), OverlayRunError> {
-    if press(keys) != 6 {
+    if Ok(press(keys)) != u32::try_from(2 * keys.len()) {
         return Err(OverlayRunError::KeysRefused(number));
     }
     if !within(timeout, shown) {
