@@ -320,7 +320,11 @@ pub(super) fn open_window(
 
 /// Pays Direct2D's and DirectWrite's one-time start-up on this thread, on a window that is
 /// never shown, so the first overlay does not.
-pub(super) fn prewarm(factory: &ID2D1Factory, palette: &Palette) -> windows::core::Result<()> {
+pub(super) fn prewarm(
+    factory: &ID2D1Factory,
+    palette: &Palette,
+    mark: &mut impl FnMut(&'static str),
+) -> windows::core::Result<()> {
     // SAFETY: the class is registered and every string is 'static. Without WS_VISIBLE the
     // window is never shown, and WS_EX_TOOLWINDOW keeps it off the taskbar and Alt+Tab.
     let window = unsafe {
@@ -351,14 +355,18 @@ pub(super) fn prewarm(factory: &ID2D1Factory, palette: &Palette) -> windows::cor
         D2D1_ALPHA_MODE_IGNORE,
     )
     .and_then(|(target, frozen)| {
+        mark("target");
         Paint::new(&target.cast()?, Some(&frozen), 1.0, palette)?;
+        mark("paint");
         // P-01: Direct2D makes a target's device at its first draw, not when the target is made.
         // SAFETY: BeginDraw and EndDraw bracket one draw on a target this thread made.
         unsafe {
             target.BeginDraw();
             target.Clear(None);
             target.EndDraw(None, None)
-        }
+        }?;
+        mark("first_draw");
+        Ok(())
     });
     // SAFETY: the window was created above and holds no state.
     let destroyed = unsafe { DestroyWindow(window) };

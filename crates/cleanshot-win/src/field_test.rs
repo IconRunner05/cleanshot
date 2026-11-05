@@ -39,7 +39,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, PCWSTR, w};
 
 pub use crate::fade::animations_on;
-use crate::overlay::WINDOW_CLASS;
+use crate::overlay::{Overlay, WINDOW_CLASS};
 
 use crate::Error;
 use crate::capture::{desktop_adapters, make_device, monitor_handles};
@@ -333,6 +333,55 @@ pub fn capture_device_costs() -> windows::core::Result<Vec<DeviceCost>> {
 }
 
 /// This process's working set and private working set, in bytes.
+/// One part of [`Overlay::prewarm`], or the release of its Direct2D factory after it.
+#[derive(Debug)]
+pub struct PrewarmPart {
+    pub part: &'static str,
+    pub took: Duration,
+    /// Private working set bytes after the part, less those before it.
+    pub private_bytes: isize,
+}
+
+/// Why [`prewarm_costs`] could not price the prewarm.
+#[derive(Debug, thiserror::Error)]
+pub enum PrewarmCostError {
+    #[error("the prewarm failed")]
+    Prewarm(#[source] Error),
+    #[error("this process's memory could not be read")]
+    Memory(#[source] windows::core::Error),
+}
+
+/// P-01 against P-04: runs the overlay prewarm on this thread and then lets go of its Direct2D
+/// factory, as `GRAPHICS_IDLE` does, timing each part and the private working set it adds.
+/// Only the first call in a process sees Direct2D and DirectWrite start.
+///
+/// # Errors
+///
+/// [`PrewarmCostError`] if the prewarm fails or the memory counters cannot be read.
+pub fn prewarm_costs() -> Result<Vec<PrewarmPart>, PrewarmCostError> {
+    let mut marks = vec![("start", Instant::now(), held_bytes())];
+    Overlay::prewarm_marked(|part| marks.push((part, Instant::now(), held_bytes())))
+        .map_err(PrewarmCostError::Prewarm)?;
+    crate::render_target::release_factory();
+    marks.push(("factory_released", Instant::now(), held_bytes()));
+    marks
+        .iter()
+        .zip(marks.iter().skip(1))
+        .map(|((_, then, before), (part, now, after))| {
+            let private = |held: &windows::core::Result<(isize, isize)>| {
+                held.as_ref()
+                    .map(|&(_, private)| private)
+                    .map_err(|error| PrewarmCostError::Memory(error.clone()))
+            };
+            Ok(PrewarmPart {
+                part,
+                took: *now - *then,
+                private_bytes: private(after)? - private(before)?,
+            })
+        })
+        .collect()
+}
+
 fn held_bytes() -> windows::core::Result<(isize, isize)> {
     let counters = crate::log::memory_counters()?;
     let signed = |bytes: usize| isize::try_from(bytes).expect("a working set fits in isize");

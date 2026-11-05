@@ -236,6 +236,10 @@ jobs:
         run: |
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --report probe.md
           cat probe.md >> "$GITHUB_STEP_SUMMARY"
+          # P-01 against P-04: the prewarm's parts, each timed and priced, through to its release.
+          for part in class factory palette target paint first_draw factory_released; do
+            grep -q "^- Overlay prewarm, ${part}: " probe.md || { echo "FAIL P-04: the probe priced no prewarm part ${part}"; exit 1; }
+          done
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --start-split
 
       - name: Release exe meets P-01 over the probe's hotkeys, judged from its own --log lines (D-62)

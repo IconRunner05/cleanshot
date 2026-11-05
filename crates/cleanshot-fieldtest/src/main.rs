@@ -15,7 +15,7 @@ use cleanshot_win::field_test::dpi::{copy_at_scale, set_scale};
 use cleanshot_win::field_test::{
     Driver, adapters, animations_on, capture_device_costs, clipboard_round_trip,
     copies_while_watched, d3d11_feature_level, drive_tray, edit_and_close, exit_running_tray,
-    monitors, open_and_cancel_overlays, rendering_params, windows_version,
+    monitors, open_and_cancel_overlays, prewarm_costs, rendering_params, windows_version,
 };
 use cleanshot_win::log::since_start;
 
@@ -426,6 +426,8 @@ fn report_bench(report: &mut String, timings: BenchReport) {
 
 fn probe() -> String {
     let mut report = String::from("# Cleanshot probe\n\n");
+    // First, so this process has not yet started Direct2D or DirectWrite.
+    report_prewarm(&mut report);
     report_windows(&mut report);
     report_display(&mut report);
     report_tray(&mut report);
@@ -540,6 +542,21 @@ fn report_tray(report: &mut String) {
 }
 
 /// P-01, P-03, P-04: what a capture device made at start-up would cost.
+fn report_prewarm(report: &mut String) {
+    match prewarm_costs() {
+        Ok(parts) => {
+            for part in parts {
+                line(
+                    report,
+                    &format!("Overlay prewarm, {}", part.part),
+                    format!("{:?}; private {:+} bytes", part.took, part.private_bytes),
+                );
+            }
+        }
+        Err(error) => line(report, "Overlay prewarm", format!("error: {error}")),
+    }
+}
+
 fn report_device_costs(report: &mut String) {
     match capture_device_costs() {
         Ok(costs) => {

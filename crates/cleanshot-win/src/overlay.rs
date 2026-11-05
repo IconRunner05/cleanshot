@@ -268,10 +268,18 @@ impl Overlay {
     /// [`Error::Window`] if Direct2D, DirectWrite or the hidden window cannot be made; the
     /// overlay then most likely cannot open either.
     pub fn prewarm() -> Result<(), Error> {
+        Self::prewarm_marked(|_| ())
+    }
+
+    /// [`Overlay::prewarm`], calling `mark` with each part's name as it ends.
+    pub(crate) fn prewarm_marked(mut mark: impl FnMut(&'static str)) -> Result<(), Error> {
         register_class()?;
+        mark("class");
         let factory = crate::render_target::factory().map_err(Error::Window)?;
+        mark("factory");
         let palette = Palette::current().map_err(Error::Window)?;
-        window::prewarm(&factory, &palette).map_err(Error::Window)
+        mark("palette");
+        window::prewarm(&factory, &palette, &mut mark).map_err(Error::Window)
     }
 
     /// Shows `captures`, one window per monitor at that monitor's physical bounds, opened as
