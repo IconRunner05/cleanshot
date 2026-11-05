@@ -184,7 +184,7 @@ impl Look {
             .with_border((self.border && takes).then_some(border))
     }
 
-    fn dress_text(&self, block: &TextBlock) -> TextBlock {
+    pub(crate) fn dress_text(&self, block: &TextBlock) -> TextBlock {
         block
             .with_size(self.text_size)
             .with_alignment(self.alignment)
@@ -209,10 +209,7 @@ impl Look {
                 .ok_or(PropertyError::NotPositive(value))
         };
         Ok(match property {
-            Property::Color(color) => Self {
-                style: Style::new(color, self.style.stroke_width),
-                ..self
-            },
+            Property::Color(color) => self.with_color(color),
             Property::StrokeWidth(width) => Self {
                 style: Style::new(self.style.color, positive(width)?),
                 ..self
@@ -245,9 +242,16 @@ impl Look {
         })
     }
 
+    pub(crate) fn with_color(self, color: Color) -> Self {
+        Self {
+            style: Style::new(color, self.style.stroke_width),
+            ..self
+        }
+    }
+
     /// The look `entry` is drawn in: its own style, fill, redaction or text size, and the rest
     /// from `rest`.
-    fn of(entry: &ShapeEntry, rest: Self) -> Self {
+    pub(crate) fn of(entry: &ShapeEntry, rest: Self) -> Self {
         let look = Self {
             style: entry.style.with_shadow(false).with_border(None),
             shadow: entry.style.shadow(),
@@ -313,7 +317,7 @@ pub enum Property {
 }
 
 /// Whether the shapes `tool` draws can cast a shadow (D-114) and have a border (D-131).
-fn takes_shadow_and_border(tool: Tool) -> bool {
+pub(crate) fn takes_shadow_and_border(tool: Tool) -> bool {
     match tool {
         Tool::Arrow
         | Tool::Line
@@ -364,10 +368,7 @@ impl Looks {
     }
 
     fn colored(look: Look, color: Color) -> Look {
-        Look {
-            style: Style::new(color, look.style.stroke_width),
-            ..look
-        }
+        look.with_color(color)
     }
 
     /// Sets `property` on `selected` if a shape is selected, otherwise on how `tool` draws its
@@ -458,8 +459,11 @@ impl Looks {
             } => {
                 self.set(property, frame.tool(), None)?;
                 let look = self.look(frame.tool());
-                (*size, *style, *alignment) =
-                    (look.text_size, look.style_for(frame.tool()), look.alignment);
+                (*size, *style, *alignment) = (
+                    look.text_size(),
+                    look.style_for(frame.tool()),
+                    look.alignment(),
+                );
                 Ok(None)
             }
             TextOrigin::Existing {
