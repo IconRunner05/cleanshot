@@ -9,29 +9,22 @@ mod flatten;
 mod frame;
 mod gamma;
 mod highlight;
+mod patch;
 mod redact;
 mod shadow;
 mod thumbnail;
 
-use cleanshot_core::{ImageError, RectF, RgbaImage, ShapeId};
+use cleanshot_core::{ImageError, RectF, ShapeId};
 
 pub use border::shape_border;
 pub use encode::{Format, encode};
 pub use flatten::{Flattened, flatten};
 pub use gamma::TEXT_GAMMA_RATIOS;
 pub use highlight::highlighted;
+pub use patch::Patch;
 pub use redact::redacted;
 pub use shadow::shape_shadow;
 pub use thumbnail::thumbnail;
-
-/// Pixels an export draws at one place on the image: `pixels`, its top left corner at
-/// `left`, `top`, for the editor to show as the export will.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Patch {
-    pub left: u32,
-    pub top: u32,
-    pub pixels: RgbaImage,
-}
 
 /// Why an export failed.
 #[derive(Debug, thiserror::Error)]

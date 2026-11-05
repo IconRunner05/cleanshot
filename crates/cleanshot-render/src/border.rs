@@ -4,7 +4,7 @@ use cleanshot_core::{
 use tiny_skia::{BlendMode, LineCap, LineJoin, Path, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::flatten::{glyphs, paint, polyline, rounded_rect, skia_rect};
-use crate::shadow::Alone;
+use crate::patch::Alone;
 use crate::{Error, Patch};
 
 /// The border `entry` has on an image of `width` by `height`, drawn alone as the export draws
