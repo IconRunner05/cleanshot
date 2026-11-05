@@ -21,8 +21,8 @@ use cleanshot_core::{CommandError, ImageError};
 use futures::FutureExt;
 pub use gpui::{App, AsyncApp, Keystroke};
 use gpui::{
-    Application, Entity, GraphicalEnvironment, QuitMode, Render, Task, Window, WindowHandle,
-    WindowOptions, WindowingRequest,
+    Application, Entity, Global, GraphicalEnvironment, QuitMode, Render, Task, Window,
+    WindowHandle, WindowOptions, WindowingRequest,
 };
 use gpui_windows::WindowsPlatform;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -93,6 +93,21 @@ fn release_graphics_when_unused(cx: &mut App) {
     }
     switched(cx.request_windowing(WindowingRequest::Headless))
         .expect("a windowed platform with no window open can go headless");
+    if let Some(GraphicsReleased(on_released)) = cx.try_global::<GraphicsReleased>() {
+        let on_released = Rc::clone(on_released);
+        on_released(cx);
+    }
+}
+
+/// Who [`release_graphics_when_unused`] tells once GPUI has given its graphics device back.
+struct GraphicsReleased(Rc<dyn Fn(&mut App)>);
+
+impl Global for GraphicsReleased {}
+
+/// Calls `on_released` each time GPUI gives back its graphics device because the last editor or
+/// settings window closed (D-138), in place of what an earlier call gave.
+pub fn on_graphics_released(cx: &mut App, on_released: impl Fn(&mut App) + 'static) {
+    cx.set_global(GraphicsReleased(Rc::new(on_released)));
 }
 
 /// What a windowing switch came to; the Windows platform switches before it returns the task.
