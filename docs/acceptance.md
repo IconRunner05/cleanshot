@@ -61,6 +61,7 @@ Start from a release candidate exe downloaded from its GitHub pre-release, with 
 - [ ] F-38: Open a capture in the editor: Undo and Redo at the end of the toolbar are greyed out and Tab passes them by. Draw an arrow: Undo is no longer grey, and resting the pointer on it shows "Undo arrow (Ctrl+Z)". Click it: the arrow goes, Undo greys out, and Redo shows "Redo arrow (Ctrl+Y)". Click Redo: the arrow is back. Turn on Narrator and Tab to Undo: Narrator says "Undo arrow".
 - [ ] F-38, F-39: Ctrl+Z and Ctrl+Y undo and redo each step. Ctrl+wheel zooms, Space-drag pans, Ctrl+0 fits.
 - [ ] F-40, F-24: Ctrl+C and Ctrl+S in the editor copy and save the marked-up image.
+- [ ] D-136: Capture, press E, draw an arrow and press Ctrl+W: the editor closes without asking, as its X closes it. Open Settings from the tray and press Ctrl+W: it closes. Open Settings again, click a hotkey to record it and press Ctrl+W: Ctrl+W becomes that hotkey and Settings stays open.
 - [ ] F-58: Switch Windows between light and dark: the editor follows. Every editor control can be reached with Tab.
 - [ ] D-117: In the editor, rest the pointer on the highlighter button: after a moment "Highlighter (H)" shows below it, and goes when the pointer leaves or clicks. Rest it on a colour on the property strip: its name shows, such as "Red". Open a fresh capture and rest it on the greyed Undo: "Nothing to undo". In Settings, rest it on a hotkey's Reset: "Reset Capture region hotkey".
 

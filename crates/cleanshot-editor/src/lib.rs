@@ -18,7 +18,7 @@ use std::num::NonZeroIsize;
 use std::rc::Rc;
 
 use cleanshot_core::{CommandError, ImageError};
-pub use gpui::{App, AsyncApp};
+pub use gpui::{App, AsyncApp, Keystroke};
 use gpui::{Application, Entity, QuitMode, Render, Window, WindowHandle, WindowOptions};
 use gpui_windows::WindowsPlatform;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};

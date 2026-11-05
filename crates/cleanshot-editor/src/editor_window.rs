@@ -289,6 +289,7 @@ impl EditorView {
             KeyAction::FocusPrevious => window.focus_prev(cx),
             KeyAction::Deliver(output) => self.deliver(output),
             KeyAction::SaveAs => self.save_as(window, cx),
+            KeyAction::CloseWindow => window.remove_window(),
             KeyAction::Text(TextKey::Commit) => self.close_text_box(window),
             KeyAction::Text(key) => {
                 if let Some(text_box) = &mut self.text_box {

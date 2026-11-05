@@ -25,6 +25,8 @@ pub enum KeyAction {
     SaveAs,
     /// A key for the text box being typed into (F-34).
     Text(TextKey),
+    /// Ctrl+W: the window closes as its caption's close button closes it (D-136).
+    CloseWindow,
 }
 
 /// What a key does to the text box being typed into. Characters do not come through here: the
@@ -80,6 +82,9 @@ pub fn action_for_key(key: &str, modifiers: Modifiers, activity: Activity) -> Op
         return None;
     }
     match activity {
+        Activity::Idle | Activity::EditingText if closes_window(key, modifiers) => {
+            Some(KeyAction::CloseWindow)
+        }
         Activity::Idle => idle_action(key, modifiers),
         Activity::EditingText => text_key(key, modifiers).map(KeyAction::Text),
         // D-44: one drag stays one edit. F-34: every key during a composition is the IME's.
@@ -147,6 +152,17 @@ fn idle_action(key: &str, modifiers: Modifiers) -> Option<KeyAction> {
     }
 }
 
+/// D-136: whether `key` with `modifiers` is Ctrl+W, which closes a Cleanshot window as its
+/// caption's close button does.
+#[must_use]
+pub fn closes_window(key: &str, modifiers: Modifiers) -> bool {
+    let ctrl_alone = Modifiers {
+        ctrl: true,
+        ..Modifiers::default()
+    };
+    key == "w" && modifiers == ctrl_alone
+}
+
 fn single_char(key: &str) -> Option<char> {
     let mut chars = key.chars();
     let first = chars.next()?;
@@ -164,6 +180,28 @@ mod tests {
         win: false,
     };
     const CTRL: Modifiers = Modifiers { ctrl: true, ..NONE };
+
+    #[test]
+    fn d136_ctrl_w_closes_the_window_unless_a_drag_a_composition_or_save_as_holds_the_keys() {
+        for activity in [Activity::Idle, Activity::EditingText] {
+            assert_eq!(
+                action_for_key("w", CTRL, activity),
+                Some(KeyAction::CloseWindow),
+                "{activity:?}"
+            );
+        }
+        for activity in [Activity::Dragging, Activity::Composing, Activity::SavingAs] {
+            assert_eq!(action_for_key("w", CTRL, activity), None, "{activity:?}");
+        }
+        let ctrl_shift = Modifiers {
+            shift: true,
+            ..CTRL
+        };
+        assert!(closes_window("w", CTRL));
+        assert!(!closes_window("w", ctrl_shift));
+        assert!(!closes_window("w", NONE));
+        assert!(!closes_window("q", CTRL));
+    }
 
     #[test]
     fn f38_ctrl_z_undoes_and_ctrl_y_redoes() {

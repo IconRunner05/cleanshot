@@ -5,7 +5,7 @@ use std::rc::Rc;
 use cleanshot_core::{
     AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, OptionsItem, Policy,
     SET_BY_ORGANISATION, SaveFormat, Saving, Settings, SettingsNotice, SettingsProblem,
-    StartupEntryError, saving_off_reason, settings_notice,
+    StartupEntryError, closes_window, saving_off_reason, settings_notice,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -171,8 +171,15 @@ impl SettingsView {
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
+        let held = event.keystroke.modifiers;
+        let modifiers = Modifiers {
+            ctrl: held.control,
+            alt: held.alt,
+            shift: held.shift,
+            win: held.platform,
+        };
         let Some(action) = self.recording else {
-            if key == "escape" {
+            if key == "escape" || closes_window(key, modifiers) {
                 window.remove_window();
             }
             return;
@@ -183,13 +190,6 @@ impl SettingsView {
         }
         self.recording = None;
         if !matches!(key, "escape" | "tab") {
-            let held = event.keystroke.modifiers;
-            let modifiers = Modifiers {
-                ctrl: held.control,
-                alt: held.alt,
-                shift: held.shift,
-                win: held.platform,
-            };
             match Hotkey::recorded(key, modifiers) {
                 Err(refusal) => self.tell(&SettingsNotice::HotkeyRefused(refusal)),
                 Ok(hotkey) => self.set_hotkey(action, hotkey),

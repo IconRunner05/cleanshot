@@ -23,6 +23,7 @@ section exists.
 - Redaction strength and text size can be typed on the property strip beside the preset
   steps: strength from 8 to 512 pixels, text size from 8 to 200. A value outside that
   range is set to the nearest one, and the strip shows the value used (F-34, F-36).
+- Ctrl+W closes the editor and the settings window, as their close button does (D-136).
 - Resting the pointer on a button in the editor's toolbar or property strip, or on a
   control in Settings, shows its name and its shortcut, such as "Highlighter (H)" (D-117).
 - Redact has a Strength setting on the property strip: 16, 24, 32 or 48 pixel blocks, for
