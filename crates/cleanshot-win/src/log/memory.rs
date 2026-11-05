@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
     ERROR_BAD_LENGTH, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, HMODULE,
@@ -9,9 +10,9 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
 use windows::Win32::System::Memory::{
-    GetProcessHeap, HeapLock, HeapUnlock, HeapWalk, MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEM_PRIVATE,
-    MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_READWRITE, PROCESS_HEAP_ENTRY,
-    VirtualAlloc, VirtualFree, VirtualQuery,
+    GetProcessHeap, HEAP_SUMMARY, HeapLock, HeapSummary, HeapUnlock, HeapWalk, MEM_COMMIT,
+    MEM_IMAGE, MEM_MAPPED, MEM_PRIVATE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION,
+    PAGE_READWRITE, PROCESS_HEAP_ENTRY, VirtualAlloc, VirtualFree, VirtualQuery,
 };
 use windows::Win32::System::ProcessStatus::K32QueryWorkingSet;
 use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
@@ -32,6 +33,11 @@ const LARGE: usize = 1 << 20;
 /// The most large heap blocks a walk lists; the walk cannot grow a list while it holds the
 /// heap's lock.
 const LARGE_BLOCKS: usize = 256;
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a heap summary is a few words"
+)]
+const SUMMARY_SIZE: u32 = size_of::<HEAP_SUMMARY>() as u32;
 
 /// P-04: what holds this process's working set, by kind and size only, for `--log`; shown as
 /// one line of `key=value` pairs. No module's name or path is in it (D-109).
@@ -115,6 +121,65 @@ fn place(path: &str, system: &str) -> Place {
         Place::System
     } else {
         Place::Other
+    }
+}
+
+/// P-04: this process's memory from counters alone, for a start-up stage, where [`held`]'s
+/// walks would slow P-03; shown as one line of `key=value` pairs.
+#[derive(Debug)]
+pub struct Counted {
+    working_set: usize,
+    private_working_set: usize,
+    /// Private bytes committed, resident or not.
+    committed: usize,
+    heap_allocated: usize,
+    heap_committed: usize,
+    /// How long reading the counters took, which the stages after it carry.
+    took: Duration,
+}
+
+/// This process's memory counters and its heap's summary now.
+///
+/// # Errors
+///
+/// [`LogError::Memory`] if Windows does not give the counters or the heap's summary.
+pub fn counted() -> Result<Counted, LogError> {
+    let reading = Instant::now();
+    let counters = super::memory_counters().map_err(LogError::Memory)?;
+    // SAFETY: GetProcessHeap has no preconditions.
+    let heap = unsafe { GetProcessHeap() }.map_err(LogError::Memory)?;
+    let mut summary = HEAP_SUMMARY {
+        cb: SUMMARY_SIZE,
+        ..HEAP_SUMMARY::default()
+    };
+    // SAFETY: `summary` is writable and its cb says its size, as HeapSummary asks; no flags
+    // are defined.
+    unsafe { HeapSummary(heap, 0, &raw mut summary) }
+        .ok()
+        .map_err(LogError::Memory)?;
+    Ok(Counted {
+        working_set: counters.WorkingSetSize,
+        private_working_set: counters.PrivateWorkingSetSize,
+        committed: counters.PrivateUsage,
+        heap_allocated: summary.cbAllocated,
+        heap_committed: summary.cbCommitted,
+        took: reading.elapsed(),
+    })
+}
+
+impl fmt::Display for Counted {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "working_set={} private_working_set={} committed={} heap_allocated={} \
+             heap_committed={} took_us={}",
+            self.working_set,
+            self.private_working_set,
+            self.committed,
+            self.heap_allocated,
+            self.heap_committed,
+            self.took.as_micros()
+        )
     }
 }
 
@@ -477,6 +542,27 @@ mod tests {
             counted.private_working_set_bytes
         );
         assert!(held.heap_bytes > 0, "a running process uses its heap");
+    }
+
+    #[test]
+    fn p04_the_counters_see_a_heap_allocation_and_the_pages_it_touches() {
+        let before = counted().expect("the counters read");
+        // Larger than what other tests running at the same time free.
+        let block = vec![1u8; 64 * LARGE];
+        let after = counted().expect("the counters read");
+        assert!(
+            after.heap_allocated >= before.heap_allocated + block.len(),
+            "heap allocated {} then {}",
+            before.heap_allocated,
+            after.heap_allocated
+        );
+        assert!(
+            after.private_working_set >= before.private_working_set + 32 * LARGE,
+            "private working set {} then {}",
+            before.private_working_set,
+            after.private_working_set
+        );
+        drop(std::hint::black_box(block));
     }
 
     #[test]

@@ -21,6 +21,7 @@ use cleanshot_win::capture::{
     AdapterReport, Copied, Devices, MonitorImage, OutputReport, RECT, black_share, monitor_of,
 };
 use cleanshot_win::instance::Launch;
+use cleanshot_win::log::memory::{self, Counted};
 use cleanshot_win::log::{Log, LogError, Usage, os_code, since_start, usage};
 use cleanshot_win::overlay::Overlay;
 use cleanshot_win::panel::{Countdown, Panel};
@@ -69,14 +70,20 @@ fn main() {
     let (settings, warning) = load_settings();
     let (policy, policy_problems) = read_policy();
     let (hotkeys, fallback) = tray_hotkeys(&settings);
+    // P-04: counters only at each start-up stage, as a full account would slow P-03.
+    let logging = log.is_some();
+    let count = move |stage| logging.then(|| (stage, memory::counted()));
+    let mut counts = vec![count("log_opened")];
     let log = Rc::new(RefCell::new(log));
     cleanshot_editor::run(move |cx| {
         let gpui_started = since_start();
+        counts.push(count("gpui_started"));
         // D-76: prewarm on the overlay thread before the tray is ready.
         let unwarmed = Overlay::prewarm()
             .err()
             .map(|error| format!("The capture overlay could not be prepared: {error}."));
         let prewarmed = since_start();
+        counts.push(count("overlay_prewarmed"));
         let app = cx.to_async();
         let session = Rc::new_cyclic(|session: &Weak<Session>| {
             let (session, closing_log) = (session.clone(), Rc::clone(&log));
@@ -99,6 +106,7 @@ fn main() {
                 ("gpui_started", gpui_started),
                 ("overlay_prewarmed", prewarmed),
             ],
+            std::mem::take(&mut counts),
         );
     })
     .expect("the Windows platform starts");
@@ -162,6 +170,7 @@ fn started(
     policy_problems: Vec<PolicyProblem>,
     earlier: [Option<String>; 4],
     marks: [(&str, Result<Duration, LogError>); 3],
+    counts: Vec<Option<(&str, Result<Counted, LogError>)>>,
 ) {
     // D-117: read once; unread, tooltips keep GPUI's delay.
     match cleanshot_win::hover_time() {
@@ -194,6 +203,17 @@ fn started(
         }
     }
     session.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
+    let tray_ready = session
+        .log
+        .borrow()
+        .is_some()
+        .then(|| ("tray_ready", memory::counted()));
+    for (stage, counted) in counts.into_iter().chain([tray_ready]).flatten() {
+        match counted {
+            Ok(counted) => session.log_line("memory", |_| format!("P-04 at={stage} {counted}")),
+            Err(error) => session.log_failure("memory", "counters_unread", &error),
+        }
+    }
     // P-04, P-05: the working set, and the CPU time spent with the tray idle, logged once.
     if let Some(start) = session.idle_start() {
         let idle = Rc::clone(&session);
@@ -397,7 +417,7 @@ impl Session {
         if self.log.borrow().is_none() {
             return;
         }
-        match cleanshot_win::log::memory::held() {
+        match memory::held() {
             Ok(held) => self.log_line("memory", |_| format!("P-04 at={stage} {held}")),
             Err(error) => self.warn(Warning::Failed(
                 "Logging could not account for memory",
