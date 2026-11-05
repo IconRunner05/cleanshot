@@ -260,6 +260,11 @@ impl EditorView {
         let Some(action) = action_for_key(&event.keystroke.key, modifiers, activity) else {
             return;
         };
+        self.act(action, window, cx);
+    }
+
+    /// Does what a key asks, or a toolbar button that takes the same action (D-133).
+    fn act(&mut self, action: KeyAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             KeyAction::Undo => self.undo_or_redo(History::undo),
             KeyAction::Redo => self.undo_or_redo(History::redo),
@@ -456,6 +461,42 @@ fn refusal(error: &CommandError) -> &'static str {
 }
 
 impl EditorView {
+    /// The toolbar: the tools, Undo and Redo, and Copy, Save and Save As, each closing an open
+    /// text box first.
+    fn toolbar(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
+        let picker = view.clone();
+        let on_pick = move |tool, window: &mut Window, cx: &mut App| {
+            update_while_open(&picker, cx, |view, cx| {
+                view.close_text_box(window);
+                view.tool = tool;
+                cx.notify();
+            });
+        };
+        let replayer = view.clone();
+        let on_replay = move |replay: Replay, window: &mut Window, cx: &mut App| {
+            update_while_open(&replayer, cx, |view, cx| {
+                view.close_text_box(window);
+                view.undo_or_redo(replay);
+                cx.notify();
+            });
+        };
+        let outputter = view.clone();
+        let on_output = move |action: KeyAction, window: &mut Window, cx: &mut App| {
+            update_while_open(&outputter, cx, |view, cx| {
+                view.close_text_box(window);
+                view.act(action, window, cx);
+            });
+        };
+        toolbar(
+            self.tool,
+            &self.history,
+            theme,
+            on_pick,
+            on_replay,
+            on_output,
+        )
+    }
+
     /// The property strip for what the next strip change would restyle, the spotlight dim while
     /// a spotlight is picked, and the frame toggles.
     fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
@@ -509,23 +550,8 @@ impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance(), hover_time(cx));
         let view = cx.entity().downgrade();
-        let picker = view.clone();
         let restacker = view.clone();
-        let on_pick = move |tool, window: &mut Window, cx: &mut App| {
-            update_while_open(&picker, cx, |view, cx| {
-                view.close_text_box(window);
-                view.tool = tool;
-                cx.notify();
-            });
-        };
-        let replayer = view.clone();
-        let on_replay = move |replay: Replay, window: &mut Window, cx: &mut App| {
-            update_while_open(&replayer, cx, |view, cx| {
-                view.close_text_box(window);
-                view.undo_or_redo(replay);
-                cx.notify();
-            });
-        };
+        let toolbar = self.toolbar(&view, theme);
         let strip = self.strip(&view, theme);
         let input = view.clone();
         let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {
@@ -589,7 +615,7 @@ impl Render for EditorView {
                     .flex_col()
                     .items_center()
                     .gap(px(8.0))
-                    .child(toolbar(self.tool, &self.history, theme, on_pick, on_replay))
+                    .child(toolbar)
                     .child(strip),
             )
             .children(

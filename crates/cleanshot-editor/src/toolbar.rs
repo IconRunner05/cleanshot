@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use cleanshot_core::{Change, CommandError, History, Tool};
+use cleanshot_core::{Change, CommandError, History, KeyAction, Output, Tool};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AssetSource, BoxShadow, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Rgba,
@@ -13,7 +13,7 @@ use crate::tooltip::{tooltip_text, with_tooltip};
 /// The Lucide icons the editor draws, embedded in the exe under their Lucide names.
 pub(crate) struct Icons;
 
-const ICONS: [(&str, &[u8]); 15] = [
+const ICONS: [(&str, &[u8]); 18] = [
     (
         "mouse-pointer-2",
         include_bytes!("../icons/mouse-pointer-2.svg"),
@@ -41,6 +41,9 @@ const ICONS: [(&str, &[u8]); 15] = [
     ("crop", include_bytes!("../icons/crop.svg")),
     ("undo-2", include_bytes!("../icons/undo-2.svg")),
     ("redo-2", include_bytes!("../icons/redo-2.svg")),
+    ("copy", include_bytes!("../icons/copy.svg")),
+    ("save", include_bytes!("../icons/save.svg")),
+    ("folder-down", include_bytes!("../icons/folder-down.svg")),
 ];
 
 impl AssetSource for Icons {
@@ -112,6 +115,14 @@ const REPLAYS: [(&str, &str, &str, NextChange, Replay); 2] = [
     ("redo-2", "Redo", "Ctrl+Y", History::to_redo, History::redo),
 ];
 
+/// The buttons that copy or save the edited screenshot (D-133): icon, name, shortcut, and the
+/// action the shortcut also takes.
+const OUTPUTS: [(&str, &str, &str, KeyAction); 3] = [
+    ("copy", "Copy", "Ctrl+C", KeyAction::Deliver(Output::Copy)),
+    ("save", "Save", "Ctrl+S", KeyAction::Deliver(Output::Save)),
+    ("folder-down", "Save As", "Ctrl+Shift+S", KeyAction::SaveAs),
+];
+
 /// Why the button for `verb` is off (D-117), as in "Nothing to undo".
 fn nothing_to(verb: &str) -> SharedString {
     format!("Nothing to {}", verb.to_lowercase()).into()
@@ -129,14 +140,21 @@ fn step_name(verb: &str, change: Change) -> String {
 }
 
 /// The tool panel (CHARTER 4: 28 px buttons with 7 px corners), then Undo and Redo for
-/// `history`. `on_pick` is called with the tool clicked, `on_replay` with the step clicked.
-pub(crate) fn toolbar(
+/// `history`, then Copy, Save and Save As. `on_pick` is called with the tool clicked,
+/// `on_replay` with the step clicked and `on_output` with the clicked output's action.
+pub(crate) fn toolbar<Pick, Play, Out>(
     current: Tool,
     history: &History,
     theme: Theme,
-    on_pick: impl Fn(Tool, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
-    on_replay: impl Fn(Replay, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
-) -> impl IntoElement {
+    on_pick: Pick,
+    on_replay: Play,
+    on_output: Out,
+) -> impl IntoElement + use<Pick, Play, Out>
+where
+    Pick: Fn(Tool, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
+    Play: Fn(Replay, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
+    Out: Fn(KeyAction, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
+{
     let replays = REPLAYS.map(|(icon, verb, keys, next, replay)| {
         let step = next(history).map(|change| step_name(verb, change));
         let button = div()
@@ -168,6 +186,26 @@ pub(crate) fn toolbar(
             .hover(move |button| button.bg(theme.hover))
             .map(|element| with_tooltip(element, tooltip_text(&step, Some(keys)), theme))
             .on_click(move |_, window, cx| on_replay(replay, window, cx))
+            .child(icon_of(icon, theme.text))
+    });
+    let outputs = OUTPUTS.map(|(icon, name, keys, action)| {
+        let on_output = on_output.clone();
+        div()
+            .id(name)
+            .role(Role::Button)
+            .aria_label(name)
+            .aria_keyshortcuts(keys)
+            .size(px(28.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.0))
+            .focusable()
+            .tab_stop(true)
+            .focus_visible(|button| button.border_2().border_color(ACCENT))
+            .hover(move |button| button.bg(theme.hover))
+            .map(|element| with_tooltip(element, tooltip_text(name, Some(keys)), theme))
+            .on_click(move |_, window, cx| on_output(action, window, cx))
             .child(icon_of(icon, theme.text))
     });
     let buttons = TOOLS.map(|(tool, icon, key)| {
@@ -206,8 +244,14 @@ pub(crate) fn toolbar(
         .aria_label("Tools")
         .gap(px(4.0))
         .children(buttons)
-        .child(div().w(px(1.0)).h(px(20.0)).mx(px(2.0)).bg(theme.hairline))
+        .child(divider(theme))
         .children(replays)
+        .child(divider(theme))
+        .children(outputs)
+}
+
+fn divider(theme: Theme) -> Div {
+    div().w(px(1.0)).h(px(20.0)).mx(px(2.0)).bg(theme.hairline)
 }
 
 fn icon_of(icon: &str, color: Rgba) -> impl IntoElement {
@@ -281,6 +325,28 @@ mod tests {
                 action_for_key(&key, ctrl, Activity::Idle),
                 Some(action),
                 "{verb}"
+            );
+        }
+    }
+
+    #[test]
+    fn d133_copy_save_and_save_as_buttons_do_what_their_shortcuts_do() {
+        use cleanshot_core::{Activity, Modifiers, action_for_key};
+
+        for (icon, name, keys, action) in OUTPUTS {
+            assert!(Icons.load(&format!("icons/{icon}.svg")).unwrap().is_some());
+            let shift = keys.contains("Shift+");
+            let key = keys.rsplit('+').next().unwrap().to_lowercase();
+            let modifiers = Modifiers {
+                ctrl: true,
+                alt: false,
+                shift,
+                win: false,
+            };
+            assert_eq!(
+                action_for_key(&key, modifiers, Activity::Idle),
+                Some(action),
+                "{name}"
             );
         }
     }
