@@ -553,6 +553,8 @@ pub enum EditorRunError {
     OverlayNotShown,
     #[error("the editor drew no first frame in time")]
     NotDrawn,
+    #[error("the exe took no idle sample while the editor was open")]
+    NotSampled,
     #[error("no editor window was found to close: {0}")]
     NotFound(windows::core::Error),
     #[error("the editor could not be asked to close: {0}")]
@@ -560,8 +562,9 @@ pub enum EditorRunError {
 }
 
 /// P-04 after the editor: presses [`FULL_SCREEN`] for another process's overlay over the whole
-/// monitor, then E to edit it, and once `drawn` holds closes the editor as Alt+F4 does. Waits up
-/// to `timeout` each for `shown` and `drawn`.
+/// monitor, then E to edit it, and once `drawn` and then `sampled` hold closes the editor as
+/// Alt+F4 does. Waits up to `timeout` each for `shown` and `drawn`, and up to
+/// `sample_timeout` for `sampled`.
 ///
 /// # Errors
 ///
@@ -570,6 +573,8 @@ pub fn edit_and_close(
     timeout: Duration,
     shown: impl FnMut() -> bool,
     drawn: impl FnMut() -> bool,
+    sample_timeout: Duration,
+    sampled: impl FnMut() -> bool,
 ) -> Result<(), EditorRunError> {
     if press(&FULL_SCREEN) != 6 {
         return Err(EditorRunError::KeysRefused("Ctrl+Shift+7"));
@@ -582,6 +587,9 @@ pub fn edit_and_close(
     }
     if !within(timeout, drawn) {
         return Err(EditorRunError::NotDrawn);
+    }
+    if !within(sample_timeout, sampled) {
+        return Err(EditorRunError::NotSampled);
     }
     // D-110: GPUI's window class and the editor's fixed title, so no window's own title is read.
     // SAFETY: a lookup by two 'static strings; no window is touched.

@@ -277,13 +277,19 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
           printf '[hotkeys]\nfull_screen = "Ctrl+Shift+7"\n' > "$run/cleanshot.toml"
           "$run/cleanshot.exe" --log &
-          # --editor presses Ctrl+Shift+7 then E, closes the editor once it has drawn, and waits
-          # for the after-editor sample the exe logs 15 s after the close.
+          # --editor presses Ctrl+Shift+7 then E, closes the editor once it has drawn and the exe
+          # has taken its idle sample, and waits for the after-editor sample the exe logs 15 s
+          # after the close.
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --editor "$run/cleanshot.log" || failed=$?
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --exit "$run/cleanshot.log" || true
           taskkill //F //IM cleanshot.exe 2>/dev/null || true
           cat "$run/cleanshot.log"
           (( ${failed:-0} == 0 )) || { echo "FAIL P-04: the editor run stopped (exit ${failed})"; exit 1; }
+          # The idle sample must be taken with the editor open: the after-editor sample comes 15 s
+          # after the close, so the idle line precedes it by at least that much.
+          idle=$(grep ' perf P-04 working_set_bytes=' "$run/cleanshot.log" | cut -d' ' -f1)
+          after=$(grep ' perf P-04 after_editor_private_bytes=' "$run/cleanshot.log" | cut -d' ' -f1)
+          (( ${idle:-0} > 0 && ${after:-0} - ${idle:-0} >= 15000 )) || { echo "FAIL P-04: the idle sample was not taken while the editor was open"; exit 1; }
 
       - name: Upload the probe report
         if: always()

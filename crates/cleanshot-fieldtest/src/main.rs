@@ -42,6 +42,9 @@ const AFTER_USE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long after the editor closes the exe has to log its P-04 after-editor sample, which it
 /// takes 15 s after.
 const AFTER_EDITOR_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long `--editor` keeps the editor open for the exe's idle sample, which it takes 10 s
+/// after its tray is ready.
+const IDLE_SAMPLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// After the after-editor sample, 15 s after the editor closed, how much longer `--editor`
 /// waits before its after-idle press.
 const AFTER_IDLE_EXTRA: Duration = Duration::from_secs(5);
@@ -331,15 +334,17 @@ fn report_acquires(log: &Path) -> Result<(), String> {
 }
 
 /// P-04 after the editor: once the tray is ready, opens an editor on a full-screen capture,
-/// closes it, and waits for the exe's after-editor sample. Then P-01 after idle: 20 s after the
-/// close, opens and cancels one full-screen overlay and prints its time. Both are reported, not
-/// judged.
+/// closes it once the exe has taken its idle sample with the editor open, and waits for the
+/// exe's after-editor sample. Then P-01 after idle: 20 s after the close, opens and cancels one
+/// full-screen overlay and prints its time. All are reported, not judged.
 fn edit_after_start(log: &Path) -> Result<(), String> {
     wait_for_tray(log)?;
     edit_and_close(
         OVERLAY_TIMEOUT,
         || perf_lines(log, "P-01", "overlay_visible_ms") > 0,
         || perf_lines(log, "P-07", "first_frame_ms") > 0,
+        IDLE_SAMPLE_TIMEOUT,
+        || perf_lines(log, "P-04", "working_set_bytes") > 0,
     )
     .map_err(|error| error.to_string())?;
     let waited = Instant::now();
