@@ -1,7 +1,7 @@
 use std::ops::RangeInclusive;
 
-use crate::document::{Color, Fill, HighlightStrength, RedactMode, RedactStrength};
-use crate::look::{ANNOTATION_RED, HIGHLIGHTER_YELLOW, Look, Property};
+use crate::document::{BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength};
+use crate::look::{ANNOTATION_RED, HIGHLIGHTER_YELLOW, Look, Property, WHITE};
 use crate::text::{Alignment, DEFAULT_TEXT_SIZE, Horizontal, Vertical};
 use crate::tool::Tool;
 
@@ -21,6 +21,10 @@ pub enum Setting {
     Alignment,
     /// Across a text's lines only: a text box is as high as its lines (D-129).
     HorizontalAlignment,
+    /// On or off, shown as one check box beside Shadow (D-131).
+    Border,
+    BorderColor,
+    BorderWidth,
 }
 
 impl Setting {
@@ -29,11 +33,24 @@ impl Setting {
     #[must_use]
     pub fn for_tool(tool: Tool) -> &'static [Self] {
         match tool {
-            Tool::Arrow | Tool::Line => &[Self::Color, Self::StrokeWidth, Self::Shadow],
+            Tool::Arrow | Tool::Line => &[
+                Self::Color,
+                Self::StrokeWidth,
+                Self::Shadow,
+                Self::Border,
+                Self::BorderColor,
+                Self::BorderWidth,
+            ],
             Tool::Pen => &[Self::Color, Self::StrokeWidth],
-            Tool::Rectangle | Tool::Ellipse => {
-                &[Self::Color, Self::StrokeWidth, Self::Fill, Self::Shadow]
-            }
+            Tool::Rectangle | Tool::Ellipse => &[
+                Self::Color,
+                Self::StrokeWidth,
+                Self::Fill,
+                Self::Shadow,
+                Self::Border,
+                Self::BorderColor,
+                Self::BorderWidth,
+            ],
             Tool::Highlighter => &[Self::Color, Self::HighlightStrength],
             Tool::Redact => &[Self::Redact, Self::RedactStrength],
             Tool::Text => &[
@@ -41,9 +58,27 @@ impl Setting {
                 Self::TextSize,
                 Self::HorizontalAlignment,
                 Self::Shadow,
+                Self::Border,
+                Self::BorderColor,
+                Self::BorderWidth,
             ],
-            Tool::Bubble => &[Self::Color, Self::TextSize, Self::Alignment, Self::Shadow],
-            Tool::Step => &[Self::Color, Self::TextSize, Self::Shadow],
+            Tool::Bubble => &[
+                Self::Color,
+                Self::TextSize,
+                Self::Alignment,
+                Self::Shadow,
+                Self::Border,
+                Self::BorderColor,
+                Self::BorderWidth,
+            ],
+            Tool::Step => &[
+                Self::Color,
+                Self::TextSize,
+                Self::Shadow,
+                Self::Border,
+                Self::BorderColor,
+                Self::BorderWidth,
+            ],
             Tool::Select | Tool::Crop | Tool::Spotlight => &[],
         }
     }
@@ -60,6 +95,9 @@ impl Setting {
             Self::TextSize => "Text size",
             Self::Shadow => "Shadow",
             Self::Alignment | Self::HorizontalAlignment => "Alignment",
+            Self::Border => "Border",
+            Self::BorderColor => "Border colour",
+            Self::BorderWidth => "Border width",
         }
     }
 
@@ -83,7 +121,10 @@ impl Setting {
             | Self::HighlightStrength
             | Self::Shadow
             | Self::Alignment
-            | Self::HorizontalAlignment => None,
+            | Self::HorizontalAlignment
+            | Self::Border
+            | Self::BorderColor
+            | Self::BorderWidth => None,
         }
     }
 
@@ -102,6 +143,9 @@ impl Setting {
             Self::Shadow => &SHADOW_CHOICES,
             Self::Alignment => &ALIGNMENT_CHOICES,
             Self::HorizontalAlignment => &HORIZONTAL_ALIGNMENT_CHOICES,
+            Self::Border => &BORDER_CHOICES,
+            Self::BorderColor => &BORDER_COLOR_CHOICES,
+            Self::BorderWidth => &BORDER_WIDTH_CHOICES,
         }
     }
 }
@@ -151,19 +195,51 @@ impl TypedValue {
     }
 }
 
-const fn color(r: u8, g: u8, b: u8) -> Property {
-    Property::Color(Color { r, g, b, a: 255 })
+const fn opaque(r: u8, g: u8, b: u8) -> Color {
+    Color { r, g, b, a: 255 }
 }
 
-const COLOR_CHOICES: [(Property, &str); 8] = [
-    (Property::Color(ANNOTATION_RED), "Red"),
-    (color(255, 149, 0), "Orange"),
-    (Property::Color(HIGHLIGHTER_YELLOW), "Yellow"),
-    (color(52, 199, 89), "Green"),
-    (color(0, 122, 255), "Blue"),
-    (color(175, 82, 222), "Purple"),
-    (color(0, 0, 0), "Black"),
-    (color(255, 255, 255), "White"),
+const PALETTE: [(Color, &str); 8] = [
+    (ANNOTATION_RED, "Red"),
+    (opaque(255, 149, 0), "Orange"),
+    (HIGHLIGHTER_YELLOW, "Yellow"),
+    (opaque(52, 199, 89), "Green"),
+    (opaque(0, 122, 255), "Blue"),
+    (opaque(175, 82, 222), "Purple"),
+    (opaque(0, 0, 0), "Black"),
+    (WHITE, "White"),
+];
+
+const COLOR_CHOICES: [(Property, &str); 8] = {
+    let mut choices = [(Property::Color(WHITE), ""); 8];
+    let mut index = 0;
+    while index < PALETTE.len() {
+        choices[index] = (Property::Color(PALETTE[index].0), PALETTE[index].1);
+        index += 1;
+    }
+    choices
+};
+
+// D-131: a border can be any colour the strip offers a shape.
+const BORDER_COLOR_CHOICES: [(Property, &str); 8] = {
+    let mut choices = [(Property::BorderColor(WHITE), ""); 8];
+    let mut index = 0;
+    while index < PALETTE.len() {
+        choices[index] = (Property::BorderColor(PALETTE[index].0), PALETTE[index].1);
+        index += 1;
+    }
+    choices
+};
+
+const BORDER_CHOICES: [(Property, &str); 2] = [
+    (Property::Border(false), "No border"),
+    (Property::Border(true), "Border"),
+];
+
+const BORDER_WIDTH_CHOICES: [(Property, &str); 3] = [
+    (Property::BorderWidth(BorderWidth::Thin), "2 pixels"),
+    (Property::BorderWidth(BorderWidth::Medium), "4 pixels"),
+    (Property::BorderWidth(BorderWidth::Thick), "6 pixels"),
 ];
 
 const STROKE_WIDTH_CHOICES: [(Property, &str); 4] = [

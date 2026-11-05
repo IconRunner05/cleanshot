@@ -364,14 +364,42 @@ impl SpotlightDim {
     }
 }
 
-/// The colour a shape is drawn in, its stroke width in image pixels, and whether it casts a
-/// shadow (D-114).
+/// The colour a shape is drawn in, its stroke width in image pixels, whether it casts a
+/// shadow (D-114), and its border (D-131).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
     pub color: Color,
     pub stroke_width: f32,
-    // D-114: only Look::dress turns it on, and only for a shape that casts a shadow.
+    // D-114, D-131: only Look::style_for sets them, and only for a shape that takes them.
     shadow: bool,
+    border: Option<Border>,
+}
+
+/// An outline in a second colour round a shape, drawn under it (D-131).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Border {
+    pub color: Color,
+    pub width: BorderWidth,
+}
+
+/// How far a border reaches out from its shape (D-131).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BorderWidth {
+    Thin,
+    Medium,
+    Thick,
+}
+
+impl BorderWidth {
+    /// The width in image pixels.
+    #[must_use]
+    pub const fn pixels(self) -> f32 {
+        match self {
+            Self::Thin => 2.0,
+            Self::Medium => 4.0,
+            Self::Thick => 6.0,
+        }
+    }
 }
 
 // D-114: a shape's shadow is smaller than the image frame's (D-80).
@@ -383,13 +411,14 @@ impl Style {
     /// The shadow's opacity where the shape fully covers it: black at 30%.
     pub const SHADOW_ALPHA: f32 = 0.3;
 
-    /// A style casting no shadow.
+    /// A style casting no shadow, with no border.
     #[must_use]
     pub const fn new(color: Color, stroke_width: f32) -> Self {
         Self {
             color,
             stroke_width,
             shadow: false,
+            border: None,
         }
     }
 
@@ -401,6 +430,16 @@ impl Style {
 
     pub(crate) fn with_shadow(self, shadow: bool) -> Self {
         Self { shadow, ..self }
+    }
+
+    /// The shape's border, if it has one.
+    #[must_use]
+    pub fn border(&self) -> Option<Border> {
+        self.border
+    }
+
+    pub(crate) fn with_border(self, border: Option<Border>) -> Self {
+        Self { border, ..self }
     }
 }
 

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::document::{
-    Color, Fill, HighlightStrength, RedactMode, RedactStrength, Shape, ShapeEntry, ShapeId, Style,
+    Border, BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength, Shape,
+    ShapeEntry, ShapeId, Style,
 };
 use crate::history::Command;
 use crate::text::{Alignment, DEFAULT_TEXT_SIZE, TextBlock};
@@ -22,6 +23,13 @@ pub(crate) const HIGHLIGHTER_YELLOW: Color = Color {
     a: 255,
 };
 
+pub(crate) const WHITE: Color = Color {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 255,
+};
+
 /// How a tool draws its next shape: what the property strip sets for it (CHARTER 4).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Look {
@@ -33,6 +41,9 @@ pub struct Look {
     text_size: f32,
     alignment: Alignment,
     shadow: bool,
+    border: bool,
+    border_color: Color,
+    border_width: BorderWidth,
 }
 
 impl Look {
@@ -63,6 +74,9 @@ impl Look {
             text_size: DEFAULT_TEXT_SIZE,
             alignment: Alignment::default(),
             shadow: false,
+            border: false,
+            border_color: WHITE,
+            border_width: BorderWidth::Thin,
         }
     }
 
@@ -70,6 +84,12 @@ impl Look {
     #[must_use]
     pub fn shadow(&self) -> bool {
         self.shadow
+    }
+
+    /// Whether this look's shapes have a border, where the shape can have one (D-131).
+    #[must_use]
+    pub fn border(&self) -> bool {
+        self.border
     }
 
     #[must_use]
@@ -150,11 +170,18 @@ impl Look {
         (shape, style)
     }
 
-    /// The style `tool`'s shapes are drawn in: this look's, with its shadow where they cast
-    /// one (D-114).
+    /// The style `tool`'s shapes are drawn in: this look's, with its shadow (D-114) and border
+    /// (D-131) where they take them.
     #[must_use]
     pub fn style_for(&self, tool: Tool) -> Style {
-        self.style.with_shadow(self.shadow && casts_shadow(tool))
+        let takes = takes_shadow_and_border(tool);
+        let border = Border {
+            color: self.border_color,
+            width: self.border_width,
+        };
+        self.style
+            .with_shadow(self.shadow && takes)
+            .with_border((self.border && takes).then_some(border))
     }
 
     fn dress_text(&self, block: &TextBlock) -> TextBlock {
@@ -205,6 +232,15 @@ impl Look {
                 ..self
             },
             Property::Shadow(shadow) => Self { shadow, ..self },
+            Property::Border(border) => Self { border, ..self },
+            Property::BorderColor(border_color) => Self {
+                border_color,
+                ..self
+            },
+            Property::BorderWidth(border_width) => Self {
+                border_width,
+                ..self
+            },
             Property::Alignment(alignment) => Self { alignment, ..self },
         })
     }
@@ -213,8 +249,17 @@ impl Look {
     /// from `rest`.
     fn of(entry: &ShapeEntry, rest: Self) -> Self {
         let look = Self {
-            style: entry.style.with_shadow(false),
+            style: entry.style.with_shadow(false).with_border(None),
             shadow: entry.style.shadow(),
+            border: entry.style.border().is_some(),
+            border_color: entry
+                .style
+                .border()
+                .map_or(rest.border_color, |border| border.color),
+            border_width: entry
+                .style
+                .border()
+                .map_or(rest.border_width, |border| border.width),
             ..rest
         };
         match &entry.shape {
@@ -262,10 +307,13 @@ pub enum Property {
     TextSize(f32),
     Shadow(bool),
     Alignment(Alignment),
+    Border(bool),
+    BorderColor(Color),
+    BorderWidth(BorderWidth),
 }
 
-/// Whether the shapes `tool` draws can cast a shadow (D-114).
-fn casts_shadow(tool: Tool) -> bool {
+/// Whether the shapes `tool` draws can cast a shadow (D-114) and have a border (D-131).
+fn takes_shadow_and_border(tool: Tool) -> bool {
     match tool {
         Tool::Arrow
         | Tool::Line
@@ -629,7 +677,7 @@ mod tests {
         assert!(!shadow_of(Tool::Highlighter), "nor does a highlight");
         for tool in TOOLS_FOR_TEST {
             let offered = Setting::for_tool(tool).contains(&Setting::Shadow);
-            assert_eq!(offered, casts_shadow(tool), "{tool:?}");
+            assert_eq!(offered, takes_shadow_and_border(tool), "{tool:?}");
         }
         let Some(Command::Add { shape, style }) = drawn(&looks, Tool::Arrow) else {
             panic!("an arrow");
@@ -722,6 +770,63 @@ mod tests {
             panic!("a new text box");
         };
         assert_eq!((size, style.color), (36.0, BLUE));
+    }
+
+    #[test]
+    fn d131_a_border_goes_where_a_shadow_can_in_its_own_colour_and_width_one_step_per_change() {
+        let mut looks = Looks::default();
+        for property in [
+            Property::Border(true),
+            Property::BorderColor(BLUE),
+            Property::BorderWidth(BorderWidth::Thick),
+        ] {
+            for tool in TOOLS_FOR_TEST {
+                looks.set(property, tool, None).unwrap();
+            }
+        }
+        for tool in TOOLS_FOR_TEST {
+            let border = looks.look(tool).style_for(tool).border();
+            let expected = takes_shadow_and_border(tool).then_some(Border {
+                color: BLUE,
+                width: BorderWidth::Thick,
+            });
+            assert_eq!(border, expected, "{tool:?}");
+        }
+        let style = Look::default_for(Tool::Rectangle).style();
+        let plain = entry(
+            Shape::Rect {
+                rect: AREA,
+                fill: Fill::Hollow,
+            },
+            style,
+        );
+        let mut fresh = Looks::default();
+        let bordered = fresh.set(Property::Border(true), Tool::Select, Some(&plain));
+        let Ok(Some(Command::Replace { style: given, .. })) = bordered else {
+            panic!("one replace of the rectangle, not {bordered:?}");
+        };
+        let white_thin = Border {
+            color: WHITE,
+            width: BorderWidth::Thin,
+        };
+        assert_eq!(given.border(), Some(white_thin));
+        let with_border = entry(plain.shape.clone(), given);
+        let (_, shown) = fresh.shown(Tool::Select, Some(&with_border));
+        assert!(shown.border() && shown.has(Property::BorderColor(WHITE)));
+        let thick = fresh.set(
+            Property::BorderWidth(BorderWidth::Thick),
+            Tool::Select,
+            Some(&with_border),
+        );
+        let Ok(Some(Command::Replace { style: thicker, .. })) = thick else {
+            panic!("one replace, not {thick:?}");
+        };
+        assert_eq!(
+            thicker.border().map(|border| (border.color, border.width)),
+            Some((WHITE, BorderWidth::Thick)),
+            "the colour is kept"
+        );
+        assert_eq!(thicker.color, given.color, "the shape's own colour is kept");
     }
 
     #[test]

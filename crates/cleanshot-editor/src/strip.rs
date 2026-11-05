@@ -4,9 +4,9 @@ use cleanshot_core::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Div, ElementId, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
-    RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled, Toggled, Window, anchored,
-    deferred, div, point, px,
+    AnyElement, App, Div, ElementId, Entity, InteractiveElement, IntoElement, KeyDownEvent,
+    ParentElement, RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled, Toggled, Window,
+    anchored, deferred, div, point, px,
 };
 
 use crate::canvas::rgba;
@@ -14,10 +14,11 @@ use crate::theme::{ACCENT, Theme};
 use crate::toolbar::panel;
 use crate::tooltip::{tooltip_text, with_tooltip};
 
-/// The property strip under the toolbar (CHARTER 4, D-55): a radio group for each of
-/// `settings`, with `look`'s values checked, then the document's spotlight `dim` where there is
-/// one to show (D-123), then its frame toggles (F-44). `on_set` is called with the choice picked
-/// and `on_document` with the document change, by click, Enter or Space.
+/// The property strip under the toolbar (CHARTER 4, D-55): a group for each of `settings`, with
+/// `look`'s values checked, then the document's spotlight `dim` where there is one to show
+/// (D-123), then the shape's shadow and border where `settings` has them, or else the image's
+/// frame toggles (F-44, D-131). `on_set` is called with the choice picked and `on_document`
+/// with the document change, by click, Enter or Space.
 pub(crate) fn property_strip(
     settings: &[Setting],
     look: Look,
@@ -27,53 +28,124 @@ pub(crate) fn property_strip(
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
     on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
-    let groups = settings
+    let (shape, own): (Vec<Setting>, Vec<Setting>) = settings
         .iter()
-        .enumerate()
-        .map(|(index, &setting)| match setting {
-            Setting::Shadow => {
+        .partition(|&&setting| in_shape_group(setting));
+    let groups = own.iter().enumerate().map(|(index, &setting)| {
+        group(setting.name(), Role::Group, index > 0, theme).child(controls(
+            setting,
+            look,
+            theme,
+            on_set.clone(),
+        ))
+    });
+    let after = !own.is_empty() || dim.is_some();
+    let last = if shape.is_empty() {
+        image_frame_group(frame, after, theme, on_document.clone())
+    } else {
+        group(SHAPE, Role::Group, after, theme)
+            .child(group_label(SHAPE, theme))
+            .children(
+                shape
+                    .iter()
+                    .map(|&setting| controls(setting, look, theme, on_set.clone())),
+            )
+    };
+    panel(theme)
+        .id("property-strip")
+        .role(Role::Toolbar)
+        .aria_label("Properties")
+        .gap(px(8.0))
+        .children(groups)
+        .children(dim.map(|dim| dim_group(dim, !own.is_empty(), theme, on_document)))
+        .child(last)
+}
+
+/// Whether `setting` sits in the Shape group, which takes the image frame's place (D-131).
+fn in_shape_group(setting: Setting) -> bool {
+    match setting {
+        Setting::Shadow | Setting::Border | Setting::BorderColor | Setting::BorderWidth => true,
+        Setting::Color
+        | Setting::StrokeWidth
+        | Setting::Fill
+        | Setting::Redact
+        | Setting::RedactStrength
+        | Setting::HighlightStrength
+        | Setting::TextSize
+        | Setting::Alignment
+        | Setting::HorizontalAlignment => false,
+    }
+}
+
+/// The buttons that set `setting`: a check box for an on-or-off one, the alignment picker, or
+/// a radio group of its choices with the box to type a value where it takes one.
+fn controls(
+    setting: Setting,
+    look: Look,
+    theme: Theme,
+    on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
+) -> AnyElement {
+    let name = setting.name();
+    let check = |checked: bool, toggled: Property| {
+        let on_set = on_set.clone();
+        strip_button(name.to_owned(), Role::CheckBox, name, checked, theme)
+            .on_click(move |_, window, cx| on_set(toggled, window, cx))
+            .child(div().text_xs().text_color(theme.text).child(name))
+            .into_any_element()
+    };
+    match setting {
+        Setting::Shadow => check(look.shadow(), Property::Shadow(!look.shadow())),
+        Setting::Border => check(look.border(), Property::Border(!look.border())),
+        Setting::Alignment | Setting::HorizontalAlignment => AlignmentPicker {
+            setting,
+            look,
+            theme,
+            on_set,
+        }
+        .into_any_element(),
+        Setting::Color
+        | Setting::StrokeWidth
+        | Setting::Fill
+        | Setting::Redact
+        | Setting::RedactStrength
+        | Setting::HighlightStrength
+        | Setting::TextSize
+        | Setting::BorderColor
+        | Setting::BorderWidth => {
+            let choices = setting.choices().iter().map(|&(property, choice)| {
                 let on_set = on_set.clone();
-                let toggled = Property::Shadow(!look.shadow());
-                let name = setting.name();
-                let check =
-                    strip_button(name.to_owned(), Role::CheckBox, name, look.shadow(), theme)
-                        .on_click(move |_, window, cx| on_set(toggled, window, cx))
-                        .child(div().text_xs().text_color(theme.text).child(name));
-                group(name, Role::Group, index > 0, theme).child(check)
-            }
-            Setting::Alignment | Setting::HorizontalAlignment => {
-                group(setting.name(), Role::Group, index > 0, theme).child(AlignmentPicker {
-                    setting,
-                    look,
-                    theme,
-                    on_set: on_set.clone(),
-                })
-            }
-            Setting::Color
-            | Setting::StrokeWidth
-            | Setting::Fill
-            | Setting::Redact
-            | Setting::RedactStrength
-            | Setting::HighlightStrength
-            | Setting::TextSize => {
-                let choices = setting.choices().iter().map(|&(property, name)| {
-                    let on_set = on_set.clone();
-                    let id = format!("{}: {name}", setting.name());
-                    strip_button(id, Role::RadioButton, name, look.has(property), theme)
-                        .on_click(move |_, window, cx| on_set(property, window, cx))
-                        .child(swatch(property, name, theme))
-                });
-                let typed = setting.typed(&look).map(|typed| TypedField {
-                    setting,
-                    typed,
-                    theme,
-                    on_set: on_set.clone(),
-                });
-                group(setting.name(), Role::RadioGroup, index > 0, theme)
-                    .children(choices)
-                    .children(typed)
-            }
-        });
+                let id = format!("{name}: {choice}");
+                strip_button(id, Role::RadioButton, choice, look.has(property), theme)
+                    .on_click(move |_, window, cx| on_set(property, window, cx))
+                    .child(swatch(property, choice, theme))
+            });
+            let typed = setting.typed(&look).map(|typed| TypedField {
+                setting,
+                typed,
+                theme,
+                on_set: on_set.clone(),
+            });
+            div()
+                .id(ElementId::Name(format!("{name}: choices").into()))
+                .role(Role::RadioGroup)
+                .aria_label(name)
+                .flex()
+                .items_center()
+                .gap(px(2.0))
+                .children(choices)
+                .children(typed)
+                .into_any_element()
+        }
+    }
+}
+
+/// The image frame's Border and Shadow, shown when the strip has no shape to act on (F-44).
+fn image_frame_group(
+    frame: Frame,
+    after: bool,
+    theme: Theme,
+    on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
+) -> Stateful<Div> {
     let toggles = [
         (
             "Border",
@@ -104,30 +176,22 @@ pub(crate) fn property_strip(
         .on_click(move |_, window, cx| on_document(Command::SetFrame(toggled), window, cx))
         .child(div().text_xs().text_color(theme.text).child(name))
     });
-    panel(theme)
-        .id("property-strip")
-        .role(Role::Toolbar)
-        .aria_label("Properties")
-        .gap(px(8.0))
-        .children(groups)
-        .children(dim.map(|dim| dim_group(dim, !settings.is_empty(), theme, on_document)))
-        .child(
-            group(
-                IMAGE_FRAME,
-                Role::Group,
-                !settings.is_empty() || dim.is_some(),
-                theme,
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.text)
-                    .pr(px(4.0))
-                    .child(IMAGE_FRAME),
-            )
-            .children(toggles),
-        )
+    group(IMAGE_FRAME, Role::Group, after, theme)
+        .child(group_label(IMAGE_FRAME, theme))
+        .children(toggles)
 }
+
+/// A group's name, shown at its start.
+fn group_label(name: &'static str, theme: Theme) -> Div {
+    div()
+        .text_xs()
+        .text_color(theme.text)
+        .pr(px(4.0))
+        .child(name)
+}
+
+/// What the strip calls the group of the shape's own shadow and border (D-131).
+const SHAPE: &str = "Shape";
 
 /// The button showing where text sits in its box, which opens a grid of `setting`'s choices,
 /// each drawn as where it puts the lines (D-129). A pick or a press outside the grid closes it.
@@ -429,7 +493,7 @@ fn strip_button(
 /// How a choice looks on its button: the colour, the line width, the fill, or its name.
 fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElement {
     match property {
-        Property::Color(color) => div()
+        Property::Color(color) | Property::BorderColor(color) => div()
             .size(px(16.0))
             .rounded_full()
             .bg(rgba(color))
@@ -438,15 +502,21 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
         Property::StrokeWidth(width) => {
             div().w(px(16.0)).h(px(width)).rounded_full().bg(theme.text)
         }
+        Property::BorderWidth(width) => div()
+            .w(px(16.0))
+            .h(px(width.pixels()))
+            .rounded_full()
+            .bg(theme.text),
         Property::Fill(Fill::Hollow) => div()
             .size(px(14.0))
             .rounded(px(3.0))
             .border_2()
             .border_color(theme.text),
         Property::Fill(Fill::Solid) => div().size(px(14.0)).rounded(px(3.0)).bg(theme.text),
-        Property::Redact(_) | Property::HighlightStrength(_) | Property::Shadow(_) => {
-            div().text_xs().text_color(theme.text).child(name)
-        }
+        Property::Redact(_)
+        | Property::HighlightStrength(_)
+        | Property::Shadow(_)
+        | Property::Border(_) => div().text_xs().text_color(theme.text).child(name),
         Property::TextSize(size) => div()
             .text_xs()
             .text_color(theme.text)

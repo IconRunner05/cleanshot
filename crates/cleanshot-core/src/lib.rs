@@ -39,9 +39,9 @@ pub use delivery::{
     saving_off_notice, saving_off_reason,
 };
 pub use document::{
-    Color, Document, Fill, Frame, HighlightStrength, ImageError, PointF, RectF, RedactMode,
-    RedactStrength, RgbaImage, Shape, ShapeEntry, ShapeId, SpotlightDim, Style, areas_outside,
-    arrow_head, dimmed_areas, step_numbers,
+    Border, BorderWidth, Color, Document, Fill, Frame, HighlightStrength, ImageError, PointF,
+    RectF, RedactMode, RedactStrength, RgbaImage, Shape, ShapeEntry, ShapeId, SpotlightDim, Style,
+    areas_outside, arrow_head, dimmed_areas, step_numbers,
 };
 pub use drag::{Drag, Press, Start, text_reopened_at};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
