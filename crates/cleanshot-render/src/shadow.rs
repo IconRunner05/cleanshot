@@ -1,4 +1,7 @@
-use cleanshot_core::{Color, RgbaImage, ShapeEntry, Style};
+use cleanshot_core::{
+    Color, GlyphMask, PointF, RectF, RgbaImage, Shape, ShapeEntry, Style, TextMasks, arrow_head,
+    moved,
+};
 use tiny_skia::{IntRect, Pixmap};
 
 use crate::flatten::{draw, source_over, straight};
@@ -15,12 +18,224 @@ pub fn shape_shadow(entry: &ShapeEntry, width: u32, height: u32) -> Result<Optio
     if !entry.style.shadow() {
         return Ok(None);
     }
-    let too_large = || Error::TooLarge { width, height };
-    let mut layer = Pixmap::new(width, height).ok_or_else(too_large)?;
-    draw(&mut layer, entry, None)?;
-    let mut shadow = Pixmap::new(width, height).ok_or_else(too_large)?;
-    cast_shadow(&mut shadow, &layer);
-    drawn_patch(&shadow)
+    let (spread, _) = gaussian(Style::SHADOW_BLUR);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the blur's spread and offset are a few pixels"
+    )]
+    let falls = (spread + Style::SHADOW_OFFSET) as f32;
+    let Some(mut alone) = Alone::new(entry, width, height, falls, None)? else {
+        return Ok(None);
+    };
+    draw(&mut alone.pixmap, &alone.entry, None)?;
+    let mut shadow = alone.blank()?;
+    cast_shadow(&mut shadow, &alone.pixmap);
+    alone.patch(&shadow)
+}
+
+/// One shape moved onto a transparent pixmap over the part of the image it can paint, so a
+/// patch costs what the shape covers rather than what the image does.
+pub(crate) struct Alone {
+    pub(crate) pixmap: Pixmap,
+    pub(crate) entry: ShapeEntry,
+    pub(crate) masks: Option<TextMasks>,
+    left: u32,
+    top: u32,
+}
+
+impl Alone {
+    /// `entry` and its text `masks` moved onto a pixmap over the part of a `width` by `height`
+    /// image within its stroke, border and `beyond` more pixels of its shape; `None` when that
+    /// part misses the image. The move is by whole pixels, so what is drawn is what the whole
+    /// image would show there.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TooLarge`] if that part exceeds the renderer's size limit.
+    pub(crate) fn new(
+        entry: &ShapeEntry,
+        width: u32,
+        height: u32,
+        beyond: f32,
+        masks: Option<&TextMasks>,
+    ) -> Result<Option<Self>, Error> {
+        let Some(area) = painted_box(entry, masks) else {
+            return Ok(None);
+        };
+        let border = entry
+            .style
+            .border()
+            .map_or(0.0, |border| f32::from(border.width.pixels()));
+        let margin = entry.style.stroke_width + 2.0 * border + beyond + ANTIALIASING;
+        let Some((left, top, right, bottom)) = pixel_span(area, margin, width, height) else {
+            return Ok(None);
+        };
+        let (across, down) = (right - left, bottom - top);
+        let pixmap = Pixmap::new(across, down).ok_or(Error::TooLarge {
+            width: across,
+            height: down,
+        })?;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "image coordinates stay below 2^24, where f32 is exact"
+        )]
+        let offset = PointF {
+            x: -(left as f32),
+            y: -(top as f32),
+        };
+        let shift = |at: u32| i32::try_from(at).expect("a pixmap's side fits an i32");
+        let masks = masks.map(|masks| {
+            let mut moved_masks = TextMasks::default();
+            if let Some(layers) = masks.layers(entry.id) {
+                let layers = layers
+                    .iter()
+                    .map(|layer| {
+                        GlyphMask::new(
+                            layer.left() - shift(left),
+                            layer.top() - shift(top),
+                            layer.width(),
+                            layer.height(),
+                            layer.coverage().to_vec(),
+                            layer.color(),
+                        )
+                        .expect("a moved copy keeps its coverage count")
+                    })
+                    .collect();
+                moved_masks.insert(entry.id, layers);
+            }
+            moved_masks
+        });
+        Ok(Some(Self {
+            pixmap,
+            entry: ShapeEntry {
+                id: entry.id,
+                shape: moved(&entry.shape, offset),
+                style: entry.style,
+            },
+            masks,
+            left,
+            top,
+        }))
+    }
+
+    /// A transparent pixmap the size of this one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TooLarge`] if this one is past the renderer's size limit.
+    pub(crate) fn blank(&self) -> Result<Pixmap, Error> {
+        let (width, height) = (self.pixmap.width(), self.pixmap.height());
+        Pixmap::new(width, height).ok_or(Error::TooLarge { width, height })
+    }
+
+    /// What is drawn on `pixmap`, the size of this one, as a patch of the whole image.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Output`] if the cut pixels do not form an image.
+    pub(crate) fn patch(&self, pixmap: &Pixmap) -> Result<Option<Patch>, Error> {
+        Ok(drawn_patch(pixmap)?.map(|patch| Patch {
+            left: patch.left + self.left,
+            top: patch.top + self.top,
+            pixels: patch.pixels,
+        }))
+    }
+}
+
+/// How far past its geometry antialiasing can touch a pixel.
+const ANTIALIASING: f32 = 2.0;
+
+/// The smallest box holding every point that places `entry`'s shape, its arrow head, its
+/// bubble's tail and its text's glyph `masks`; `None` for a pen stroke with no points.
+fn painted_box(entry: &ShapeEntry, masks: Option<&TextMasks>) -> Option<RectF> {
+    let corners = |rect: RectF| {
+        [
+            PointF {
+                x: rect.x,
+                y: rect.y,
+            },
+            PointF {
+                x: rect.x + rect.width,
+                y: rect.y + rect.height,
+            },
+        ]
+    };
+    let points: Vec<PointF> = match &entry.shape {
+        Shape::Line { from, to } => vec![*from, *to],
+        Shape::Arrow { from, to } => {
+            let mut points = vec![*from, *to];
+            points.extend(arrow_head(*from, *to, entry.style.stroke_width));
+            points
+        }
+        Shape::Rect { rect, .. }
+        | Shape::Ellipse { rect, .. }
+        | Shape::Highlight { rect, .. }
+        | Shape::Redact { rect, .. }
+        | Shape::Spotlight(rect) => corners(*rect).to_vec(),
+        Shape::Pen(points) => points.clone(),
+        Shape::Text(block) => {
+            let mut points = corners(block.extent()).to_vec();
+            for layer in masks
+                .and_then(|masks| masks.layers(entry.id))
+                .unwrap_or(&[])
+            {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "glyph mask coordinates stay below 2^24, where f32 is exact"
+                )]
+                let rect = RectF {
+                    x: layer.left() as f32,
+                    y: layer.top() as f32,
+                    width: layer.width() as f32,
+                    height: layer.height() as f32,
+                };
+                points.extend(corners(rect));
+            }
+            points
+        }
+        Shape::Step(step) => corners(step.circle()).to_vec(),
+        Shape::Bubble(bubble) => {
+            let mut points = corners(bubble.outline()).to_vec();
+            points.extend(bubble.tail_triangle().into_iter().flatten());
+            points
+        }
+    };
+    let (first, rest) = points.split_first()?;
+    let (low, high) = rest.iter().fold((*first, *first), |(low, high), point| {
+        (
+            PointF {
+                x: low.x.min(point.x),
+                y: low.y.min(point.y),
+            },
+            PointF {
+                x: high.x.max(point.x),
+                y: high.y.max(point.y),
+            },
+        )
+    });
+    Some(RectF {
+        x: low.x,
+        y: low.y,
+        width: high.x - low.x,
+        height: high.y - low.y,
+    })
+}
+
+/// The whole pixels of a `width` by `height` image within `margin` of `area`, as left, top,
+/// right and bottom edges; `None` if there are none.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "each edge is clamped into the image before it becomes a pixel index"
+)]
+fn pixel_span(area: RectF, margin: f32, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+    let edge = |at: f32, limit: u32| at.clamp(0.0, limit as f32) as u32;
+    let left = edge((area.x - margin).floor(), width);
+    let top = edge((area.y - margin).floor(), height);
+    let right = edge((area.x + area.width + margin).ceil(), width);
+    let bottom = edge((area.y + area.height + margin).ceil(), height);
+    (right > left && bottom > top).then_some((left, top, right, bottom))
 }
 
 /// What is drawn on `pixmap`, cut to the smallest rectangle holding it; `None` if nothing is.
@@ -159,6 +374,97 @@ mod tests {
 
     fn byte(image: &RgbaImage, x: u32, y: u32, channel: usize) -> u8 {
         image.pixels()[(y * image.width() + x) as usize * 4 + channel]
+    }
+
+    #[test]
+    fn p07_a_shadow_or_border_patch_is_what_drawing_on_the_whole_image_gives() {
+        use std::sync::Arc;
+
+        use cleanshot_core::{
+            BorderWidth, Bubble, Command, Document, Fill, HighlightStrength, History, Look,
+            Property, TextBlock, Tool,
+        };
+
+        use crate::border::{draw_border, shape_border};
+
+        let (width, height) = (120, 90);
+        let point = |x, y| PointF { x, y };
+        let rect = |x, y, width, height| RectF {
+            x,
+            y,
+            width,
+            height,
+        };
+        let block = |at| TextBlock::new(at, "hi".into(), 12.0, 4.0).unwrap();
+        let shapes = [
+            Shape::Arrow {
+                from: point(10.3, 12.7),
+                to: point(70.6, 40.2),
+            },
+            Shape::Arrow {
+                from: point(90.5, 20.5),
+                to: point(140.0, 60.0),
+            },
+            Shape::Line {
+                from: point(-15.0, -8.0),
+                to: point(30.4, 25.9),
+            },
+            Shape::Rect {
+                rect: rect(20.5, 50.25, 30.0, 20.0),
+                fill: Fill::Hollow,
+            },
+            Shape::Ellipse {
+                rect: rect(60.1, 55.7, 40.0, 30.0),
+                fill: Fill::Solid,
+            },
+            Shape::Pen(vec![point(5.5, 80.0), point(25.0, 60.3), point(45.8, 88.0)]),
+            Shape::Text(block(point(70.0, 5.0))),
+            Shape::Bubble(Bubble::new(block(point(30.0, 30.0)), point(8.0, 70.0))),
+            Shape::Highlight {
+                rect: rect(40.4, 10.6, 25.0, 9.0),
+                strength: HighlightStrength::Strong,
+            },
+            Shape::Spotlight(rect(85.2, 40.8, 30.0, 49.5)),
+        ];
+        for shape in shapes {
+            let tool = Tool::drawing(&shape);
+            let (shape, style) = Look::default_for(tool)
+                .with(Property::Shadow(true))
+                .and_then(|look| look.with(Property::Border(true)))
+                .and_then(|look| look.with(Property::BorderWidth(BorderWidth::Thick)))
+                .unwrap()
+                .dress(shape);
+            let mut history = History::new(Document::new(Arc::new(
+                RgbaImage::new(width, height, vec![255; (width * height * 4) as usize]).unwrap(),
+            )));
+            history.apply(Command::Add { shape, style }).unwrap();
+            let entry = &history.document().shapes()[0];
+            let mut masks = TextMasks::default();
+            let glyph = GlyphMask::new(71, 6, 9, 11, vec![180; 99], None).unwrap();
+            masks.insert(entry.id, vec![glyph]);
+
+            let mut layer = Pixmap::new(width, height).unwrap();
+            draw_border(&mut layer, entry, Some(&masks)).unwrap();
+            assert_eq!(
+                shape_border(entry, width, height, Some(&masks)).unwrap(),
+                drawn_patch(&layer)
+                    .unwrap()
+                    .filter(|_| entry.style.border().is_some()),
+                "{tool:?} border"
+            );
+
+            let mut layer = Pixmap::new(width, height).unwrap();
+            draw(&mut layer, entry, None).unwrap();
+            let mut shadow = Pixmap::new(width, height).unwrap();
+            cast_shadow(&mut shadow, &layer);
+            assert_eq!(
+                shape_shadow(entry, width, height).unwrap(),
+                drawn_patch(&shadow)
+                    .unwrap()
+                    .filter(|_| entry.style.shadow()),
+                "{tool:?} shadow"
+            );
+        }
     }
 
     #[test]

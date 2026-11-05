@@ -4,7 +4,7 @@ use cleanshot_core::{
 use tiny_skia::{BlendMode, LineCap, LineJoin, Path, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::flatten::{glyphs, paint, polyline, rounded_rect, skia_rect};
-use crate::shadow::drawn_patch;
+use crate::shadow::Alone;
 use crate::{Error, Patch};
 
 /// The border `entry` has on an image of `width` by `height`, drawn alone as the export draws
@@ -24,9 +24,11 @@ pub fn shape_border(
     if entry.style.border().is_none() {
         return Ok(None);
     }
-    let mut layer = Pixmap::new(width, height).ok_or(Error::TooLarge { width, height })?;
-    draw_border(&mut layer, entry, masks)?;
-    drawn_patch(&layer)
+    let Some(mut alone) = Alone::new(entry, width, height, 0.0, masks)? else {
+        return Ok(None);
+    };
+    draw_border(&mut alone.pixmap, &alone.entry, alone.masks.as_ref())?;
+    alone.patch(&alone.pixmap)
 }
 
 /// Draws `entry`'s border, if it has one, where the shape is about to be drawn over it
