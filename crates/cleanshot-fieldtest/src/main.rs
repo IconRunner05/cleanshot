@@ -14,8 +14,8 @@ use cleanshot_win::capture::{Method, capture_all};
 use cleanshot_win::field_test::dpi::{copy_at_scale, set_scale};
 use cleanshot_win::field_test::{
     Driver, adapters, animations_on, capture_device_costs, clipboard_round_trip,
-    copies_while_watched, d3d11_feature_level, drive_tray, exit_running_tray, monitors,
-    open_and_cancel_overlays, rendering_params, windows_version,
+    copies_while_watched, d3d11_feature_level, drive_tray, edit_and_close, exit_running_tray,
+    monitors, open_and_cancel_overlays, rendering_params, windows_version,
 };
 use cleanshot_win::log::since_start;
 
@@ -38,6 +38,9 @@ const START_SETTLE: Duration = Duration::from_secs(3);
 /// How long after the last overlay closes the exe has to log its P-04 after-use sample, which
 /// it takes 10 s after.
 const AFTER_USE_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long after the editor closes the exe has to log its P-04 after-editor sample, which it
+/// takes 15 s after.
+const AFTER_EDITOR_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long one copy may take to be logged (P-02) before it counts as failed.
 const COPY_TIMEOUT: Duration = Duration::from_secs(2);
 /// How many times `--start-split` starts this exe.
@@ -50,12 +53,8 @@ fn main() {
         [_, flag, log] if flag == "--exit" => std::process::exit(exit_from_tray(Path::new(log))),
         [_, flag] if flag == "--entered" => std::process::exit(print_entered()),
         [_, flag] if flag == "--start-split" => std::process::exit(start_split()),
-        [_, flag, log] if flag == "--overlays" => {
-            if let Err(error) = open_overlays_after_start(Path::new(log)) {
-                eprintln!("{error}");
-                std::process::exit(1);
-            }
-            return;
+        [_, flag, log] if flag == "--overlays" || flag == "--editor" => {
+            std::process::exit(after_start(flag, Path::new(log)))
         }
         [_, flag, times, log] if flag == "--copies-while-watched" => {
             let Ok(times) = times.parse() else {
@@ -103,7 +102,7 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: cleanshot-fieldtest --report PATH | --overlays LOG | --exit LOG \
+                "usage: cleanshot-fieldtest --report PATH | --overlays LOG | --editor LOG | --exit LOG \
                  | --start-split \
                  | --budgets [--runner] [--exe EXE] [--idle LOG] [--overlays LOG] \
                  [--copy P02_OUTPUT] [--bench REPORT] \
@@ -268,19 +267,26 @@ fn log_text(path: &str) -> String {
     })
 }
 
+/// Runs `--overlays` or `--editor` against the exe logging to `log`; the exit code.
+fn after_start(flag: &str, log: &Path) -> i32 {
+    let run = if flag == "--overlays" {
+        open_overlays_after_start
+    } else {
+        edit_after_start
+    };
+    run(log).map_or_else(
+        |error| {
+            eprintln!("{error}");
+            1
+        },
+        |()| 0,
+    )
+}
+
 /// `--overlays LOG`: once the exe's tray is ready and settled (D-88), opens and cancels
 /// [`budgets::OVERLAY_PRESSES`] overlays, then waits for the after-use P-04 sample.
 fn open_overlays_after_start(log: &Path) -> Result<(), String> {
-    let started = Instant::now();
-    while !(log.exists() && perf_lines(log, "P-03", "tray_ready_ms") > 0) {
-        if started.elapsed() >= TRAY_TIMEOUT {
-            return Err(format!(
-                "the exe logged no P-03 tray_ready_ms line within {TRAY_TIMEOUT:?}"
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    std::thread::sleep(START_SETTLE);
+    wait_for_tray(log)?;
     let shown = |press| perf_lines(log, "P-01", "overlay_visible_ms") >= press;
     open_and_cancel_overlays(
         budgets::OVERLAY_PRESSES,
@@ -296,6 +302,45 @@ fn open_overlays_after_start(log: &Path) -> Result<(), String> {
     {
         std::thread::sleep(Duration::from_millis(250));
     }
+    Ok(())
+}
+
+/// P-04 after the editor: once the tray is ready, opens an editor on a full-screen capture,
+/// closes it, and waits for the exe's after-editor sample, which is reported, not judged.
+fn edit_after_start(log: &Path) -> Result<(), String> {
+    wait_for_tray(log)?;
+    edit_and_close(
+        OVERLAY_TIMEOUT,
+        || perf_lines(log, "P-01", "overlay_visible_ms") > 0,
+        || perf_lines(log, "P-07", "first_frame_ms") > 0,
+    )
+    .map_err(|error| error.to_string())?;
+    let waited = Instant::now();
+    while perf_lines(log, "P-04", "after_editor_private_bytes") == 0 {
+        if waited.elapsed() >= AFTER_EDITOR_TIMEOUT {
+            return Err(format!(
+                "the exe logged no P-04 after_editor_private_bytes line within \
+                 {AFTER_EDITOR_TIMEOUT:?} of the editor's close"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(())
+}
+
+/// D-88: waits for the exe's tray-ready line, then [`START_SETTLE`], so the first press is not
+/// timed during start-up.
+fn wait_for_tray(log: &Path) -> Result<(), String> {
+    let started = Instant::now();
+    while !(log.exists() && perf_lines(log, "P-03", "tray_ready_ms") > 0) {
+        if started.elapsed() >= TRAY_TIMEOUT {
+            return Err(format!(
+                "the exe logged no P-03 tray_ready_ms line within {TRAY_TIMEOUT:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(START_SETTLE);
     Ok(())
 }
 

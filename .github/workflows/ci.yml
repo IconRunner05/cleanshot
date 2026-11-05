@@ -261,6 +261,22 @@ jobs:
           (( ${exited:-0} == 0 )) || { echo "FAIL F-50: Cleanshot did not exit cleanly from its tray"; exit 1; }
           target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner --overlays "$run/cleanshot.log"
 
+      - name: Release exe logs its memory after an editor closes (P-04, reported, not judged)
+        shell: bash
+        run: |
+          run="$RUNNER_TEMP/editor"
+          mkdir -p "$run"
+          cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
+          printf '[hotkeys]\nfull_screen = "Ctrl+Shift+7"\n' > "$run/cleanshot.toml"
+          "$run/cleanshot.exe" --log &
+          # --editor presses Ctrl+Shift+7 then E, closes the editor once it has drawn, and waits
+          # for the after-editor sample the exe logs 15 s after the close.
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --editor "$run/cleanshot.log" || failed=$?
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --exit "$run/cleanshot.log" || true
+          taskkill //F //IM cleanshot.exe 2>/dev/null || true
+          cat "$run/cleanshot.log"
+          (( ${failed:-0} == 0 )) || { echo "FAIL P-04: the editor run stopped (exit ${failed})"; exit 1; }
+
       - name: Upload the probe report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

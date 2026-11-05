@@ -16,13 +16,13 @@ echo It opens and closes the capture overlay and an editor window, and it replac
 echo what is on the clipboard.
 pause
 
-del /q cleanshot.toml cleanshot.log idle.log p01.log overlays.txt p02.txt probe.md sac.txt split.txt results.txt 2>nul
+del /q cleanshot.toml cleanshot.log idle.log p01.log editor.log overlays.txt editor.txt p02.txt probe.md sac.txt split.txt results.txt 2>nul
 
 echo Smart App Control state: > sac.txt
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState >> sac.txt 2>&1
 
 rem The waits are pings: timeout refuses the redirected input of release.yml's trial run.
-echo [0/4] Warm-up start, not measured
+echo [0/5] Warm-up start, not measured
 rem D-97: the first start of a new exe waits for antivirus to scan it; P-03 is Cleanshot's own start.
 type nul > cleanshot.toml
 start "" cleanshot.exe --log
@@ -31,7 +31,7 @@ taskkill /IM cleanshot.exe /F >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 del /q cleanshot.log 2>nul
 
-echo [1/4] Idle start: P-03, P-04, P-05
+echo [1/5] Idle start: P-03, P-04, P-05
 start "" cleanshot.exe --log
 rem P-04 and P-05 are logged 10 s after the tray is ready, however long the start took.
 call :wait_for "perf P-05 " 120
@@ -39,7 +39,7 @@ taskkill /IM cleanshot.exe /F >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 move /y cleanshot.log idle.log >nul 2>&1
 
-echo [2/4] Hotkey to overlay, and memory after use: P-01, P-04
+echo [2/5] Hotkey to overlay, and memory after use: P-01, P-04
 > cleanshot.toml echo [hotkeys]
 >> cleanshot.toml echo region = "Ctrl+Shift+4"
 start "" cleanshot.exe --log
@@ -49,21 +49,31 @@ taskkill /IM cleanshot.exe /F >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 move /y cleanshot.log p01.log >nul 2>&1
 
-echo [3/4] Copy of a 4K region: P-02
+echo [3/5] Editor opened and closed, and memory after it: P-04, reported only
+> cleanshot.toml echo [hotkeys]
+>> cleanshot.toml echo full_screen = "Ctrl+Shift+7"
+start "" cleanshot.exe --log
+ping -n 4 127.0.0.1 >nul
+cleanshot-fieldtest.exe --editor cleanshot.log > editor.txt 2>&1
+taskkill /IM cleanshot.exe /F >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+move /y cleanshot.log editor.log >nul 2>&1
+
+echo [4/5] Copy of a 4K region: P-02
 p02.exe p02_ --nocapture > p02.txt 2>&1
 
-echo [4/4] Probe and editor bench: P-07, P-08, monitors and scaling
+echo [5/5] Probe and editor bench: P-07, P-08, monitors and scaling
 cleanshot-fieldtest.exe --report probe.md >nul 2>&1
 rem P-03: another exe's time to main beside Cleanshot's says what is the exe and what is this PC.
 cleanshot-fieldtest.exe --start-split > split.txt 2>&1
 
 cleanshot-fieldtest.exe --budgets --exe cleanshot.exe --idle idle.log --overlays p01.log --copy p02.txt --bench probe.md > results.txt 2>&1
-for %%F in (sac.txt probe.md split.txt overlays.txt p02.txt idle.log p01.log) do (
+for %%F in (sac.txt probe.md split.txt overlays.txt editor.txt p02.txt idle.log p01.log editor.log) do (
     >> results.txt echo.
     >> results.txt echo ===== %%F
     if exist %%F (type %%F >> results.txt) else (>> results.txt echo missing)
 )
-del /q cleanshot.toml cleanshot.log idle.log p01.log overlays.txt p02.txt probe.md sac.txt split.txt 2>nul
+del /q cleanshot.toml cleanshot.log idle.log p01.log editor.log overlays.txt editor.txt p02.txt probe.md sac.txt split.txt 2>nul
 
 echo.
 echo Done. Attach this file to a GitHub issue:

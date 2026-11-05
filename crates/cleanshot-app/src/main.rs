@@ -450,6 +450,27 @@ impl Session {
         );
     }
 
+    /// Under --log, logs the private working set past [`GRAPHICS_IDLE`] and
+    /// [`AFTER_USE_SAMPLE`] after an editor closed, if no capture starts before then; reported,
+    /// not judged (P-04).
+    fn sample_after_editor(self: Rc<Self>, cx: &mut cleanshot_editor::App) {
+        let started = self.captures_started.get();
+        cx.spawn(async move |cx| {
+            cx.background_executor()
+                .timer(GRAPHICS_IDLE + AFTER_USE_SAMPLE)
+                .await;
+            if self.captures_started.get() != started {
+                return;
+            }
+            let held = self.private_bytes();
+            self.log_memory("after_editor");
+            if let Some(held) = held {
+                self.perf(|_| format!("P-04 after_editor_private_bytes={held}"));
+            }
+        })
+        .detach();
+    }
+
     /// The settings a save uses: the user's, with the policy's folder and format where it sets
     /// them (F-57).
     fn saving_settings(&self) -> Settings {
@@ -628,7 +649,13 @@ fn open_editor(
         },
     );
     match opened {
-        Ok(editor) => to_front(session, "editor", editor.win32_handle()),
+        Ok(editor) => {
+            if session.log.borrow().is_some() {
+                let sampling = Rc::clone(session);
+                editor.on_closed(cx, move |cx| sampling.sample_after_editor(cx));
+            }
+            to_front(session, "editor", editor.win32_handle());
+        }
         Err(error) => session.warn(Warning::Failed("The editor could not open", &error)),
     }
 }

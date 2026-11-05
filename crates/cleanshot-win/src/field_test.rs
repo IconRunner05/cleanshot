@@ -30,7 +30,7 @@ use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
-    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_SHIFT,
+    VIRTUAL_KEY, VK_CONTROL, VK_E, VK_ESCAPE, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, FindWindowW, GetForegroundWindow, IsWindow, MSG, MsgWaitForMultipleObjects,
@@ -470,6 +470,55 @@ pub fn open_and_cancel_overlays(
     Ok(())
 }
 
+/// Why [`edit_and_close`] stopped.
+#[derive(Debug, thiserror::Error)]
+pub enum EditorRunError {
+    #[error("Windows refused the key events of {0}")]
+    KeysRefused(&'static str),
+    #[error("the full-screen press showed no overlay in time")]
+    OverlayNotShown,
+    #[error("the editor drew no first frame in time")]
+    NotDrawn,
+    #[error("no editor window was found to close: {0}")]
+    NotFound(windows::core::Error),
+    #[error("the editor could not be asked to close: {0}")]
+    NotClosed(windows::core::Error),
+}
+
+/// P-04 after the editor: presses [`FULL_SCREEN`] for another process's overlay over the whole
+/// monitor, then E to edit it, and once `drawn` holds closes the editor as Alt+F4 does. Waits up
+/// to `timeout` each for `shown` and `drawn`.
+///
+/// # Errors
+///
+/// [`EditorRunError`] for the first step that Windows refused or that did not happen in time.
+pub fn edit_and_close(
+    timeout: Duration,
+    shown: impl FnMut() -> bool,
+    drawn: impl FnMut() -> bool,
+) -> Result<(), EditorRunError> {
+    if press(&FULL_SCREEN) != 6 {
+        return Err(EditorRunError::KeysRefused("Ctrl+Shift+7"));
+    }
+    if !within(timeout, shown) {
+        return Err(EditorRunError::OverlayNotShown);
+    }
+    if press(&[VK_E]) != 2 {
+        return Err(EditorRunError::KeysRefused("E"));
+    }
+    if !within(timeout, drawn) {
+        return Err(EditorRunError::NotDrawn);
+    }
+    // D-110: GPUI's window class and the editor's fixed title, so no window's own title is read.
+    // SAFETY: a lookup by two 'static strings; no window is touched.
+    let editor = unsafe { FindWindowW(w!("Zed::Window"), w!("Cleanshot")) }
+        .map_err(EditorRunError::NotFound)?;
+    // WM_CLOSE, not Alt+F4 keys: the keys go to whatever is in front, which may be this console.
+    // SAFETY: WM_CLOSE carries no pointers.
+    unsafe { PostMessageW(Some(editor), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+        .map_err(EditorRunError::NotClosed)
+}
+
 fn within(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
     let start = Instant::now();
     while !done() {
@@ -523,8 +572,7 @@ fn pump_messages(wait: Duration) {
     }
 }
 
-/// Ctrl+Shift+7, the full-screen hotkey the CI copy steps give cleanshot.exe with
-/// `after_capture = "copy"` (F-07).
+/// Ctrl+Shift+7, the full-screen hotkey the field test's runs give cleanshot.exe (F-07).
 const FULL_SCREEN: [VIRTUAL_KEY; 3] = [VK_CONTROL, VK_SHIFT, VIRTUAL_KEY(0x37)];
 
 /// F-20 beside clipboard history: presses [`FULL_SCREEN`] `times` for the running
