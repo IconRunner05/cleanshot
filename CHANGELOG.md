@@ -80,6 +80,9 @@ section exists.
 
 ### Fixed
 
+- A shape's shadow was too faint to see under an arrow, a line or a hollow box. It now
+  falls a little further, with a tighter blur and a darker black, in the editor and in the
+  copied or saved image (F-44).
 - The editor could open behind the app you were in, so what you typed went to that app. The
   editor now opens in front with the keyboard, and so does Settings, also when it was already
   open (F-23, F-55).

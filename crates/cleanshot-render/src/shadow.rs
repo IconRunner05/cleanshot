@@ -162,6 +162,55 @@ mod tests {
     }
 
     #[test]
+    fn d114_a_line_drawn_or_selected_with_shadow_ticked_casts_one_dark_enough_to_see() {
+        use std::sync::Arc;
+
+        use cleanshot_core::{
+            Command, Document, History, Looks, PointF, Property, Shape, TextMasks, Tool,
+        };
+
+        let line = Shape::Line {
+            from: PointF { x: 20.0, y: 40.0 },
+            to: PointF { x: 180.0, y: 40.0 },
+        };
+        let white = RgbaImage::new(200, 80, vec![255; 200 * 80 * 4]).unwrap();
+        let mut history = History::new(Document::new(Arc::new(white)));
+        let mut looks = Looks::default();
+        let (shape, style) = looks.look(Tool::Line).dress(line.clone());
+        history.apply(Command::Add { shape, style }).unwrap();
+        let unshadowed = history.document().shapes()[0].clone();
+        let restyle = looks
+            .set(Property::Shadow(true), Tool::Select, Some(&unshadowed))
+            .unwrap()
+            .expect("ticking Shadow on a selected line restyles it");
+        history.apply(restyle).unwrap();
+        let (shape, style) = looks.look(Tool::Line).dress(line);
+        history.apply(Command::Add { shape, style }).unwrap();
+        let export = crate::flatten(history.document(), &TextMasks::default()).unwrap();
+        let below = 40 + Style::SHADOW_OFFSET + 2;
+        for entry in history.document().shapes() {
+            let patch = shape_shadow(entry, 200, 80).unwrap().expect("a shadow");
+            let darkest = patch
+                .pixels
+                .pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|[.., a]| *a)
+                .max();
+            assert!(
+                darkest >= Some(64),
+                "the editor's shadow is {darkest:?} of 255 at most"
+            );
+        }
+        let shaded = 255 - byte(export.image(), 100, below, 0);
+        assert!(
+            shaded >= 48,
+            "the export darkens white by {shaded} below the line"
+        );
+    }
+
+    #[test]
     fn d114_a_shadow_falls_below_the_shape_fades_out_and_leaves_the_rest_alone() {
         let mut layer = Pixmap::new(80, 60).unwrap();
         let mut paint = Paint::default();

@@ -405,11 +405,12 @@ impl BorderWidth {
 // D-114: a shape's shadow is smaller than the image frame's (D-80).
 impl Style {
     /// How far, in image pixels, a shape's shadow falls below it.
-    pub const SHADOW_OFFSET: u32 = 2;
-    /// The shadow's blur radius in image pixels: twice its standard deviation.
-    pub const SHADOW_BLUR: u32 = 8;
-    /// The shadow's opacity where the shape fully covers it: black at 30%.
-    pub const SHADOW_ALPHA: f32 = 0.3;
+    pub const SHADOW_OFFSET: u32 = 3;
+    /// The shadow's blur radius in image pixels: twice its standard deviation. Small enough
+    /// that a thin stroke's shadow stays dark enough to see.
+    pub const SHADOW_BLUR: u32 = 4;
+    /// The shadow's opacity where the shape fully covers it: black at 50%.
+    pub const SHADOW_ALPHA: f32 = 0.5;
 
     /// A style casting no shadow, with no border.
     #[must_use]
