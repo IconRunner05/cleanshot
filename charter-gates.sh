@@ -66,8 +66,8 @@ done < <(awk '
         id = substr(cell[1], 5) + 0
         rows++
         if (id in line_of) printf "D-%d is the id of the rows at lines %d and %d.\n", id, line_of[id], NR
-        status_allowed = "^(assumed|decided|decided [(](owner|owner approved|orchestrator)(, [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])?[)])$"
-        if (cell[4] !~ status_allowed) printf "D-%d at line %d has the Status \"%s\", not assumed, decided, or decided (owner or orchestrator, date).\n", id, NR, cell[4]
+        status_allowed = "^(assumed|decided [(]owner, [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][)])$"
+        if (cell[4] !~ status_allowed) printf "D-%d at line %d has the Status \"%s\", not assumed or decided (owner, YYYY-MM-DD).\n", id, NR, cell[4]
         line_of[id] = NR
     }
     END { if (!rows) print "no Decisions log rows were found in docs/decisions.md, so the log was not checked." }

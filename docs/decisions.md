@@ -1,6 +1,6 @@
 # Decisions log
 
-A new row goes at the end: rows are appended in fold order, and ids are unique, not sequential. Agents add rows with Status `assumed`; a human changes it to `decided` or reverts it. A decision too long for a row also gets a file in `decisions/`.
+A new row goes at the end: rows are appended in fold order, and ids are unique, not sequential. Agents add rows with Status `assumed`, and an agent's call says whose it was, and when, in its Rationale; only the owner's word makes a row `decided (owner, YYYY-MM-DD)`, or reverts it. A decision too long for a row also gets a file in `decisions/`.
 
 | ID | Date | Decision | Status | Rationale |
 | --- | --- | --- | --- | --- |
