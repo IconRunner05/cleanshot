@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -74,17 +74,15 @@ pub fn bench(
     let kept = document.kept_area();
     let mut on_done: Option<OnDone> = Some(Box::new(on_done));
     let replayed = document.clone();
-    let first_masks: Rc<RefCell<Option<FirstMasks>>> = Rc::default();
+    let maker = Rc::new(masks);
+    let replay_maker = Rc::clone(&maker);
+    let first_masks: Rc<Cell<Option<Duration>>> = Rc::default();
     let recorder = Rc::clone(&first_masks);
     let timed: MasksFor = Rc::new(move |document: &Document| {
         let started = Instant::now();
-        let made = masks(document);
-        let mut first = recorder.borrow_mut();
-        if first.is_none() {
-            *first = Some(FirstMasks {
-                took: started.elapsed(),
-                made: made.clone(),
-            });
+        let made = maker(document);
+        if recorder.get().is_none() {
+            recorder.set(Some(started.elapsed()));
         }
         made
     });
@@ -99,15 +97,12 @@ pub fn bench(
         window.on_window_should_close(cx, |_, _| false);
         window.on_next_frame(move |window, cx| {
             let now = Instant::now();
-            let FirstMasks {
-                took: text_masks,
-                made,
-            } = first_masks
-                .borrow_mut()
-                .take()
+            let text_masks = first_masks
+                .get()
                 .expect("the bench's bordered texts have their masks made before its first frame");
+            let made = Cell::new(replay_maker(&replayed));
             let replay = Instant::now();
-            Previews::new(Rc::new(move |_| made.clone()), replay_log).update(&replayed);
+            Previews::new(Rc::new(move |_| made.take()), replay_log).update(&replayed);
             let previews = replay.elapsed();
             let canvas = window.viewport_size();
             Run {
@@ -130,12 +125,6 @@ pub fn bench(
     {
         on_done(cx, Err(error));
     }
-}
-
-/// The first call to the mask maker: how long it took and what it made.
-struct FirstMasks {
-    took: Duration,
-    made: Option<TextMasks>,
 }
 
 struct Run {
