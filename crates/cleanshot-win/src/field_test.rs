@@ -502,19 +502,44 @@ pub fn open_and_cancel_overlays(
 ) -> Result<(), OverlayRunError> {
     let region = [VK_CONTROL, VK_SHIFT, VIRTUAL_KEY(u16::from(b'4'))];
     for number in 1..=times {
-        if press(&region) != 6 {
-            return Err(OverlayRunError::KeysRefused(number));
-        }
-        if !within(timeout, || shown(number)) {
-            return Err(OverlayRunError::NotShown(number));
-        }
-        if press(&[VK_ESCAPE]) != 2 {
-            return Err(OverlayRunError::KeysRefused(number));
-        }
-        if !within(timeout, || !overlay_open()) {
-            return Err(OverlayRunError::NotClosed(number));
-        }
+        open_and_cancel(&region, number, timeout, || shown(number))?;
         std::thread::sleep(settle);
+    }
+    Ok(())
+}
+
+/// Presses [`FULL_SCREEN`] once and then Esc, for another process's overlay over the whole
+/// monitor to open and close, waiting up to `timeout` each for `shown` to hold and for the
+/// overlay to close.
+///
+/// # Errors
+///
+/// [`OverlayRunError`] for press 1 if Windows refused it or it did not show or close its
+/// overlay within `timeout`.
+pub fn open_and_cancel_full_screen(
+    timeout: Duration,
+    shown: impl FnMut() -> bool,
+) -> Result<(), OverlayRunError> {
+    open_and_cancel(&FULL_SCREEN, 1, timeout, shown)
+}
+
+fn open_and_cancel(
+    keys: &[VIRTUAL_KEY],
+    number: u32,
+    timeout: Duration,
+    shown: impl FnMut() -> bool,
+) -> Result<(), OverlayRunError> {
+    if press(keys) != 6 {
+        return Err(OverlayRunError::KeysRefused(number));
+    }
+    if !within(timeout, shown) {
+        return Err(OverlayRunError::NotShown(number));
+    }
+    if press(&[VK_ESCAPE]) != 2 {
+        return Err(OverlayRunError::KeysRefused(number));
+    }
+    if !within(timeout, || !overlay_open()) {
+        return Err(OverlayRunError::NotClosed(number));
     }
     Ok(())
 }

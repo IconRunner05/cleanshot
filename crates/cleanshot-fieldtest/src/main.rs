@@ -15,7 +15,8 @@ use cleanshot_win::field_test::dpi::{copy_at_scale, set_scale};
 use cleanshot_win::field_test::{
     Driver, adapters, animations_on, capture_device_costs, clipboard_round_trip,
     copies_while_watched, d3d11_feature_level, drive_tray, edit_and_close, exit_running_tray,
-    monitors, open_and_cancel_overlays, prewarm_costs, rendering_params, windows_version,
+    monitors, open_and_cancel_full_screen, open_and_cancel_overlays, prewarm_costs,
+    rendering_params, windows_version,
 };
 use cleanshot_win::log::since_start;
 
@@ -41,6 +42,9 @@ const AFTER_USE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long after the editor closes the exe has to log its P-04 after-editor sample, which it
 /// takes 15 s after.
 const AFTER_EDITOR_TIMEOUT: Duration = Duration::from_secs(20);
+/// After the after-editor sample, 15 s after the editor closed, how much longer `--editor`
+/// waits before its after-idle press.
+const AFTER_IDLE_EXTRA: Duration = Duration::from_secs(5);
 /// How long one copy may take to be logged (P-02) before it counts as failed.
 const COPY_TIMEOUT: Duration = Duration::from_secs(2);
 /// How many times `--start-split` starts this exe.
@@ -306,7 +310,9 @@ fn open_overlays_after_start(log: &Path) -> Result<(), String> {
 }
 
 /// P-04 after the editor: once the tray is ready, opens an editor on a full-screen capture,
-/// closes it, and waits for the exe's after-editor sample, which is reported, not judged.
+/// closes it, and waits for the exe's after-editor sample. Then P-01 after idle: 20 s after the
+/// close, opens and cancels one full-screen overlay and prints its time. Both are reported, not
+/// judged.
 fn edit_after_start(log: &Path) -> Result<(), String> {
     wait_for_tray(log)?;
     edit_and_close(
@@ -325,6 +331,22 @@ fn edit_after_start(log: &Path) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+    // GRAPHICS_IDLE let the capture device and Direct2D go long ago, as before a user's next
+    // capture minutes later.
+    std::thread::sleep(AFTER_IDLE_EXTRA);
+    let shown = || perf_lines(log, "P-01", "overlay_visible_ms") >= 2;
+    open_and_cancel_full_screen(OVERLAY_TIMEOUT, shown).map_err(|error| error.to_string())?;
+    let text = std::fs::read_to_string(log).expect("cleanshot.exe was started with --log here");
+    let Some(after_idle) = budgets::perf_values(&text, "P-01", "overlay_visible_ms")
+        .get(1)
+        .copied()
+    else {
+        return Err("the after-idle press logged no overlay_visible_ms value".to_owned());
+    };
+    println!(
+        "P-01 after idle, reported, not judged: overlay visible {after_idle} ms on a press 20 s \
+         after the editor closed, once GRAPHICS_IDLE had let the capture device and Direct2D go"
+    );
     Ok(())
 }
 

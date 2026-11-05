@@ -269,7 +269,7 @@ fn missing(budget: &'static str, key: &str) -> Verdict {
 }
 
 /// Every `key`'s value on a `perf <budget> ...` line, in log order.
-fn perf_values(log: &str, budget: &str, key: &str) -> Vec<u64> {
+pub(crate) fn perf_values(log: &str, budget: &str, key: &str) -> Vec<u64> {
     log.lines()
         .filter_map(|line| {
             let mut words = line.split_whitespace().skip_while(|word| *word != "perf");
