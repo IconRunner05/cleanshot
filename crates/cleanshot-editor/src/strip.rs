@@ -1,6 +1,6 @@
 use cleanshot_core::{
     Alignment, Command, Fill, Frame, Horizontal, Look, Property, Setting, SpotlightDim, TypedValue,
-    Vertical,
+    Vertical, Warning,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -117,7 +117,11 @@ fn setting_group(
                     .on_click(move |_, window, cx| on_set(property, window, cx))
                     .child(swatch(property, choice, theme))
             });
-            let typed = setting.typed(&look).map(|typed| TypedField {
+            let typed = setting.typed(&look);
+            let warning = typed
+                .and_then(TypedValue::warning)
+                .map(|warning| warning_label(setting, warning, theme));
+            let typed = typed.map(|typed| TypedField {
                 setting,
                 typed,
                 theme,
@@ -126,6 +130,7 @@ fn setting_group(
             group(name, Role::RadioGroup, after, theme)
                 .children(choices)
                 .children(typed)
+                .children(warning)
         }
     }
 }
@@ -254,6 +259,23 @@ impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for Al
         });
         div().flex().flex_col().child(button).children(grid)
     }
+}
+
+/// The warning beside `setting`'s typed value, with its reason as the tooltip and the
+/// description a screen reader gives (D-132).
+fn warning_label(setting: Setting, warning: Warning, theme: Theme) -> impl IntoElement {
+    div()
+        .id(ElementId::Name(
+            format!("{}: warning", setting.name()).into(),
+        ))
+        .role(Role::Label)
+        .aria_label(warning.label)
+        .aria_description(warning.reason)
+        .map(|label| with_tooltip(label, warning.reason.into(), theme))
+        .px(px(4.0))
+        .text_xs()
+        .text_color(theme.text)
+        .child(warning.label)
 }
 
 /// A box to type `setting`'s value in, showing what the look holds until digits are typed.

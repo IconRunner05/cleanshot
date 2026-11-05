@@ -109,10 +109,15 @@ impl Setting {
             Self::RedactStrength => Some(TypedValue {
                 kind: Typed::RedactStrength,
                 shown: f32::from(look.redact_strength().pixels()),
+                warning: look
+                    .redact_strength()
+                    .may_be_readable()
+                    .then_some(MAY_BE_READABLE),
             }),
             Self::TextSize => Some(TypedValue {
                 kind: Typed::TextSize,
                 shown: look.text_size(),
+                warning: None,
             }),
             Self::Color
             | Self::StrokeWidth
@@ -155,7 +160,21 @@ impl Setting {
 pub struct TypedValue {
     kind: Typed,
     shown: f32,
+    warning: Option<Warning>,
 }
+
+/// A short warning the strip shows beside a typed value, and the reason its tooltip gives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Warning {
+    pub label: &'static str,
+    pub reason: &'static str,
+}
+
+/// D-132: a redaction finer than 16 px is allowed, and said to be weak.
+const MAY_BE_READABLE: Warning = Warning {
+    label: "May be readable",
+    reason: "Smaller blocks can leave text readable",
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Typed {
@@ -172,12 +191,18 @@ impl TypedValue {
         self.shown
     }
 
+    /// What the strip warns about the value the look holds, if anything.
+    #[must_use]
+    pub fn warning(self) -> Option<Warning> {
+        self.warning
+    }
+
     /// The values a typed one is clamped into.
     #[must_use]
     pub fn range(self) -> RangeInclusive<u16> {
         match self.kind {
             Typed::RedactStrength => {
-                RedactStrength::FINE.pixels()..=RedactStrength::STRONGEST.pixels()
+                RedactStrength::WEAKEST.pixels()..=RedactStrength::STRONGEST.pixels()
             }
             Typed::TextSize => TYPED_TEXT_SIZES,
         }
@@ -345,9 +370,8 @@ mod tests {
             other => panic!("a strength or a size, not {other:?}"),
         };
         assert_eq!(
-            [4, 64, 500].map(|value| used(strength, value)),
-            [16.0, 64.0, 128.0],
-            "never finer than C-22's 16 px"
+            [4, 64, 999].map(|value| used(strength, value)),
+            [8.0, 64.0, 512.0]
         );
         let text = Look::default_for(Tool::Text);
         let size = Setting::TextSize.typed(&text).unwrap();
@@ -362,5 +386,22 @@ mod tests {
             Some(200.0)
         );
         assert_eq!(Setting::Color.typed(&text), None);
+    }
+
+    #[test]
+    fn d132_a_strength_under_16_px_is_kept_and_warned_about_and_16_or_more_is_not() {
+        let redact = Look::default_for(Tool::Redact);
+        let strength = Setting::RedactStrength.typed(&redact).unwrap();
+        let warned = |value| {
+            let look = redact.with(strength.property(value)).unwrap();
+            let typed = Setting::RedactStrength.typed(&look).unwrap();
+            (typed.shown(), typed.warning())
+        };
+        assert_eq!(warned(8), (8.0, Some(MAY_BE_READABLE)));
+        assert_eq!(warned(15), (15.0, Some(MAY_BE_READABLE)));
+        assert_eq!(warned(16), (16.0, None));
+        assert_eq!(strength.warning(), None, "the default is not warned about");
+        let text = Look::default_for(Tool::Text);
+        assert_eq!(Setting::TextSize.typed(&text).unwrap().warning(), None);
     }
 }

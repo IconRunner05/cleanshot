@@ -211,7 +211,7 @@ mod tests {
             Shape::Redact {
                 rect: AREA,
                 mode,
-                strength: RedactStrength::FINE,
+                strength: RedactStrength::WEAKEST,
             },
             style(MAGENTA),
         )
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn c22_at_the_weakest_strength_neither_mode_keeps_anything_finer_than_the_cell_averages() {
+    fn c22_at_16_px_neither_mode_keeps_anything_finer_than_the_cell_averages() {
         let whole_cells = RectF {
             x: 0.0,
             y: 0.0,

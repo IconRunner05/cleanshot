@@ -307,13 +307,16 @@ impl HighlightStrength {
     }
 }
 
-/// How coarse a redaction is, as the side of its cells in image pixels (D-123, D-130). Never
-/// finer than the strength C-22 was set at, so the control only strengthens.
+/// How coarse a redaction is, as the side of its cells in image pixels (D-123, D-130, D-132):
+/// from [`Self::WEAKEST`] to [`Self::STRONGEST`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RedactStrength(u16);
 
 impl RedactStrength {
-    /// The finest, the strength C-22 was set at.
+    /// The finest a typed strength can be (D-132).
+    pub const WEAKEST: Self = Self(8);
+    /// The default and finest preset step, the finest strength C-22's legibility check is
+    /// proved at.
     pub const FINE: Self = Self(16);
     /// A preset step on the strip (D-123).
     pub const MEDIUM: Self = Self(24);
@@ -321,14 +324,19 @@ impl RedactStrength {
     pub const COARSE: Self = Self(32);
     /// The strongest preset step on the strip (D-123).
     pub const COARSEST: Self = Self(48);
-    /// The strongest a typed strength can be (D-130).
-    pub const STRONGEST: Self = Self(128);
+    /// The strongest a typed strength can be (D-130, D-132).
+    pub const STRONGEST: Self = Self(512);
 
-    /// The strength with cells of `pixels`, or the nearest one a redaction takes: from
-    /// [`Self::FINE`] to 128 pixels.
+    /// The strength with cells of `pixels`, or the nearest one a redaction takes.
     #[must_use]
     pub fn clamped(pixels: u16) -> Self {
-        Self(pixels.clamp(Self::FINE.0, Self::STRONGEST.0))
+        Self(pixels.clamp(Self::WEAKEST.0, Self::STRONGEST.0))
+    }
+
+    /// Whether cells this small can leave text readable: finer than [`Self::FINE`] (D-132).
+    #[must_use]
+    pub const fn may_be_readable(self) -> bool {
+        self.0 < Self::FINE.0
     }
 
     /// The side of a pixelation cell in image pixels, which is also the blur radius.

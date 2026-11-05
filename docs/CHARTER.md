@@ -57,7 +57,7 @@ These are invariants. Code that violates one is a bug, whatever the task said. E
 | --- | --- |
 | C-20 | No telemetry, analytics, crash upload or update checks. |
 | C-21 | No temp files and no capture history kept by Cleanshot. Pixels stay in memory until the user copies or saves them. A copy enters Windows' clipboard history like any program's copy (D-84). |
-| C-22 | Redaction is destructive in every output: covered pixels are replaced, not overlaid. |
+| C-22 | Redaction is destructive in every output: covered pixels are replaced, not overlaid, at every strength from 8 px up. Below 16 px, the strength text was proved unreadable at, the editor warns that text may stay readable (D-132). |
 | C-23 | Logging is off by default; `--log` writes to the settings folder, never logs pixel data or clipboard contents. |
 
 ### Scope (never build)
@@ -134,7 +134,7 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 | F-33 | Pen (freehand) | P | M2 | Smoothed polyline. |
 | F-34 | Text | T | M2 | Multi-line, IME works, Ctrl+A/Backspace behave like a text box. A double-click with any tool reopens a text (D-126). Lines align left, centre or right, picked on the strip and stored on the shape (D-129). Text size is a preset or a value from 8 to 200 pixels typed on the strip (D-130). |
 | F-35 | Highlighter | H | M2 | Translucent yellow, multiply blend. Strength on the strip: Light, Medium or Strong (D-123). The editor shows it as the export multiplies it (D-125). |
-| F-36 | Redact | X | M2 | Pixelate (default) or blur; destructive on export (C-22); a test asserts that original pixels are absent from the output. Strength on the property strip sets the cell side, which is also the blur radius: 16 (default), 24, 32 or 48 pixels, or a value from 16 to 128 typed beside them, for the next redaction or the selected one. The control only strengthens: 16 is the floor C-22 was proved at (D-123, D-130). |
+| F-36 | Redact | X | M2 | Pixelate (default) or blur; destructive on export (C-22); a test asserts that original pixels are absent from the output. Strength on the property strip sets the cell side, which is also the blur radius: 16 (default), 24, 32 or 48 pixels, or a value from 8 to 512 typed beside them, for the next redaction or the selected one. From 8 to 15 the strip shows "May be readable" beside the value, with the tooltip "Smaller blocks can leave text readable" (D-123, D-130, D-132). |
 | F-37 | Crop | C | M2 | Non-destructive in the document; applied on export. The editor shows only what the crop keeps, as the export does, and fits the view to it (D-113, D-127). With the Crop tool picked, the view shows the whole image and the crop can be moved and resized by its handles (D-118). |
 | F-38 | Undo / redo | Ctrl+Z / Ctrl+Y | M2 | Unlimited within the session; every edit is a command. Undo and Redo buttons end the editor toolbar, greyed out when there is no step, otherwise naming it ("Undo arrow") (D-116). Ctrl+] and Ctrl+[ move the selected shape forward or back one step, with Shift to the front or back, each an edit to undo (D-115). Right-clicking a shape selects it and opens a menu of the same four moves, each showing its shortcut; a move that would change nothing is dimmed and skipped by the arrow keys. |
 | F-39 | Zoom / pan | Ctrl+wheel, Space-drag, Ctrl+0 fit | M2 | Smooth on a 4K image. |
