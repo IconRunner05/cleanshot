@@ -13,16 +13,17 @@ use cleanshot_core::{
     action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
 };
 use gpui::{
-    App, AppContext, Bounds, BoxShadow, Context, Entity, FocusHandle, Global, InteractiveElement,
-    IntoElement, KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions,
-    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, hsla, point, px, size,
+    AnyElement, App, AppContext, Bounds, BoxShadow, Context, Entity, FocusHandle, Global,
+    InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point,
+    Render, RenderImage, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    Task, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div,
+    hsla, point, px, size,
 };
 
 use crate::canvas::{OnPointer, Overlay, Pointer, Previews, document_canvas, render_image};
 use crate::caption::caption_row;
 use crate::placement::{
-    CARD_INSET, MIN_WINDOW, Placement, canvas_size, fitted_placement, opening_size,
+    CARD_INSET, MIN_WINDOW, Placement, canvas_size, fitted_placement, opening_size, shown_area,
 };
 use crate::settings_window::settings_opener;
 use crate::shape_menu::ShapeMenu;
@@ -35,6 +36,7 @@ use crate::toolbar::{
     shown_tools, toolbar,
 };
 use crate::tooltip::hover_time;
+use crate::zoom_panel::{OnPanelInput, PanelInput, Viewport, scrollbars, zoom_panel};
 use crate::{Error, Log, MasksFor, open_window};
 use text_input::paint_text_box;
 
@@ -131,6 +133,8 @@ struct EditorView {
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
     placement: Option<Placement>,
+    /// While a press on the minimap is held, its drags pan the view (D-145).
+    minimap_held: bool,
     space_held: bool,
     pan: Option<Pan>,
     /// Why the last edit was refused, until the next press.
@@ -182,6 +186,7 @@ impl EditorView {
             log,
             shift: false,
             placement: None,
+            minimap_held: false,
             space_held: false,
             pan: None,
             notice: None,
@@ -335,18 +340,13 @@ impl EditorView {
             KeyAction::PickTool(tool) => self.pick_tool(tool, window, cx),
             KeyAction::FitView => self.placement = None,
             KeyAction::ActualSize => {
-                let canvas = canvas_size(window.viewport_size());
-                let scale_factor = window.scale_factor();
-                let placement = self.placement.unwrap_or_else(|| {
-                    fitted_placement(
-                        &self.document,
-                        self.tool == Tool::Crop,
-                        canvas,
-                        scale_factor,
-                    )
-                });
-                let centre = point(canvas.width / 2.0, canvas.height / 2.0);
-                self.placement = Some(placement.actual_size(centre, scale_factor));
+                let viewport = self.viewport(window);
+                let centre = point(viewport.room.width / 2.0, viewport.room.height / 2.0);
+                self.placement = Some(
+                    viewport
+                        .placement
+                        .actual_size(centre, viewport.scale_factor),
+                );
             }
             KeyAction::OpenSettings => {
                 if let Some(open) = settings_opener(cx) {
@@ -599,6 +599,78 @@ impl EditorView {
         (tools, actions)
     }
 
+    /// What the canvas shows now: the fitted placement until the image is zoomed or panned.
+    fn viewport(&self, window: &Window) -> Viewport {
+        let room = canvas_size(window.viewport_size());
+        let scale_factor = window.scale_factor();
+        let changing_crop = self.tool == Tool::Crop;
+        Viewport {
+            area: shown_area(&self.document, changing_crop),
+            placement: self.placement.unwrap_or_else(|| {
+                fitted_placement(&self.document, changing_crop, room, scale_factor)
+            }),
+            room,
+            scale_factor,
+        }
+    }
+
+    /// The zoom panel and scrollbars over the image card, none while the image is fitted
+    /// (D-145).
+    fn zoom_controls(&self, window: &Window, theme: Theme, cx: &Context<Self>) -> Vec<AnyElement> {
+        if self.placement.is_none() {
+            return Vec::new();
+        }
+        let viewport = self.viewport(window);
+        let view = cx.entity().downgrade();
+        let on_input: OnPanelInput = Rc::new(move |input, window, cx| {
+            update_while_open(&view, cx, |view, cx| {
+                view.zoom_input(input, window, cx);
+            });
+        });
+        scrollbars(viewport)
+            .into_iter()
+            .map(IntoElement::into_any_element)
+            .chain([zoom_panel(
+                Arc::clone(&self.base),
+                self.document.image_area(),
+                viewport,
+                theme,
+                Rc::clone(&self.log),
+                &on_input,
+            )
+            .into_any_element()])
+            .collect()
+    }
+
+    fn zoom_input(&mut self, input: PanelInput, window: &mut Window, cx: &mut Context<Self>) {
+        let viewport = self.viewport(window);
+        let centre = point(viewport.room.width / 2.0, viewport.room.height / 2.0);
+        match input {
+            PanelInput::ZoomBy(factor) => {
+                self.placement = Some(viewport.placement.zoomed(factor, centre));
+            }
+            PanelInput::ActualSize => self.act(KeyAction::ActualSize, window, cx),
+            PanelInput::Fit => self.act(KeyAction::FitView, window, cx),
+            PanelInput::Grab(at) => {
+                self.minimap_held = true;
+                self.placement = Some(viewport.placement.centred_on(at, viewport.room));
+            }
+            PanelInput::Drag(at) => {
+                if !self.minimap_held {
+                    return;
+                }
+                self.placement = Some(viewport.placement.centred_on(at, viewport.room));
+            }
+            PanelInput::Release => {
+                if !self.minimap_held {
+                    return;
+                }
+                self.minimap_held = false;
+            }
+        }
+        cx.notify();
+    }
+
     /// The property strip for what the next strip change would restyle, the spotlight dim while
     /// a spotlight is picked, and the frame toggles.
     fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
@@ -689,6 +761,7 @@ impl Render for EditorView {
             overlay,
             on_pointer,
         );
+        let zoom = self.zoom_controls(window, theme, cx);
         let tools = div()
             .flex()
             .items_center()
@@ -713,7 +786,7 @@ impl Render for EditorView {
                 }
             }))
             .child(caption_row(tools, actions, window, theme))
-            .child(image_card(canvas.size_full(), theme))
+            .child(image_card(canvas.size_full(), zoom, theme))
             .children(
                 self.notice
                     .clone()
@@ -730,8 +803,8 @@ impl Render for EditorView {
 }
 
 /// D-141: the image on a card with rounded corners and a soft shadow, the window showing
-/// round it on the left, right and below.
-fn image_card(canvas: impl IntoElement, theme: Theme) -> impl IntoElement {
+/// round it on the left, right and below, with `zoom` over it (D-145).
+fn image_card(canvas: impl IntoElement, zoom: Vec<AnyElement>, theme: Theme) -> impl IntoElement {
     div()
         .flex_1()
         .min_h_0()
@@ -743,6 +816,7 @@ fn image_card(canvas: impl IntoElement, theme: Theme) -> impl IntoElement {
                 .role(Role::Image)
                 .aria_label("Screenshot")
                 .size_full()
+                .relative()
                 .rounded(px(10.0))
                 .overflow_hidden()
                 .bg(theme.card)
@@ -753,7 +827,8 @@ fn image_card(canvas: impl IntoElement, theme: Theme) -> impl IntoElement {
                     spread_radius: px(0.0),
                     inset: false,
                 }])
-                .child(canvas),
+                .child(canvas)
+                .children(zoom),
         )
 }
 

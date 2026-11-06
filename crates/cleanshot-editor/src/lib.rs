@@ -15,6 +15,7 @@ mod text_box;
 mod theme;
 mod toolbar;
 mod tooltip;
+mod zoom_panel;
 
 use std::num::NonZeroIsize;
 use std::rc::Rc;

@@ -75,6 +75,10 @@ section exists.
 - The editor's Undo, Redo, Save and Save As buttons move into a "..." menu beside Copy,
   which is now a pill button. The menu also holds Fit to window, Actual size (Ctrl+1) and
   Settings (Ctrl+comma), and shows each shortcut (D-144).
+- When you zoom or pan the editor, a minimap appears in the bottom-right corner with
+  the part in view framed: press or drag on it to move there. Under it are zoom out,
+  the zoom level (click for actual size), zoom in and Fit. Thin bars on the image's
+  edges show where you are (D-145).
 - After a graphics driver update or GPU reset, the next capture makes a new graphics device
   and copies the screen as usual, instead of falling back to a slower copy (D-151).
 - A capture across two or more monitors waits for the screen once, not once per monitor,
