@@ -70,7 +70,7 @@ impl Viewport {
 
 /// Image pixels to minimap pixels for `area`: as large as fits in [`MINIMAP_ROOM`].
 fn minimap_scale(area: RectF) -> f32 {
-    (MINIMAP_ROOM.width / area.width).min(MINIMAP_ROOM.height / area.height)
+    MINIMAP_ROOM.width / area.width
 }
 
 /// The image point of `area` under `offset` from the minimap's top-left corner, kept inside
