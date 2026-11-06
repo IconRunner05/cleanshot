@@ -169,6 +169,33 @@ impl Setting {
         }
     }
 
+    /// The colour this setting holds in `look`, which the colour picker shows and sets, or
+    /// `None` for a setting that is not a colour (D-147).
+    #[must_use]
+    pub fn colored(self, look: &Look) -> Option<ColorValue> {
+        match self {
+            Self::Color => Some(ColorValue {
+                kind: Colored::Shape,
+                shown: look.style().color,
+            }),
+            Self::BorderColor => Some(ColorValue {
+                kind: Colored::Border,
+                shown: look.border_color(),
+            }),
+            Self::StrokeWidth
+            | Self::Fill
+            | Self::Redact
+            | Self::RedactStrength
+            | Self::HighlightStrength
+            | Self::TextSize
+            | Self::Shadow
+            | Self::Alignment
+            | Self::HorizontalAlignment
+            | Self::Border
+            | Self::BorderWidth => None,
+        }
+    }
+
     /// The values the strip offers for this setting, each with the name a screen reader reads,
     /// in strip order (D-55).
     #[must_use]
@@ -197,6 +224,51 @@ pub struct TypedValue {
     kind: Typed,
     shown: f32,
     warning: Option<Warning>,
+}
+
+/// A colour setting's value, as [`Setting::colored`] gives it (D-147).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColorValue {
+    kind: Colored,
+    shown: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Colored {
+    Shape,
+    Border,
+}
+
+impl ColorValue {
+    /// The colour the look holds now.
+    #[must_use]
+    pub fn shown(self) -> Color {
+        self.shown
+    }
+
+    /// What picking `color` sets: the shape's colour, or its border's.
+    #[must_use]
+    pub fn property(self, color: Color) -> Property {
+        match self.kind {
+            Colored::Shape => Property::Color(color),
+            Colored::Border => Property::BorderColor(color),
+        }
+    }
+
+    /// The palette's colours, each with the name a screen reader reads, in palette order.
+    #[must_use]
+    pub fn palette() -> &'static [(Color, &'static str)] {
+        &PALETTE
+    }
+
+    /// The palette's name for `color`, if the palette holds it.
+    #[must_use]
+    pub fn palette_name(color: Color) -> Option<&'static str> {
+        PALETTE
+            .iter()
+            .find(|&&(entry, _)| entry == color)
+            .map(|&(_, name)| name)
+    }
 }
 
 /// A short warning the strip shows beside a typed value, and the reason its tooltip gives.
@@ -260,19 +332,22 @@ const fn opaque(r: u8, g: u8, b: u8) -> Color {
     Color { r, g, b, a: 255 }
 }
 
-const PALETTE: [(Color, &str); 8] = [
+const PALETTE: [(Color, &str); 11] = [
     (ANNOTATION_RED, "Red"),
     (opaque(255, 149, 0), "Orange"),
     (HIGHLIGHTER_YELLOW, "Yellow"),
     (opaque(52, 199, 89), "Green"),
     (opaque(0, 122, 255), "Blue"),
     (opaque(175, 82, 222), "Purple"),
-    (opaque(0, 0, 0), "Black"),
+    (opaque(255, 45, 85), "Pink"),
     (WHITE, "White"),
+    (opaque(142, 142, 147), "Grey"),
+    (opaque(0, 0, 0), "Black"),
+    (opaque(48, 176, 199), "Teal"),
 ];
 
-const COLOR_CHOICES: [(Property, &str); 8] = {
-    let mut choices = [(Property::Color(WHITE), ""); 8];
+const COLOR_CHOICES: [(Property, &str); 11] = {
+    let mut choices = [(Property::Color(WHITE), ""); 11];
     let mut index = 0;
     while index < PALETTE.len() {
         choices[index] = (Property::Color(PALETTE[index].0), PALETTE[index].1);
@@ -282,8 +357,8 @@ const COLOR_CHOICES: [(Property, &str); 8] = {
 };
 
 // D-131: a border can be any colour the strip offers a shape.
-const BORDER_COLOR_CHOICES: [(Property, &str); 8] = {
-    let mut choices = [(Property::BorderColor(WHITE), ""); 8];
+const BORDER_COLOR_CHOICES: [(Property, &str); 11] = {
+    let mut choices = [(Property::BorderColor(WHITE), ""); 11];
     let mut index = 0;
     while index < PALETTE.len() {
         choices[index] = (Property::BorderColor(PALETTE[index].0), PALETTE[index].1);
@@ -449,6 +524,28 @@ mod tests {
                 "{tool:?}"
             );
         }
+    }
+
+    #[test]
+    fn d147_the_palette_holds_eleven_colours_and_a_picked_colour_sets_the_shape_or_its_border() {
+        let look = Look::default_for(Tool::Rectangle);
+        let palette = Setting::Color.choices();
+        assert_eq!(palette.len(), 11);
+        assert!(palette.iter().any(|&(property, _)| look.has(property)));
+        let teal = Color::from_hex_digits("17a2a8").unwrap();
+        let shape = Setting::Color.colored(&look).unwrap();
+        assert_eq!(shape.shown(), look.style().color);
+        assert_eq!(shape.property(teal), Property::Color(teal));
+        let border = Setting::BorderColor.colored(&look).unwrap();
+        assert_eq!(border.property(teal), Property::BorderColor(teal));
+        let bordered = look.with(border.property(teal)).unwrap();
+        assert_eq!(
+            Setting::BorderColor.colored(&bordered).unwrap().shown(),
+            teal
+        );
+        assert_eq!(Setting::StrokeWidth.colored(&look), None);
+        assert_eq!(ColorValue::palette_name(WHITE), Some("White"));
+        assert_eq!(ColorValue::palette_name(teal), None);
     }
 
     #[test]

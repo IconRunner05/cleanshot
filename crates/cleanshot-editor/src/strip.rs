@@ -1,6 +1,6 @@
 use cleanshot_core::{
-    Alignment, Command, Fill, Frame, Horizontal, Look, Property, Setting, SpotlightDim, TypedValue,
-    Vertical, Warning,
+    Alignment, ColorValue, Command, Document, Fill, Frame, Horizontal, Look, Property, Setting,
+    SpotlightDim, Tool, TypedValue, Vertical, Warning,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -10,42 +10,57 @@ use gpui::{
 };
 
 use crate::canvas::rgba;
+use crate::color_picker::ColorField;
 use crate::theme::{ACCENT, Theme};
 use crate::toolbar::panel;
 use crate::tooltip::{tooltip_text, with_tooltip};
 
-/// The property strip under the toolbar (CHARTER 4, D-55): a group for each of `settings`, with
-/// `look`'s values checked, then the document's spotlight `dim` where there is one to show
-/// (D-123), then the shape's shadow and border where `settings` has them, or else the image's
-/// frame toggles (F-44, D-131). `on_set` is called with the choice picked and `on_document`
-/// with the document change, by click, Enter or Space.
+/// The property strip under the toolbar (CHARTER 4, D-55): a group for each setting `tool`
+/// shows in `look`, with `look`'s values checked, then the document's spotlight dim for the
+/// Spotlight tool (D-123), then the shape's shadow and border where the tool has them, or else
+/// the image's frame toggles (F-44, D-131). `on_set` is called with the choice picked,
+/// `on_document` with the document change, by click, Enter or Space, and `on_sample` when the
+/// colour picker's "From image" asks for a colour from the screenshot (D-147).
 pub(crate) fn property_strip(
-    settings: Vec<Setting>,
+    tool: Tool,
     look: Look,
-    frame: Frame,
-    dim: Option<SpotlightDim>,
+    document: &Document,
     theme: Theme,
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
     on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
-) -> impl IntoElement {
-    let (shape, own): (Vec<Setting>, Vec<Setting>) = settings
+    on_sample: impl Fn(ColorValue, &mut Window, &mut App) + Clone + 'static,
+) -> Stateful<Div> {
+    let frame = document.frame();
+    let dim = (tool == Tool::Spotlight).then(|| document.dim());
+    let (shape, own): (Vec<Setting>, Vec<Setting>) = Setting::shown_for(tool, &look)
         .into_iter()
         .partition(|&setting| in_shape_group(setting));
-    let groups = own
-        .iter()
-        .enumerate()
-        .map(|(index, &setting)| setting_group(setting, index > 0, look, theme, on_set.clone()));
+    let groups = own.iter().enumerate().map(|(index, &setting)| {
+        setting_group(
+            setting,
+            index > 0,
+            look,
+            theme,
+            on_set.clone(),
+            on_sample.clone(),
+        )
+    });
     let after = !own.is_empty() || dim.is_some();
     let last = if shape.is_empty() {
         image_frame_group(frame, after, theme, on_document.clone())
     } else {
         group(SHAPE, Role::Group, after, theme)
             .child(group_label(SHAPE, theme))
-            .children(
-                shape
-                    .iter()
-                    .map(|&setting| setting_group(setting, false, look, theme, on_set.clone())),
-            )
+            .children(shape.iter().map(|&setting| {
+                setting_group(
+                    setting,
+                    false,
+                    look,
+                    theme,
+                    on_set.clone(),
+                    on_sample.clone(),
+                )
+            }))
     };
     div()
         .flex()
@@ -86,6 +101,7 @@ fn setting_group(
     look: Look,
     theme: Theme,
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
+    on_sample: impl Fn(ColorValue, &mut Window, &mut App) + Clone + 'static,
 ) -> Stateful<Div> {
     let name = setting.name();
     let check = |checked: bool, toggled: Property| {
@@ -104,14 +120,23 @@ fn setting_group(
                 theme,
                 on_set,
             }),
-        Setting::Color
-        | Setting::StrokeWidth
+        Setting::Color | Setting::BorderColor => {
+            group(name, Role::Group, after, theme).child(ColorField {
+                setting,
+                value: setting
+                    .colored(&look)
+                    .expect("a colour setting holds a colour"),
+                theme,
+                on_set,
+                on_sample,
+            })
+        }
+        Setting::StrokeWidth
         | Setting::Fill
         | Setting::Redact
         | Setting::RedactStrength
         | Setting::HighlightStrength
         | Setting::TextSize
-        | Setting::BorderColor
         | Setting::BorderWidth => {
             let choices = setting.choices().iter().map(|&(property, choice)| {
                 let on_set = on_set.clone();

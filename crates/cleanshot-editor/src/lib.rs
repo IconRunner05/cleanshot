@@ -3,6 +3,7 @@
 mod bench;
 mod canvas;
 mod caption;
+mod color_picker;
 mod editor_window;
 mod menu;
 mod placement;

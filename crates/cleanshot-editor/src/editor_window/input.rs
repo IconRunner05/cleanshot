@@ -1,6 +1,6 @@
 use cleanshot_core::{
-    Activity, BoxPress, Command, Drag, History, KeyAction, Modifiers, Press, Start, TextKey, Tool,
-    action_for_key, shape_at, text_reopened_at,
+    Activity, BoxPress, Command, Drag, History, KeyAction, Modifiers, PointF, Press, Start,
+    TextKey, Tool, action_for_key, shape_at, text_reopened_at,
 };
 use gpui::{Context, KeyDownEvent, Window, point};
 
@@ -18,6 +18,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         match pointer {
+            Pointer::Press { at, .. } if self.sampling.is_some() => self.sample(at, window, cx),
             Pointer::Press {
                 position,
                 placement,
@@ -116,6 +117,17 @@ impl EditorView {
         cx.notify();
     }
 
+    /// D-147: the press after the picker's "From image" sets the colour under it, and does
+    /// nothing else.
+    fn sample(&mut self, at: PointF, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(value) = self.sampling.take()
+            && let Some(color) = self.document.base().color_at(at)
+        {
+            self.set_from_strip(value.property(color), window, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -151,6 +163,7 @@ impl EditorView {
                     self.apply(Command::Remove(id));
                 }
             }
+            KeyAction::BackToSelect if self.sampling.is_some() => self.sampling = None,
             KeyAction::BackToSelect => {
                 self.selected = None;
                 self.pick_tool(Tool::Select, window, cx);

@@ -9,10 +9,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cleanshot_core::{
-    Color, Command, CommandError, Delivered, DeliveryError, Document, Drag, History, KeyAction,
-    Looks, Monitor, Output, PointF, Property, PropertyError, Restack, RgbaImage, Setting, ShapeId,
-    TextBlockError, TextMasks, TextOrigin, Tool, delivery_notice, save_as_notice,
+    Color, ColorValue, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
+    KeyAction, Looks, Monitor, Output, PointF, Property, PropertyError, Restack, RgbaImage,
+    ShapeId, TextBlockError, TextMasks, TextOrigin, Tool, delivery_notice, save_as_notice,
 };
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement, IntoElement,
     KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role, SharedString,
@@ -135,6 +136,9 @@ struct EditorView {
     glow: Color,
     /// While a press on the minimap is held, its drags pan the view (D-145).
     minimap_held: bool,
+    /// After the picker's "From image", the colour setting the next press on the screenshot
+    /// sets (D-147).
+    sampling: Option<ColorValue>,
     space_held: bool,
     pan: Option<Pan>,
     /// Why the last edit was refused, until the next press.
@@ -188,6 +192,7 @@ impl EditorView {
             shift: false,
             placement: None,
             minimap_held: false,
+            sampling: None,
             space_held: false,
             pan: None,
             notice: None,
@@ -435,14 +440,13 @@ impl EditorView {
         let setter = view.clone();
         let on_set = move |property, window: &mut Window, cx: &mut App| {
             update_while_open(&setter, cx, |view, cx| {
-                let before = view.looks.clone();
-                view.set_property(property);
-                if view.looks != before {
-                    looks_changed(&view.looks, cx);
-                }
-                if view.text_box.is_some() {
-                    window.focus(&view.focus, cx);
-                }
+                view.set_from_strip(property, window, cx);
+            });
+        };
+        let sampler = view.clone();
+        let on_sample = move |value, _: &mut Window, cx: &mut App| {
+            update_while_open(&sampler, cx, |view, cx| {
+                view.sampling = Some(value);
                 cx.notify();
             });
         };
@@ -459,16 +463,33 @@ impl EditorView {
             let selected = self.selected.and_then(|id| self.document.shape(id));
             self.looks.shown(self.tool, selected)
         };
-        let settings = Setting::shown_for(strip_tool, &look);
         property_strip(
-            settings,
+            strip_tool,
             look,
-            self.document.frame(),
-            (strip_tool == Tool::Spotlight).then(|| self.document.dim()),
+            &self.document,
             theme,
             on_set,
             on_document,
+            on_sample,
         )
+    }
+
+    /// Sets what the strip or the colour picker picked, and remembers a changed look.
+    pub(super) fn set_from_strip(
+        &mut self,
+        property: Property,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.looks.clone();
+        self.set_property(property);
+        if self.looks != before {
+            looks_changed(&self.looks, cx);
+        }
+        if self.text_box.is_some() {
+            window.focus(&self.focus, cx);
+        }
+        cx.notify();
     }
 }
 
@@ -544,7 +565,15 @@ impl Render for EditorView {
                 }
             }))
             .child(caption_row(tools, actions, window, theme))
-            .child(image_card(canvas.size_full(), zoom, self.glow, theme))
+            .child(image_card(
+                div()
+                    .size_full()
+                    .when(self.sampling.is_some(), Styled::cursor_crosshair)
+                    .child(canvas.size_full()),
+                zoom,
+                self.glow,
+                theme,
+            ))
             .children(
                 self.notice
                     .clone()

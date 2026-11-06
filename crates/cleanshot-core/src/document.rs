@@ -495,23 +495,39 @@ impl Color {
     /// settings file holds it (F-59).
     #[must_use]
     pub(crate) fn from_hex(text: &str) -> Option<Self> {
-        let digits = text.strip_prefix('#')?;
-        if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        text.strip_prefix('#')
+            .filter(|digits| digits.len() == 6)
+            .and_then(Self::from_hex_digits)
+    }
+
+    /// The opaque colour typed as `RRGGBB` or the short `RGB`, in hexadecimal digits of either
+    /// case, as the colour picker's hex box takes it (D-147).
+    #[must_use]
+    pub fn from_hex_digits(digits: &str) -> Option<Self> {
+        if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return None;
         }
-        let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
-        Some(Self {
-            r: channel(0)?,
-            g: channel(2)?,
-            b: channel(4)?,
-            a: 255,
-        })
+        let channel = |text: &str| u8::from_str_radix(text, 16).ok();
+        let (r, g, b) = match digits.len() {
+            6 => (
+                channel(&digits[0..2])?,
+                channel(&digits[2..4])?,
+                channel(&digits[4..6])?,
+            ),
+            3 => (
+                channel(&digits[0..1])? * 17,
+                channel(&digits[1..2])? * 17,
+                channel(&digits[2..3])? * 17,
+            ),
+            _ => return None,
+        };
+        Some(Self { r, g, b, a: 255 })
     }
 
     /// This colour written `#RRGGBB`, without its alpha, which [`Self::from_hex`] reads back
     /// opaque.
     #[must_use]
-    pub(crate) fn hex(self) -> String {
+    pub fn hex(self) -> String {
         format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
     }
 }
@@ -609,6 +625,31 @@ impl RgbaImage {
         &self.pixels
     }
 
+    /// The colour of the pixel under `at`, opaque, or `None` where `at` is off the image
+    /// (D-147: the picker's "From image").
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "image sides are far below 2^24, and only a value from 0 up to a side is cast"
+    )]
+    pub fn color_at(&self, at: PointF) -> Option<Color> {
+        let inside = |value: f32, extent: u32| {
+            (value >= 0.0 && value < extent as f32).then(|| value.floor() as usize)
+        };
+        let column = inside(at.x, self.width)?;
+        let row = inside(at.y, self.height)?;
+        let start = (row * self.width as usize + column) * 4;
+        let pixel = &self.pixels[start..start + 3];
+        Some(Color {
+            r: pixel[0],
+            g: pixel[1],
+            b: pixel[2],
+            a: 255,
+        })
+    }
+
     /// The average colour of a grid of 64 by 64 pixels spread evenly over the image, opaque, so
     /// its cost does not grow with the image (D-146).
     ///
@@ -699,6 +740,47 @@ mod tests {
                 a: 255
             }
         );
+    }
+
+    #[test]
+    fn d147_the_hex_box_reads_six_or_three_hex_digits_of_either_case_and_nothing_else() {
+        let teal = Color {
+            r: 0x17,
+            g: 0xA2,
+            b: 0xA8,
+            a: 255,
+        };
+        assert_eq!(Color::from_hex_digits("17a2a8"), Some(teal));
+        assert_eq!(Color::from_hex_digits("17A2A8"), Some(teal));
+        assert_eq!(
+            Color::from_hex_digits("1aB"),
+            Some(Color {
+                r: 0x11,
+                g: 0xAA,
+                b: 0xBB,
+                a: 255,
+            })
+        );
+        for refused in ["", "17a2a", "17a2a8f", "17a2ag", "+1a2b3", "#17a2a8"] {
+            assert_eq!(Color::from_hex_digits(refused), None, "{refused}");
+        }
+        assert_eq!(Color::from_hex_digits(&teal.hex()[1..]), Some(teal));
+        assert_eq!(Color::from_hex("#1aB"), None);
+    }
+
+    #[test]
+    fn d147_from_image_reads_the_pixel_under_the_point_and_nothing_off_the_image() {
+        let pixels = vec![1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0];
+        let image = RgbaImage::new(2, 2, pixels).unwrap();
+        let at = |x, y| image.color_at(PointF { x, y });
+        let color = |r, g, b| Some(Color { r, g, b, a: 255 });
+        assert_eq!(at(0.0, 0.0), color(1, 2, 3));
+        assert_eq!(at(1.9, 0.2), color(4, 5, 6));
+        assert_eq!(at(0.5, 1.5), color(7, 8, 9));
+        assert_eq!(at(1.0, 1.0), color(10, 11, 12));
+        for (x, y) in [(-0.1, 0.0), (0.0, -0.1), (2.0, 0.0), (0.0, 2.0)] {
+            assert_eq!(at(x, y), None, "{x},{y}");
+        }
     }
 
     #[test]
