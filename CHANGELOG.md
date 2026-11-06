@@ -84,6 +84,8 @@ section exists.
   Its rainbow swatch opens a picker with a shade square, a hue bar, a hex box, "From
   image" to take a colour from the screenshot, and the colours you picked this session
   (D-147).
+- The first capture after Cleanshot starts opens sooner: the graphics device it copies the
+  screen with is made once the tray icon is ready (D-152).
 - After a graphics driver update or GPU reset, the next capture makes a new graphics device
   and copies the screen as usual, instead of falling back to a slower copy (D-151).
 - A capture across two or more monitors waits for the screen once, not once per monitor,
