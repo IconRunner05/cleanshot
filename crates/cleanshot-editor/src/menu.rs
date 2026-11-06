@@ -45,8 +45,8 @@ impl RowState {
     /// (D-155), and a dimmed row cannot be picked.
     fn hovers(self) -> bool {
         match self {
-            Self::Dimmed | Self::Choice { checked: true } => false,
-            Self::Enabled | Self::Choice { checked: false } => true,
+            Self::Dimmed => false,
+            Self::Enabled | Self::Choice { .. } => true,
         }
     }
 
