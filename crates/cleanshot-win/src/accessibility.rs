@@ -4,7 +4,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{E_INVALIDARG, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
@@ -16,7 +17,8 @@ use windows::Win32::UI::Accessibility::{
     UIA_RadioButtonControlTypeId, UIA_TogglePatternId, UIA_ToolBarControlTypeId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+    EnumWindows, GetWindowThreadProcessId, HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
+    PostMessageW, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, SendMessageTimeoutW, WM_CLOSE, WM_NCHITTEST,
 };
 use windows::core::BOOL;
 
@@ -190,6 +192,74 @@ pub fn ask_to_close(window: NonZeroIsize) -> Result<(), Error> {
     }
     .map_err(Error::CloseNotPosted)
 }
+
+/// What part of a window a point is over, as the window answers Windows' `WM_NCHITTEST`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HitArea {
+    Close,
+    Maximize,
+    Minimize,
+    Caption,
+    Client,
+    /// Any other `HT` code, as the window returned it.
+    Other(isize),
+}
+
+/// Asks `window` what part of it the point `client` is over, in physical pixels from the
+/// top-left of its client area, as Windows asks it when the pointer moves there.
+///
+/// # Errors
+///
+/// [`Error::HitTestFailed`] if the point is off any screen Windows can name, or the window
+/// does not answer within 5 s.
+pub fn hit_test(window: NonZeroIsize, client: (i32, i32)) -> Result<HitArea, Error> {
+    let window = HWND(window.get() as *mut c_void);
+    let mut point = POINT {
+        x: client.0,
+        y: client.1,
+    };
+    // SAFETY: `point` is writable; a handle to no window fails the call.
+    if !unsafe { ClientToScreen(window, &raw mut point) }.as_bool() {
+        return Err(Error::HitTestFailed(windows::core::Error::from_thread()));
+    }
+    let (Ok(x), Ok(y)) = (i16::try_from(point.x), i16::try_from(point.y)) else {
+        return Err(Error::HitTestFailed(E_INVALIDARG.into()));
+    };
+    let mut answer = 0usize;
+    // SAFETY: WM_NCHITTEST carries the point by value; `answer` is writable.
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_NCHITTEST,
+            WPARAM(0),
+            screen_point(x, y),
+            SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT,
+            HIT_TEST_TIMEOUT_MS,
+            Some(&raw mut answer),
+        )
+    };
+    if sent.0 == 0 {
+        return Err(Error::HitTestFailed(windows::core::Error::from_thread()));
+    }
+    let code = answer.cast_signed();
+    Ok(match u32::try_from(code) {
+        Ok(HTCLOSE) => HitArea::Close,
+        Ok(HTMAXBUTTON) => HitArea::Maximize,
+        Ok(HTMINBUTTON) => HitArea::Minimize,
+        Ok(HTCAPTION) => HitArea::Caption,
+        Ok(HTCLIENT) => HitArea::Client,
+        Ok(_) | Err(_) => HitArea::Other(code),
+    })
+}
+
+/// A screen point as `WM_NCHITTEST`'s `lParam` carries it: x in the low word, y in the high
+/// word, each a signed 16-bit value, so a monitor left of or above the primary keeps its sign.
+fn screen_point(x: i16, y: i16) -> LPARAM {
+    LPARAM((isize::from(y) << 16) | (isize::from(x) & 0xFFFF))
+}
+
+/// How long [`hit_test`] waits for a window on another thread to answer.
+const HIT_TEST_TIMEOUT_MS: u32 = 5_000;
 
 fn act_on_own_control(
     kind: UIA_CONTROLTYPE_ID,
@@ -514,5 +584,33 @@ pub(crate) mod listening {
             .expect("the client let go of what it heard")
             .into_inner()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn d141_a_hit_test_point_above_and_left_of_the_primary_keeps_its_sign() {
+        for (x, y) in [
+            (-2, -1440),
+            (3449, -1),
+            (-3440, 1439),
+            (0, 0),
+            (i16::MAX, i16::MIN),
+        ] {
+            let LPARAM(packed) = screen_point(x, y);
+            let low = u16::try_from(packed & 0xFFFF).unwrap();
+            let high = u16::try_from((packed >> 16) & 0xFFFF).unwrap();
+            assert_eq!(
+                (
+                    i16::from_ne_bytes(low.to_ne_bytes()),
+                    i16::from_ne_bytes(high.to_ne_bytes())
+                ),
+                (x, y),
+                "GET_X_LPARAM and GET_Y_LPARAM read back the point"
+            );
+        }
     }
 }
