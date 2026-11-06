@@ -16,7 +16,7 @@ use gpui::{
 };
 
 use crate::text::register_inter;
-use crate::theme::{ACCENT, Theme};
+use crate::theme::{ACCENT, Theme, WindowSurface};
 use crate::tooltip::{hover_time, tooltip_text, with_tooltip};
 use crate::{Error, Log, open_window, win32_handle};
 
@@ -250,7 +250,8 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::for_appearance(window.appearance(), hover_time(cx));
+        let theme =
+            Theme::for_appearance(window.appearance(), WindowSurface::Solid, hover_time(cx));
         let settings = (self.current)();
         let capture = section("Capture", theme)
             .child(radio_group(
