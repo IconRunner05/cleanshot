@@ -608,7 +608,38 @@ impl RgbaImage {
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
     }
+
+    /// The average colour of a grid of 64 by 64 pixels spread evenly over the image, opaque, so
+    /// its cost does not grow with the image (D-146).
+    ///
+    /// # Panics
+    ///
+    /// Never: an average of bytes is a byte.
+    #[must_use]
+    pub fn average_color(&self) -> Color {
+        let grid = AVERAGE_GRID as usize;
+        let at = |cell: usize, side: u32| (2 * cell + 1) * side as usize / (2 * grid);
+        let width = self.width as usize;
+        let mut sums = [0u64; 3];
+        for row in 0..grid {
+            let y = at(row, self.height);
+            for column in 0..grid {
+                let start = (y * width + at(column, self.width)) * 4;
+                for (sum, &channel) in sums.iter_mut().zip(&self.pixels[start..start + 3]) {
+                    *sum += u64::from(channel);
+                }
+            }
+        }
+        let samples = u64::from(AVERAGE_GRID * AVERAGE_GRID);
+        let [r, g, b] = sums.map(|sum| {
+            u8::try_from((sum + samples / 2) / samples).expect("an average of bytes is a byte")
+        });
+        Color { r, g, b, a: 255 }
+    }
 }
+
+/// How many rows and columns of pixels [`RgbaImage::average_color`] samples.
+const AVERAGE_GRID: u32 = 64;
 
 #[cfg(test)]
 mod tests {
@@ -630,6 +661,43 @@ mod tests {
                 height: 3,
                 len: 23
             })
+        );
+    }
+
+    #[test]
+    fn d146_the_average_colour_weighs_every_part_of_the_image_alike() {
+        let pixel = |r, g, b| [r, g, b, 255];
+        let halves = |width: u32, height: u32| {
+            let pixels = (0..height)
+                .flat_map(|_| {
+                    (0..width).flat_map(move |x| {
+                        if x < width / 2 {
+                            pixel(200, 0, 40)
+                        } else {
+                            pixel(0, 100, 240)
+                        }
+                    })
+                })
+                .collect();
+            RgbaImage::new(width, height, pixels).unwrap()
+        };
+        let purple = Color {
+            r: 100,
+            g: 50,
+            b: 140,
+            a: 255,
+        };
+        assert_eq!(halves(3840, 2160).average_color(), purple);
+        assert_eq!(halves(2, 1).average_color(), purple);
+        let one = RgbaImage::new(1, 1, vec![9, 8, 7, 0]).unwrap();
+        assert_eq!(
+            one.average_color(),
+            Color {
+                r: 9,
+                g: 8,
+                b: 7,
+                a: 255
+            }
         );
     }
 

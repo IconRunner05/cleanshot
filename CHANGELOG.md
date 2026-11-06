@@ -79,6 +79,7 @@ section exists.
   the part in view framed: press or drag on it to move there. Under it are zoom out,
   the zoom level (click for actual size), zoom in and Fit. Thin bars on the image's
   edges show where you are (D-145).
+- The screenshot in the editor glows softly with its own colours (D-146).
 - After a graphics driver update or GPU reset, the next capture makes a new graphics device
   and copies the screen as usual, instead of falling back to a slower copy (D-151).
 - A capture across two or more monitors waits for the screen once, not once per monitor,
