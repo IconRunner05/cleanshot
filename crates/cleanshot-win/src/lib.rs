@@ -27,6 +27,7 @@ pub mod tray;
 mod tray_icon;
 mod window_state;
 
+pub use palette::glass_allowed;
 pub use render_target::release_factory;
 use std::ffi::c_void;
 use std::num::NonZeroIsize;
