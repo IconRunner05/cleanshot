@@ -132,7 +132,6 @@ fn idle_action(key: &str, modifiers: Modifiers) -> Option<KeyAction> {
             "z" => Some(KeyAction::Undo),
             "y" => Some(KeyAction::Redo),
             "0" => Some(KeyAction::FitView),
-            "1" => Some(KeyAction::ActualSize),
             "," => Some(KeyAction::OpenSettings),
             "]" if modifiers.shift => Some(KeyAction::Restack(Restack::Front)),
             "}" => Some(KeyAction::Restack(Restack::Front)),
