@@ -1,44 +1,28 @@
 use std::collections::HashMap;
 
-use crate::document::{Color, ShapeEntry, ShapeId, Style};
+use crate::document::{ShapeEntry, ShapeId, Style};
 use crate::history::Command;
 use crate::look::{Look, Property, PropertyError};
 use crate::text::TextBlock;
 use crate::text_edit::{TextFrame, TextOrigin};
 use crate::tool::Tool;
 
-/// The look each tool draws in, as the property strip last set it, with one colour for every
-/// tool once one is picked (D-112). It belongs to the editor, not to any document, so undo
-/// leaves it alone.
+/// The look each tool draws in, as the property strip last set it, its colour included: a
+/// colour picked for one tool leaves the others' alone (D-156). It belongs to the editor, not
+/// to any document, so undo leaves it alone.
 #[derive(Clone, Debug, Default)]
 pub struct Looks {
     by_tool: HashMap<Tool, Look>,
-    color: Option<Color>,
 }
 
 impl Looks {
-    /// How `tool` draws its next shape: its default until the strip changes it, in the colour
-    /// last picked for any tool.
+    /// How `tool` draws its next shape: its default until the strip changes it.
     #[must_use]
     pub fn look(&self, tool: Tool) -> Look {
-        let look = self
-            .by_tool
+        self.by_tool
             .get(&tool)
             .copied()
-            .unwrap_or_else(|| Look::default_for(tool));
-        match self.color {
-            Some(color) => Self::colored(look, color),
-            None => look,
-        }
-    }
-
-    fn colored(look: Look, color: Color) -> Look {
-        look.with_color(color)
-    }
-
-    /// The colour last picked for any tool, if one was (D-112).
-    pub(crate) fn picked_color(&self) -> Option<Color> {
-        self.color
+            .unwrap_or_else(|| Look::default_for(tool))
     }
 
     /// Sets `property` on `selected` if a shape is selected, otherwise on how `tool` draws its
@@ -70,9 +54,6 @@ impl Looks {
             }
             None => None,
         };
-        if let Property::Color(color) = property {
-            self.color = Some(color);
-        }
         self.by_tool.insert(tool, next);
         Ok(restyled)
     }
@@ -155,10 +136,9 @@ impl Looks {
 // F-59: equal when every tool draws alike, however each look came to be set.
 impl PartialEq for Looks {
     fn eq(&self, other: &Self) -> bool {
-        self.color == other.color
-            && Tool::ALL
-                .iter()
-                .all(|&tool| self.look(tool) == other.look(tool))
+        Tool::ALL
+            .iter()
+            .all(|&tool| self.look(tool) == other.look(tool))
     }
 }
 
@@ -175,6 +155,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::document::Color;
     use crate::document::{
         Border, BorderWidth, Document, Fill, HighlightStrength, PointF, RectF, RedactMode,
         RedactStrength, RgbaImage, Shape,
@@ -384,10 +365,7 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(
-            style,
-            Style::new(BLUE, Look::default_for(Tool::Ellipse).style().stroke_width)
-        );
+        assert_eq!(style, Look::default_for(Tool::Ellipse).style());
         set(&mut looks, Property::TextSize(36.0), Tool::Text);
         set(&mut looks, Property::Color(BLUE), Tool::Text);
         let image = RgbaImage::new(8, 8, vec![0; 8 * 8 * 4]).unwrap();
@@ -512,19 +490,24 @@ mod tests {
     }
 
     #[test]
-    fn d112_a_colour_picked_for_one_tool_is_the_colour_every_tool_draws_in_next() {
+    fn d156_a_colour_picked_for_one_tool_leaves_every_other_tool_its_own() {
         let mut looks = Looks::default();
-        assert_eq!(
-            looks.look(Tool::Highlighter).style().color,
-            HIGHLIGHTER_YELLOW
-        );
         looks
             .set(Property::StrokeWidth(8.0), Tool::Rectangle, None)
             .unwrap();
         looks.set(Property::Color(BLUE), Tool::Arrow, None).unwrap();
-        for tool in [Tool::Arrow, Tool::Rectangle, Tool::Highlighter, Tool::Text] {
-            assert_eq!(looks.look(tool).style().color, BLUE, "{tool:?}");
+        assert_eq!(looks.look(Tool::Arrow).style().color, BLUE);
+        for tool in [Tool::Rectangle, Tool::Highlighter, Tool::Text] {
+            assert_eq!(
+                looks.look(tool).style().color,
+                Look::default_for(tool).style().color,
+                "{tool:?}"
+            );
         }
+        assert_eq!(
+            looks.look(Tool::Highlighter).style().color,
+            HIGHLIGHTER_YELLOW
+        );
         assert_eq!(looks.look(Tool::Rectangle).style().stroke_width, 8.0);
         assert_eq!(looks.look(Tool::Line).style().stroke_width, 3.0);
     }
@@ -550,10 +533,7 @@ mod tests {
         };
         assert_eq!(blue, Some(restyled));
         assert_eq!(looks.look(Tool::Rectangle).style().color, BLUE);
-        assert_eq!(
-            looks.look(Tool::Select),
-            Looks::colored(Look::default_for(Tool::Select), BLUE)
-        );
+        assert_eq!(looks.look(Tool::Select), Look::default_for(Tool::Select));
         let same = looks.set(Property::Fill(Fill::Solid), Tool::Select, Some(&solid));
         assert_eq!(same, Ok(None));
         let text = TextBlock::new(PointF { x: 1.0, y: 1.0 }, "Hi".into(), 24.0, 1.5).unwrap();

@@ -110,9 +110,6 @@ section exists.
   it. The capture, fitted or not, now sits below the toolbar instead of under it.
 - The editor opens on the screen the capture was taken on, not always on the primary
   display (D-110).
-- A colour picked on the property strip is now the colour every tool draws in next, not
-  only the tool it was picked for. Stroke width, fill, redaction and text size are still
-  kept for each tool.
 - With the crop tool picked, the editor shows the whole capture with the crop's handles:
   drag inside the crop to move it, or a handle to resize it (F-37). A press outside it
   still starts a new crop.
