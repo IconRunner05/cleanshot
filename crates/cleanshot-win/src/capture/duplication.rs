@@ -105,6 +105,25 @@ impl Devices {
         count
     }
 
+    /// D-152: makes and keeps a device for each adapter showing the desktop now, so the first
+    /// copy after start reuses it.
+    ///
+    /// # Errors
+    ///
+    /// The Direct3D or DXGI error if an adapter cannot be listed or a device made; the devices
+    /// made before it stay kept.
+    pub fn prewarm(&mut self) -> Result<(), Error> {
+        for (_, adapter) in desktop_adapters().map_err(Error::Capture)? {
+            // SAFETY: a read of the adapter's own description.
+            let luid = unsafe { adapter.GetDesc1() }
+                .map_err(Error::Capture)?
+                .AdapterLuid;
+            let (device, context, _) = make_device(&adapter).map_err(Error::Capture)?;
+            self.kept.push((luid, device, context));
+        }
+        Ok(())
+    }
+
     fn take(&mut self, adapter: LUID) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
         let at = self.kept.iter().position(|(kept, _, _)| *kept == adapter)?;
         let (_, device, context) = self.kept.swap_remove(at);
@@ -996,6 +1015,21 @@ mod tests {
             .expect("this machine lists an adapter that shows nothing");
         let (device, context, _) = make_device(other).expect("a device on the other adapter");
         (showing, (device, context))
+    }
+
+    #[test]
+    fn d152_the_first_copy_after_the_prewarm_reuses_its_devices() {
+        let _screen = screen();
+        let mut devices = Devices::default();
+        devices.prewarm().expect("the devices are made");
+        let desktop = capture_desktop(&mut devices).expect("the desktop is copied");
+        for adapter in &desktop.adapters {
+            assert!(
+                matches!(adapter.device, Device::Kept | Device::Skipped),
+                "{:?}",
+                desktop.adapters
+            );
+        }
     }
 
     #[test]

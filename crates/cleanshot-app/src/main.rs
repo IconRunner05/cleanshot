@@ -208,8 +208,17 @@ fn started(
             &error,
         ));
     }
+    // D-152: a failed prewarm only leaves the first capture to make its device.
+    if let Err(error) = session.devices.borrow_mut().prewarm() {
+        session.log_failure("capture", "devices_not_prewarmed", &error);
+    }
+    session.perf(|since_start| format!("P-03 devices_prewarmed_ms={}", since_start.as_millis()));
+    let devices_prewarmed = count("devices_prewarmed");
     let log_opened = log_opened.map(|counted| ("log_opened", counted));
-    for (stage, counted) in [log_opened, tray_ready, prewarmed].into_iter().flatten() {
+    for (stage, counted) in [log_opened, tray_ready, prewarmed, devices_prewarmed]
+        .into_iter()
+        .flatten()
+    {
         match counted {
             Ok(counted) => session.log_line("memory", |_| format!("P-04 at={stage} {counted}")),
             Err(error) => session.log_failure("memory", "counters_unread", &error),
