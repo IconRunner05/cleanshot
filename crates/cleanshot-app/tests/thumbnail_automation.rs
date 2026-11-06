@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::RgbaImage;
+use cleanshot_core::thumbnail_layout::ThumbnailStay;
 use cleanshot_win::accessibility::controls_in_own_windows;
 use cleanshot_win::capture::RECT;
 use cleanshot_win::thumbnail::{Export, Thumbnail};
@@ -39,7 +40,13 @@ fn main() {
         let export = Export::Allowed {
             drag: Box::new(|| None),
         };
-        match Thumbnail::show(&preview, RECT::default(), export, |_| {}) {
+        match Thumbnail::show(
+            &preview,
+            RECT::default(),
+            ThumbnailStay::default(),
+            export,
+            |_| {},
+        ) {
             // The thumbnail stays up until the walk ends the process.
             Ok(thumbnail) => std::mem::forget(thumbnail),
             Err(error) => {
