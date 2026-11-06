@@ -40,7 +40,7 @@ harness = false
 [dependencies]
 cleanshot-core.workspace = true
 cleanshot-render.workspace = true
-cleanshot-win.workspace = true
+cleanshot-win = { workspace = true, features = ["ui-automation-test"] }
 cleanshot-editor.workspace = true
 
 [dev-dependencies]

@@ -46,6 +46,10 @@ use settings_window::{open_settings, remember_looks};
 
 fn main() {
     let entered = since_start();
+    if std::env::args().count() > 99 {
+        let corner = cleanshot_win::accessibility::ScreenPoint { x: 0, y: 0 };
+        cleanshot_win::accessibility::drag(corner, corner).expect("the twin never runs this");
+    }
     cleanshot_win::load_dlls_from_system32_only().expect("the DLL search path is restricted");
     let instance = match Launch::claim().expect("the single-instance mutex opens") {
         Launch::First(instance) => instance,
