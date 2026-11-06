@@ -15,14 +15,19 @@ use windows::Win32::UI::Accessibility::{
     IUIAutomationInvokePattern, IUIAutomationTogglePattern, TreeScope_Subtree,
     UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId, UIA_GroupControlTypeId,
     UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_IsExpandCollapsePatternAvailablePropertyId,
-    UIA_RadioButtonControlTypeId, UIA_TogglePatternId, UIA_ToolBarControlTypeId,
+    UIA_IsValuePatternAvailablePropertyId, UIA_RadioButtonControlTypeId, UIA_SliderControlTypeId,
+    UIA_TogglePatternId, UIA_ToolBarControlTypeId, UIA_ValueValuePropertyId,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEINPUT, SendInput,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
-    PostMessageW, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, SendMessageTimeoutW, WM_CLOSE, WM_MOUSEMOVE,
-    WM_NCHITTEST,
+    PostMessageW, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, SendMessageTimeoutW, SetCursorPos, WM_CLOSE,
+    WM_MOUSEMOVE, WM_NCHITTEST,
 };
-use windows::core::{BOOL, Interface};
+use windows::core::{BOOL, BSTR, Interface};
 
 use crate::Error;
 
@@ -40,6 +45,52 @@ pub struct Element {
     pub provider: String,
     /// Whether it opens and closes more controls, such as a menu, as a screen reader is told.
     pub expandable: bool,
+    /// What a screen reader reads as its value, for a control that has one.
+    pub value: Option<String>,
+    /// Where it is on screen.
+    pub bounds: ScreenRect,
+}
+
+/// A point in physical screen pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenPoint {
+    pub x: i32,
+    pub y: i32,
+}
+
+/// A rectangle in physical screen pixels, `right` and `bottom` outside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl ScreenRect {
+    /// The point `across` of the way from the left edge and `down` of the way from the top.
+    ///
+    /// # Panics
+    ///
+    /// If `across` or `down` is outside 0 to 1, which would name a point off the control.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a fraction from 0 to 1 of a screen's width stays inside i32"
+    )]
+    pub fn at(self, across: f32, down: f32) -> ScreenPoint {
+        let along = |from: i32, to: i32, part: f32| {
+            assert!(
+                (0.0..=1.0).contains(&part),
+                "a point inside the control is 0 to 1 of the way across it, not {part}"
+            );
+            from + (f64::from(to - from - 1) * f64::from(part)).round() as i32
+        };
+        ScreenPoint {
+            x: along(self.left, self.right, across),
+            y: along(self.top, self.bottom, down),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +101,7 @@ pub enum ControlKind {
     RadioButton,
     CheckBox,
     Image,
+    Slider,
     /// Any other `UIA_*ControlTypeId`.
     Other(i32),
 }
@@ -281,6 +333,60 @@ fn packed_point(x: i16, y: i16) -> LPARAM {
 /// How long [`hit_test`] waits for a window on another thread to answer.
 const HIT_TEST_TIMEOUT_MS: u32 = 5_000;
 
+/// Drags with the left button from `from` to `to`, in physical screen pixels, as a person
+/// would: the system pointer moves to `from`, the button goes down, the pointer moves to
+/// `to` in even steps, and the button comes up there. Windows sends the input to whatever
+/// window is under the pointer, so that window must be in front. Call it from a thread
+/// that owns no window.
+///
+/// # Errors
+///
+/// [`Error::DragRefused`] if Windows does not take a press or a move.
+pub fn drag(from: ScreenPoint, to: ScreenPoint) -> Result<(), Error> {
+    move_pointer(from)?;
+    press(MOUSEEVENTF_LEFTDOWN)?;
+    let moved = (1..=DRAG_STEPS).try_for_each(|step| {
+        move_pointer(ScreenPoint {
+            x: from.x + (to.x - from.x) * step / DRAG_STEPS,
+            y: from.y + (to.y - from.y) * step / DRAG_STEPS,
+        })
+    });
+    // Released whatever the moves did, so no later test starts with the button down.
+    let released = press(MOUSEEVENTF_LEFTUP);
+    moved.and(released)
+}
+
+/// How many moves [`drag`] makes between its press and its release.
+const DRAG_STEPS: i32 = 8;
+/// How long [`drag`] leaves the window to handle each step before the next.
+const DRAG_STEP_WAIT: Duration = Duration::from_millis(30);
+
+fn move_pointer(to: ScreenPoint) -> Result<(), Error> {
+    // SAFETY: moving the pointer reads and writes no memory of ours.
+    unsafe { SetCursorPos(to.x, to.y) }.map_err(Error::DragRefused)?;
+    thread::sleep(DRAG_STEP_WAIT);
+    Ok(())
+}
+
+fn press(button: MOUSE_EVENT_FLAGS) -> Result<(), Error> {
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dwFlags: button,
+                ..Default::default()
+            },
+        },
+    };
+    let size = i32::try_from(size_of::<INPUT>()).expect("INPUT fits in i32");
+    // SAFETY: `input` is one mouse event of the size passed.
+    if unsafe { SendInput(&[input], size) } != 1 {
+        return Err(Error::DragRefused(windows::core::Error::from_thread()));
+    }
+    thread::sleep(DRAG_STEP_WAIT);
+    Ok(())
+}
+
 fn act_on_own_control(
     kind: UIA_CONTROLTYPE_ID,
     name: &str,
@@ -340,46 +446,70 @@ fn walk_own_windows() -> windows::core::Result<Vec<Element>> {
         };
         // SAFETY: a read of the array's own length.
         for index in 0..unsafe { found.Length() }? {
-            // SAFETY: `index` is below the array's length, and the reads are plain properties
-            // of a live element.
-            let (kind, name, enabled, help_text, description, provider, expandable) = unsafe {
-                let element = found.GetElement(index)?;
-                (
-                    element.CurrentControlType()?,
-                    element.CurrentName()?,
-                    element.CurrentIsEnabled()?.as_bool(),
-                    element.CurrentHelpText()?,
-                    element
-                        .cast::<IUIAutomationElement6>()?
-                        .CurrentFullDescription()?,
-                    element.CurrentProviderDescription()?,
-                    element
-                        .GetCurrentPropertyValue(UIA_IsExpandCollapsePatternAvailablePropertyId)?,
-                )
-            };
-            let kind = [
-                (UIA_ToolBarControlTypeId, ControlKind::ToolBar),
-                (UIA_GroupControlTypeId, ControlKind::Group),
-                (UIA_ButtonControlTypeId, ControlKind::Button),
-                (UIA_RadioButtonControlTypeId, ControlKind::RadioButton),
-                (UIA_CheckBoxControlTypeId, ControlKind::CheckBox),
-                (UIA_ImageControlTypeId, ControlKind::Image),
-            ]
-            .into_iter()
-            .find_map(|(id, known)| (id == kind).then_some(known))
-            .unwrap_or(ControlKind::Other(kind.0));
-            controls.push(Element {
-                kind,
-                name: name.to_string(),
-                enabled,
-                help_text: help_text.to_string(),
-                description: description.to_string(),
-                provider: provider.to_string(),
-                expandable: bool::try_from(&expandable)?,
-            });
+            // SAFETY: `index` is below the array's length.
+            controls.push(read(&unsafe { found.GetElement(index) }?)?);
         }
     }
     Ok(controls)
+}
+
+fn read(element: &IUIAutomationElement) -> windows::core::Result<Element> {
+    // SAFETY: plain property reads of a live element.
+    let (kind, name, enabled, help_text, description, provider, expandable) = unsafe {
+        (
+            element.CurrentControlType()?,
+            element.CurrentName()?,
+            element.CurrentIsEnabled()?.as_bool(),
+            element.CurrentHelpText()?,
+            element
+                .cast::<IUIAutomationElement6>()?
+                .CurrentFullDescription()?,
+            element.CurrentProviderDescription()?,
+            element.GetCurrentPropertyValue(UIA_IsExpandCollapsePatternAvailablePropertyId)?,
+        )
+    };
+    // SAFETY: plain property reads of a live element.
+    let (has_value, rect) = unsafe {
+        (
+            element.GetCurrentPropertyValue(UIA_IsValuePatternAvailablePropertyId)?,
+            element.CurrentBoundingRectangle()?,
+        )
+    };
+    let value = if bool::try_from(&has_value)? {
+        // SAFETY: a plain property read of a live element that has a value.
+        let value = unsafe { element.GetCurrentPropertyValue(UIA_ValueValuePropertyId) }?;
+        Some(BSTR::try_from(&value)?.to_string())
+    } else {
+        None
+    };
+    let kind = [
+        (UIA_ToolBarControlTypeId, ControlKind::ToolBar),
+        (UIA_GroupControlTypeId, ControlKind::Group),
+        (UIA_ButtonControlTypeId, ControlKind::Button),
+        (UIA_RadioButtonControlTypeId, ControlKind::RadioButton),
+        (UIA_CheckBoxControlTypeId, ControlKind::CheckBox),
+        (UIA_ImageControlTypeId, ControlKind::Image),
+        (UIA_SliderControlTypeId, ControlKind::Slider),
+    ]
+    .into_iter()
+    .find_map(|(id, known)| (id == kind).then_some(known))
+    .unwrap_or(ControlKind::Other(kind.0));
+    Ok(Element {
+        kind,
+        name: name.to_string(),
+        enabled,
+        help_text: help_text.to_string(),
+        description: description.to_string(),
+        provider: provider.to_string(),
+        expandable: bool::try_from(&expandable)?,
+        value,
+        bounds: ScreenRect {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        },
+    })
 }
 
 fn own_windows() -> windows::core::Result<Vec<HWND>> {
