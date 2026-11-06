@@ -53,7 +53,7 @@ extern "system" fn collect(window: HWND, listed: LPARAM) -> BOOL {
 
 pub(crate) fn pickable(window: HWND) -> bool {
     let mut process = 0;
-    // SAFETY: `window` comes from EnumWindows and `process` is writable.
+    // SAFETY: `window` is a window handle, listed or a test's, and `process` is writable.
     unsafe { GetWindowThreadProcessId(window, Some(&raw mut process)) };
     // SAFETY: plain reads of a window's state; a window closed since EnumWindows reads as not
     // visible.
