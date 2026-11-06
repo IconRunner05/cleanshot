@@ -122,6 +122,8 @@ section exists.
 
 ### Fixed
 
+- Zoomed out, the image sat on a dark grey card the size of the window. The card now
+  shrinks to the image, and the window's frosted glass shows round it (D-158).
 - The current tool in a tool menu turned grey under the pointer. It now stays blue, and
   only the other rows grey (D-155).
 - A shape's shadow was too faint to see under an arrow, a line or a hollow box. It now

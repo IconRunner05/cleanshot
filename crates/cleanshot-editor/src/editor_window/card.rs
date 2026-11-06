@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use cleanshot_core::{Color, KeyAction, Tool};
 use gpui::{
-    AnyElement, BoxShadow, Context, InteractiveElement, IntoElement, ParentElement, Rgba, Role,
-    StatefulInteractiveElement, Styled, Window, div, hsla, point, px,
+    AnyElement, Bounds, BoxShadow, Context, InteractiveElement, IntoElement, ParentElement, Pixels,
+    Rgba, Role, StatefulInteractiveElement, Styled, Window, div, hsla, point, px,
 };
 
 use super::{EditorView, update_while_open};
 use crate::canvas::rgba;
-use crate::placement::{CARD_INSET, canvas_size, fitted_placement, shown_area};
+use crate::placement::{CARD_INSET, canvas_size, fitted_placement, framed, shown_area};
 use crate::theme::Theme;
 use crate::zoom_panel::{OnPanelInput, PanelInput, Viewport, scrollbars, zoom_panel};
 
@@ -27,6 +27,15 @@ impl EditorView {
             room,
             scale_factor,
         }
+    }
+
+    /// The part of the canvas the image's card backs: where the image and its export frame
+    /// are, cut to the canvas (D-158).
+    pub(super) fn backing(&self, window: &Window) -> Bounds<Pixels> {
+        let viewport = self.viewport(window);
+        viewport
+            .placement
+            .covers(viewport.room, framed(viewport.area, self.document.frame()))
     }
 
     /// The zoom panel and scrollbars over the image card, none while the image is fitted
@@ -102,27 +111,30 @@ const GLOW_ALPHA: f32 = 0.28;
 
 /// D-141: the image on a card with rounded corners and a soft shadow, the window showing
 /// round it on the left, right and below, with `zoom` over it (D-145) and a soft `glow` of the
-/// capture's colour round it (D-146).
+/// capture's colour round it (D-146). The card backs only `backing`, the part of the canvas the
+/// image covers, so the window's glass or solid surface shows round a zoomed-out image
+/// (D-158).
 pub(super) fn image_card(
     canvas: impl IntoElement,
     zoom: Vec<AnyElement>,
     glow: Color,
+    backing: Bounds<Pixels>,
     theme: Theme,
 ) -> impl IntoElement {
     div()
         .flex_1()
         .min_h_0()
+        .relative()
         .px(CARD_INSET)
         .pb(CARD_INSET)
         .child(
             div()
-                .id("screenshot")
-                .role(Role::Image)
-                .aria_label("Screenshot")
-                .size_full()
-                .relative()
+                .absolute()
+                .left(CARD_INSET + backing.origin.x)
+                .top(backing.origin.y)
+                .w(backing.size.width)
+                .h(backing.size.height)
                 .rounded(px(10.0))
-                .overflow_hidden()
                 .bg(theme.card)
                 .shadow(vec![
                     BoxShadow {
@@ -143,7 +155,17 @@ pub(super) fn image_card(
                         spread_radius: px(0.0),
                         inset: false,
                     },
-                ])
+                ]),
+        )
+        .child(
+            div()
+                .id("screenshot")
+                .role(Role::Image)
+                .aria_label("Screenshot")
+                .size_full()
+                .relative()
+                .rounded(px(10.0))
+                .overflow_hidden()
                 .child(canvas)
                 .children(zoom),
         )
