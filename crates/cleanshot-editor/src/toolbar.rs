@@ -1,20 +1,25 @@
 use std::borrow::Cow;
 
-use cleanshot_core::{Change, CommandError, History, KeyAction, Output, Tool};
+use cleanshot_core::{
+    Change, CommandError, History, KeyAction, Output, ShownTools, Tool, ToolGroup,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AssetSource, BoxShadow, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Rgba,
-    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Toggled, div, hsla, point,
-    px, svg,
+    App, AssetSource, BoxShadow, Div, ElementId, FocusHandle, Global, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, Rgba, Role, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Toggled, Window, anchored, deferred, div, hsla, point, px,
+    svg,
 };
 
+use crate::menu::{MenuFocus, MenuRow, RowState};
 use crate::theme::{ACCENT, ON_ACCENT, Theme};
 use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// The Lucide icons the editor draws, embedded in the exe under their Lucide names.
 pub(crate) struct Icons;
 
-const ICONS: [(&str, &[u8]); 18] = [
+const ICONS: [(&str, &[u8]); 19] = [
+    ("chevron-down", include_bytes!("../icons/chevron-down.svg")),
     (
         "mouse-pointer-2",
         include_bytes!("../icons/mouse-pointer-2.svg"),
@@ -67,22 +72,99 @@ impl AssetSource for Icons {
     }
 }
 
-/// The tools in toolbar order, each with its Lucide icon and its key.
-pub(crate) const TOOLS: [(Tool, &str, char); 13] = [
-    (Tool::Select, "mouse-pointer-2", 'V'),
-    (Tool::Arrow, "move-up-right", 'A'),
-    (Tool::Line, "minus", 'L'),
-    (Tool::Rectangle, "square", 'R'),
-    (Tool::Ellipse, "circle", 'O'),
-    (Tool::Pen, "pencil", 'P'),
-    (Tool::Highlighter, "highlighter", 'H'),
-    (Tool::Text, "type", 'T'),
-    (Tool::Step, "list-ordered", 'N'),
-    (Tool::Bubble, "message-square", 'B'),
-    (Tool::Redact, "square-dashed", 'X'),
-    (Tool::Spotlight, "focus", 'S'),
-    (Tool::Crop, "crop", 'C'),
-];
+/// Each tool's Lucide icon and its key.
+fn icon_and_key(tool: Tool) -> (&'static str, &'static str) {
+    match tool {
+        Tool::Select => ("mouse-pointer-2", "V"),
+        Tool::Arrow => ("move-up-right", "A"),
+        Tool::Line => ("minus", "L"),
+        Tool::Rectangle => ("square", "R"),
+        Tool::Ellipse => ("circle", "O"),
+        Tool::Pen => ("pencil", "P"),
+        Tool::Highlighter => ("highlighter", "H"),
+        Tool::Text => ("type", "T"),
+        Tool::Step => ("list-ordered", "N"),
+        Tool::Bubble => ("message-square", "B"),
+        Tool::Redact => ("square-dashed", "X"),
+        Tool::Spotlight => ("focus", "S"),
+        Tool::Crop => ("crop", "C"),
+    }
+}
+
+/// The group a group button stands for, as its help text says it (D-143).
+fn group_name(group: ToolGroup) -> &'static str {
+    match group {
+        ToolGroup::Select => "Select",
+        ToolGroup::Shapes => "Shapes",
+        ToolGroup::Text => "Text",
+        ToolGroup::Attention => "Attention",
+        ToolGroup::Redact => "Redact",
+        ToolGroup::Crop => "Crop",
+    }
+}
+
+/// The tool each group's button shows, for as long as the app runs (D-143).
+#[derive(Default)]
+struct Shown(ShownTools);
+
+impl Global for Shown {}
+
+pub(crate) fn shown_tools(cx: &App) -> ShownTools {
+    cx.try_global::<Shown>()
+        .map_or_else(ShownTools::default, |Shown(shown)| *shown)
+}
+
+/// Shows `tool` on its group's button from now on.
+pub(crate) fn show_tool(tool: Tool, cx: &mut App) {
+    cx.default_global::<Shown>().0.pick(tool);
+}
+
+/// The group buttons' keyboard places, and the menu open on one of them (D-143).
+pub(crate) struct ToolMenus {
+    buttons: [FocusHandle; 6],
+    open: Option<(ToolGroup, MenuFocus)>,
+}
+
+impl ToolMenus {
+    pub fn new(cx: &mut App) -> Self {
+        Self {
+            buttons: ToolGroup::ALL.map(|_| cx.focus_handle()),
+            open: None,
+        }
+    }
+
+    /// Opens `group`'s menu, the keyboard on `current` if it is one of the group's tools.
+    pub fn open(&mut self, group: ToolGroup, current: Tool, window: &mut Window, cx: &mut App) {
+        let focus = MenuFocus::open(&group_rows(group, current), window, cx);
+        self.open = Some((group, focus));
+    }
+
+    /// Closes the open menu, if there is one, the keyboard back on its button.
+    pub fn close(&mut self, window: &mut Window, cx: &mut App) {
+        if let Some((group, _)) = self.open.take() {
+            window.focus(&self.buttons[group as usize], cx);
+        }
+    }
+}
+
+/// A group's menu: each of its tools with its icon, name and key, `current` checked.
+fn group_rows(group: ToolGroup, current: Tool) -> Vec<MenuRow> {
+    group
+        .tools()
+        .iter()
+        .map(|&tool| {
+            let (icon, keys) = icon_and_key(tool);
+            MenuRow {
+                icon: Some(icon),
+                name: tool_name(tool),
+                keys,
+                state: RowState::Choice {
+                    checked: tool == current,
+                },
+            }
+        })
+        .collect()
+}
 
 /// The tool's accessible name, which its toolbar button and the undo step both use.
 fn tool_name(tool: Tool) -> &'static str {
@@ -140,22 +222,41 @@ fn step_name(verb: &str, change: Change) -> String {
     format!("{verb} {changed}")
 }
 
-/// The tool panel (CHARTER 4: 28 px buttons with 7 px corners), then Undo and Redo for
-/// `history`, then Copy, Save and Save As. `on_pick` is called with the tool clicked,
-/// `on_replay` with the step clicked and `on_output` with the clicked output's action.
-pub(crate) fn toolbar<Pick, Play, Out>(
+/// What the toolbar's buttons ask of the editor.
+pub(crate) struct ToolbarActions<Pick, Menu, Play, Out> {
+    /// Called with the tool clicked, or picked from a group's menu.
+    pub pick: Pick,
+    /// Called with the group whose menu to open, or `None` to close the open one.
+    pub menu: Menu,
+    /// Called with the step clicked.
+    pub replay: Play,
+    /// Called with the clicked output's action.
+    pub output: Out,
+}
+
+/// The tool groups (CHARTER 4: 28 px buttons with 7 px corners), each showing the tool
+/// `shown` gives it, `menus`' menu open under its button, then Undo and Redo for `history`,
+/// then Copy, Save and Save As.
+pub(crate) fn toolbar<Pick, Menu, Play, Out>(
     current: Tool,
+    shown: ShownTools,
+    menus: &ToolMenus,
     history: &History,
     theme: Theme,
-    on_pick: Pick,
-    on_replay: Play,
-    on_output: Out,
-) -> impl IntoElement + use<Pick, Play, Out>
+    actions: ToolbarActions<Pick, Menu, Play, Out>,
+) -> impl IntoElement + use<Pick, Menu, Play, Out>
 where
-    Pick: Fn(Tool, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
-    Play: Fn(Replay, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
-    Out: Fn(KeyAction, &mut gpui::Window, &mut gpui::App) + Clone + 'static,
+    Pick: Fn(Tool, &mut Window, &mut App) + Clone + 'static,
+    Menu: Fn(Option<ToolGroup>, &mut Window, &mut App) + Clone + 'static,
+    Play: Fn(Replay, &mut Window, &mut App) + Clone + 'static,
+    Out: Fn(KeyAction, &mut Window, &mut App) + Clone + 'static,
 {
+    let ToolbarActions {
+        pick,
+        menu,
+        replay: on_replay,
+        output: on_output,
+    } = actions;
     let replays = REPLAYS.map(|(icon, verb, keys, next, replay)| {
         let step = next(history).map(|change| step_name(verb, change));
         let button = button(verb)
@@ -197,29 +298,16 @@ where
             .on_click(move |_, window, cx| on_output(action, window, cx))
             .child(icon_of(icon, theme.text))
     });
-    let buttons = TOOLS.map(|(tool, icon, key)| {
-        let name = tool_name(tool);
-        let on_pick = on_pick.clone();
-        let picked = tool == current;
-        button(ElementId::Name(name.into()))
-            .focusable()
-            .tab_stop(true)
-            .role(Role::RadioButton)
-            .aria_label(name)
-            .aria_keyshortcuts(key.to_string())
-            .map(|element| with_tooltip(element, tooltip_text(name, Some(&key.to_string())), theme))
-            .aria_toggled(if picked {
-                Toggled::True
-            } else {
-                Toggled::False
-            })
-            .focus_visible(|button| button.border_2().border_color(ACCENT))
-            .when(picked, |button| button.bg(ACCENT))
-            .when(!picked, |button| {
-                button.hover(move |button| button.bg(theme.hover))
-            })
-            .on_click(move |_, window, cx| on_pick(tool, window, cx))
-            .child(icon_of(icon, if picked { ON_ACCENT } else { theme.text }))
+    let buttons = ToolGroup::ALL.map(|group| {
+        group_button(
+            group,
+            current,
+            shown.shown(group),
+            menus,
+            theme,
+            pick.clone(),
+            menu.clone(),
+        )
     });
     div()
         .flex()
@@ -234,6 +322,92 @@ where
         .children(replays)
         .child(divider(theme))
         .children(outputs)
+}
+
+/// `group`'s button, showing `tool`, with its menu under it while `menus` has it open
+/// (D-143). A group of one tool picks it; a larger group opens its menu on a click, Enter,
+/// Space or Alt+Down.
+fn group_button(
+    group: ToolGroup,
+    current: Tool,
+    tool: Tool,
+    menus: &ToolMenus,
+    theme: Theme,
+    on_pick: impl Fn(Tool, &mut Window, &mut App) + Clone + 'static,
+    on_menu: impl Fn(Option<ToolGroup>, &mut Window, &mut App) + Clone + 'static,
+) -> Div {
+    let (icon, key) = icon_and_key(tool);
+    let name = tool_name(tool);
+    let picked = ToolGroup::of(current) == group;
+    let focus = menus
+        .open
+        .as_ref()
+        .filter(|(open, _)| *open == group)
+        .map(|(_, focus)| focus);
+    let color = if picked { ON_ACCENT } else { theme.text };
+    let button = button(ElementId::Name(group_name(group).into()))
+        .track_focus(&menus.buttons[group as usize])
+        .tab_stop(true)
+        .role(Role::RadioButton)
+        .aria_label(name)
+        .aria_keyshortcuts(key)
+        .map(|element| with_tooltip(element, tooltip_text(name, Some(key)), theme))
+        .aria_toggled(if picked {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .focus_visible(|button| button.border_2().border_color(ACCENT))
+        .when(picked, |button| button.bg(ACCENT))
+        .when(!picked, |button| {
+            button.hover(move |button| button.bg(theme.hover))
+        })
+        .child(icon_of(icon, color));
+    if group.tools().len() == 1 {
+        return div().child(button.on_click(move |_, window, cx| on_pick(tool, window, cx)));
+    }
+    let open = focus.is_some();
+    let on_key = on_menu.clone();
+    let on_click = on_menu.clone();
+    let button = button
+        .w(px(38.0))
+        .gap(px(1.0))
+        .aria_expanded(open)
+        .aria_description(format!(
+            "{}. Alt+Down opens the other tools",
+            group_name(group)
+        ))
+        .on_click(move |_, window, cx| on_click((!open).then_some(group), window, cx))
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if event.keystroke.key == "down" && event.keystroke.modifiers.alt {
+                on_key(Some(group), window, cx);
+                cx.stop_propagation();
+            }
+        })
+        .child(
+            svg()
+                .path("icons/chevron-down.svg")
+                .size(px(8.0))
+                .text_color(color),
+        );
+    div().relative().child(button).children(focus.map(|focus| {
+        let tools = group.tools();
+        let menu = focus.element(
+            "tool-menu",
+            group_name(group),
+            &group_rows(group, current),
+            theme,
+            move |picked: Option<usize>, window: &mut Window, cx: &mut App| match picked {
+                Some(index) => on_pick(tools[index], window, cx),
+                None => on_menu(None, window, cx),
+            },
+        );
+        div()
+            .absolute()
+            .top(px(32.0))
+            .left_0()
+            .child(deferred(anchored().snap_to_window().child(menu)))
+    }))
 }
 
 /// CHARTER 4: a 28 px toolbar button with 7 px corners, its icon centred.
@@ -251,7 +425,7 @@ fn divider(theme: Theme) -> Div {
     div().w(px(1.0)).h(px(20.0)).mx(px(2.0)).bg(theme.hairline)
 }
 
-fn icon_of(icon: &str, color: Rgba) -> impl IntoElement {
+pub(crate) fn icon_of(icon: &str, color: Rgba) -> impl IntoElement {
     svg()
         .path(format!("icons/{icon}.svg"))
         .size(px(16.0))
@@ -283,16 +457,25 @@ pub(crate) fn panel(theme: Theme) -> Div {
 mod tests {
     use super::*;
 
+    fn every_tool() -> impl Iterator<Item = Tool> {
+        ToolGroup::ALL
+            .into_iter()
+            .flat_map(|group| group.tools().iter().copied())
+    }
+
     #[test]
-    fn f30_every_toolbar_button_has_an_embedded_icon_and_names_its_key() {
-        for (tool, icon, key) in TOOLS {
+    fn f30_every_tool_has_an_embedded_icon_and_names_its_key() {
+        for tool in every_tool() {
+            let (icon, key) = icon_and_key(tool);
             let svg = Icons.load(&format!("icons/{icon}.svg")).unwrap().unwrap();
             assert!(
                 svg.starts_with(b"<!-- @license lucide-static v1.65.0"),
                 "{icon}"
             );
+            let key = key.chars().next().unwrap();
             assert_eq!(Tool::for_key(key), Some(tool), "{}", tool_name(tool));
         }
+        assert!(Icons.load("icons/chevron-down.svg").unwrap().is_some());
         assert_eq!(Icons.load("icons/not-an-icon.svg").unwrap(), None);
     }
 
@@ -355,11 +538,11 @@ mod tests {
     }
 
     #[test]
-    fn f58_every_toolbar_button_has_its_own_accessible_name_and_key() {
-        let names: std::collections::HashSet<_> =
-            TOOLS.iter().map(|tool| tool_name(tool.0)).collect();
-        let keys: std::collections::HashSet<_> = TOOLS.iter().map(|tool| tool.2).collect();
-        assert_eq!(names.len(), TOOLS.len());
-        assert_eq!(keys.len(), TOOLS.len());
+    fn f58_every_tool_has_its_own_accessible_name_and_key() {
+        let names: std::collections::HashSet<_> = every_tool().map(tool_name).collect();
+        let keys: std::collections::HashSet<_> =
+            every_tool().map(|tool| icon_and_key(tool).1).collect();
+        assert_eq!(names.len(), 13);
+        assert_eq!(keys.len(), 13);
     }
 }

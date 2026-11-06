@@ -11,27 +11,15 @@ use std::time::Instant;
 use cleanshot_core::{DeliveryError, RgbaImage};
 use cleanshot_win::accessibility::{ControlKind, wait_for_container};
 
-const TOOLS: [&str; 13] = [
-    "Select",
-    "Arrow",
-    "Line",
-    "Rectangle",
-    "Ellipse",
-    "Pen",
-    "Highlighter",
-    "Text",
-    "Numbered step",
-    "Speech bubble",
-    "Redact",
-    "Spotlight",
-    "Crop",
-];
+/// D-143: each tool group's button, named for the tool it shows, the group's first until
+/// another is picked.
+const TOOLS: [&str; 6] = ["Select", "Arrow", "Text", "Highlighter", "Redact", "Crop"];
 
 const FRAME_TOGGLES: [&str; 2] = ["Border", "Shadow"];
 
 const WALKS: [(&str, &str, ControlKind, &[&str]); 2] = [
     (
-        "f58_the_editor_toolbar_names_every_tool_to_ui_automation",
+        "f58_d143_the_editor_toolbar_names_each_tool_group_to_ui_automation",
         "Tools",
         ControlKind::RadioButton,
         &TOOLS,

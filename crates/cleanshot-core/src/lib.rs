@@ -76,6 +76,6 @@ pub use text_edit::{
     BoxPress, CaretMove, LineMove, LinePosition, TextEdit, TextFrame, TextOrigin, commit_text,
 };
 pub use timer::Timer;
-pub use tool::Tool;
+pub use tool::{ShownTools, Tool, ToolGroup};
 pub use toolbar::{TabDirection, Toolbar, ToolbarControl};
 pub use window_pick::{Pick, Pickable, next_window, picked};

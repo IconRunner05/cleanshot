@@ -69,6 +69,9 @@ section exists.
   snap layouts work as before (D-141).
 - The editor window is frosted glass: the desktop behind it shows through, blurred. It is
   solid when Windows' transparency effects are off or a high-contrast theme is on (D-142).
+- The editor's tools are grouped into six buttons: Select, Shapes, Text, Attention, Redact
+  and Crop. A group's button shows the tool you last used from it, and opens a menu of
+  its tools; every tool key works as before (D-143).
 - After a graphics driver update or GPU reset, the next capture makes a new graphics device
   and copies the screen as usual, instead of falling back to a slower copy (D-151).
 - A capture across two or more monitors waits for the screen once, not once per monitor,

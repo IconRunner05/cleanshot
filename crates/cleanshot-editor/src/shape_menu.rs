@@ -1,12 +1,8 @@
 use cleanshot_core::{Document, Restack, ShapeId};
-use gpui::prelude::FluentBuilder;
-use gpui::{
-    App, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point,
-    Rgba, Role, StatefulInteractiveElement, Styled, Window, anchored, deferred, div, px,
-};
+use gpui::{App, IntoElement, ParentElement, Pixels, Point, Window, anchored, deferred};
 
-use crate::theme::{ACCENT, ON_ACCENT, Theme};
-use crate::toolbar::panel;
+use crate::menu::{MenuFocus, MenuRow, RowState};
+use crate::theme::Theme;
 
 /// The menu's items: each move, its name and its shortcut (D-115).
 const MOVES: [(Restack, &str, &str); 4] = [
@@ -20,7 +16,22 @@ const MOVES: [(Restack, &str, &str); 4] = [
 pub(crate) struct ShapeMenu {
     pub id: ShapeId,
     at: Point<Pixels>,
-    items: [FocusHandle; 4],
+    focus: MenuFocus,
+}
+
+/// The menu's rows for `id` in `document`: a move that would leave the shape where it is
+/// shows dimmed.
+fn rows(document: &Document, id: ShapeId) -> [MenuRow; 4] {
+    MOVES.map(|(to, name, keys)| MenuRow {
+        icon: None,
+        name,
+        keys,
+        state: if to.index(document, id).is_some() {
+            RowState::Enabled
+        } else {
+            RowState::Dimmed
+        },
+    })
 }
 
 impl ShapeMenu {
@@ -33,98 +44,28 @@ impl ShapeMenu {
         window: &mut Window,
         cx: &mut App,
     ) -> Self {
-        let items = [(); 4].map(|()| cx.focus_handle());
-        let first = MOVES
-            .iter()
-            .zip(&items)
-            .find(|((to, ..), _)| to.index(document, id).is_some());
-        if let Some((_, item)) = first {
-            window.focus(item, cx);
-        }
-        Self { id, at, items }
+        let focus = MenuFocus::open(&rows(document, id), window, cx);
+        Self { id, at, focus }
     }
 
     /// The menu over everything else. `on_pick` gets the move picked by click, Enter or Space,
-    /// or `None` when Esc or a press outside the menu closes it. A move that would leave the
-    /// shape where it is shows dimmed and cannot be picked or reached with the keyboard.
+    /// or `None` when Esc or a press outside the menu closes it.
     pub fn element(
         &self,
         document: &Document,
         theme: Theme,
         on_pick: impl Fn(Option<Restack>, &mut Window, &mut App) + Clone + 'static,
     ) -> impl IntoElement {
-        let movable: Vec<_> = MOVES
-            .iter()
-            .zip(&self.items)
-            .filter(|((to, ..), _)| to.index(document, self.id).is_some())
-            .map(|(_, item)| item.clone())
-            .collect();
-        let on_close = on_pick.clone();
-        let on_key = on_pick.clone();
-        let items = MOVES
-            .iter()
-            .zip(&self.items)
-            .map(|(&(to, name, keys), item)| {
-                let can_move = to.index(document, self.id).is_some();
-                let on_pick = on_pick.clone();
-                div()
-                    .id(name)
-                    .role(Role::MenuItem)
-                    .aria_label(name)
-                    .aria_keyshortcuts(keys)
-                    .h(px(28.0))
-                    .px(px(10.0))
-                    .gap(px(24.0))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .rounded(px(7.0))
-                    .text_size(px(13.0))
-                    .when(can_move, |row| {
-                        row.track_focus(item)
-                            .text_color(theme.text)
-                            .hover(move |row| row.bg(theme.hover))
-                            .focus(|row| row.bg(ACCENT).text_color(ON_ACCENT))
-                            .on_click(move |_, window, cx| on_pick(Some(to), window, cx))
-                    })
-                    .when(!can_move, |row| {
-                        row.text_color(Rgba {
-                            a: 0.4,
-                            ..theme.text
-                        })
-                    })
-                    .child(name)
-                    .child(keys)
-            });
-        deferred(
-            anchored().position(self.at).snap_to_window().child(
-                panel(theme)
-                    .id("shape-menu")
-                    .role(Role::Menu)
-                    .aria_label("Shape")
-                    .flex_col()
-                    .items_stretch()
-                    .on_mouse_down_out(move |_, window, cx| on_close(None, window, cx))
-                    .on_key_down(move |event: &KeyDownEvent, window, cx| {
-                        let step = match event.keystroke.key.as_str() {
-                            "escape" => {
-                                on_key(None, window, cx);
-                                cx.stop_propagation();
-                                return;
-                            }
-                            "down" => 1,
-                            "up" => movable.len().saturating_sub(1),
-                            _ => return,
-                        };
-                        let at = movable.iter().position(|item| item.is_focused(window));
-                        if let Some(next) = at.map(|at| (at + step) % movable.len()) {
-                            window.focus(&movable[next], cx);
-                        }
-                        cx.stop_propagation();
-                    })
-                    .children(items),
-            ),
-        )
+        let menu = self.focus.element(
+            "shape-menu",
+            "Shape",
+            &rows(document, self.id),
+            theme,
+            move |picked: Option<usize>, window: &mut Window, cx: &mut App| {
+                on_pick(picked.map(|index| MOVES[index].0), window, cx);
+            },
+        );
+        deferred(anchored().position(self.at).snap_to_window().child(menu))
     }
 }
 
