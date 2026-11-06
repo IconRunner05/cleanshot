@@ -51,7 +51,7 @@ pub(crate) enum Fill {
 
 impl Fill {
     /// The keyboard focus ring that shows on this fill (D-155).
-    pub(crate) fn ring(self) -> Rgba {
+    fn ring(self) -> Rgba {
         match self {
             Self::Accent => ON_ACCENT,
             Self::Neutral => ACCENT,
