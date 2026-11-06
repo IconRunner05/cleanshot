@@ -115,6 +115,17 @@ impl Placement {
         }
     }
 
+    /// Where the part of `area`, in image pixels, that a canvas of `room` shows lies on that
+    /// canvas: what the image's card backs, so the window shows round a zoomed-out image
+    /// (D-158).
+    pub fn covers(self, room: Size<Pixels>, area: RectF) -> Bounds<Pixels> {
+        let shown = self.shows(room, area);
+        Bounds::new(
+            self.corner + point(px(shown.x * self.scale), px(shown.y * self.scale)),
+            size(px(shown.width * self.scale), px(shown.height * self.scale)),
+        )
+    }
+
     /// Moved by `offset` on the canvas (F-39).
     pub fn panned(self, offset: Point<Pixels>) -> Self {
         Self {
@@ -482,6 +493,27 @@ mod tests {
         assert_eq!(
             fit.image_point(canvas.bottom_right()),
             PointF { x: 300.0, y: 150.0 }
+        );
+    }
+
+    #[test]
+    fn d158_the_card_backs_only_the_part_of_the_canvas_the_image_covers() {
+        let area = all_of(&image(400, 200));
+        let room = size(px(800.0), px(400.0));
+        let fitted = Placement::fitted(room, area, 0.5);
+        assert_eq!(
+            fitted.covers(room, area),
+            Bounds::new(point(px(0.0), px(0.0)), room)
+        );
+        let zoomed_out = fitted.zoomed(0.5, point(px(400.0), px(200.0)));
+        assert_eq!(
+            zoomed_out.covers(room, area),
+            Bounds::new(point(px(200.0), px(100.0)), size(px(400.0), px(200.0)))
+        );
+        let zoomed_in = fitted.zoomed(2.0, point(px(0.0), px(0.0)));
+        assert_eq!(
+            zoomed_in.covers(room, area),
+            Bounds::new(point(px(0.0), px(0.0)), room)
         );
     }
 

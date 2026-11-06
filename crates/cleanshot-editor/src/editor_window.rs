@@ -541,6 +541,7 @@ impl Render for EditorView {
             on_pointer,
         );
         let zoom = self.zoom_controls(window, theme, cx);
+        let backing = self.backing(window);
         let tools = div()
             .flex()
             .items_center()
@@ -572,6 +573,7 @@ impl Render for EditorView {
                     .child(canvas.size_full()),
                 zoom,
                 self.glow,
+                backing,
                 theme,
             ))
             .children(
