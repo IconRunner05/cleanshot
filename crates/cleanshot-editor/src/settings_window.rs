@@ -15,8 +15,9 @@ use gpui::{
     Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 
+use crate::caption::caption_row;
 use crate::text::register_inter;
-use crate::theme::{ACCENT, Theme, WindowSurface};
+use crate::theme::{ACCENT, Theme, WindowSurface, window_surface};
 use crate::tooltip::{hover_time, tooltip_text, with_tooltip};
 use crate::{Error, Log, open_window, win32_handle};
 
@@ -78,8 +79,10 @@ pub fn open_settings(
             size(px(460.0), px(620.0)),
             cx,
         ))),
+        // D-148: its own caption row, as the editor's; Windows keeps the title for the taskbar.
         titlebar: Some(TitlebarOptions {
             title: Some("Cleanshot settings".into()),
+            appears_transparent: true,
             ..TitlebarOptions::default()
         }),
         window_min_size: Some(size(px(400.0), px(400.0))),
@@ -119,6 +122,8 @@ struct SettingsView {
     apply: Apply,
     startup: StartWithWindows,
     log: Log,
+    /// Glass or solid, as the window opened (D-148).
+    surface: WindowSurface,
     /// The action whose hotkey the next key press sets.
     recording: Option<HotkeyAction>,
     notice: Option<SharedString>,
@@ -139,6 +144,8 @@ impl SettingsView {
     ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let surface = window_surface(cx);
+        window.set_background_appearance(surface.background());
         // F-12: a change made from the Options menu while this window was in the background.
         let activation = cx.observe_window_activation(window, |_, _, cx| cx.notify());
         Self {
@@ -147,6 +154,7 @@ impl SettingsView {
             apply,
             startup,
             log,
+            surface,
             recording: None,
             notice: None,
             focus,
@@ -268,8 +276,7 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme =
-            Theme::for_appearance(window.appearance(), WindowSurface::Solid, hover_time(cx));
+        let theme = Theme::for_appearance(window.appearance(), self.surface, hover_time(cx));
         let settings = (self.current)();
         let capture = section("Capture", theme)
             .child(radio_group(
@@ -289,16 +296,17 @@ impl Render for SettingsView {
         let hotkeys = section("Hotkeys", theme).children(
             HotkeyAction::ALL.map(|action| self.hotkey_row(action, &settings, theme, cx)),
         );
-        div()
-            .id("settings")
-            .role(Role::Application)
-            .aria_label("Cleanshot settings")
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::key_down))
-            .size_full()
+        let title = div()
+            .text_size(px(13.0))
+            .text_color(theme.text)
+            .child("Settings");
+        let content = div()
+            .id("settings-content")
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
-            .bg(theme.backdrop)
-            .p(px(16.0))
+            .px(px(16.0))
+            .pb(px(16.0))
             .flex()
             .flex_col()
             .gap(px(16.0))
@@ -313,7 +321,19 @@ impl Render for SettingsView {
                     .text_color(theme.text)
                     .text_size(px(13.0))
                     .child(notice)
-            }))
+            }));
+        div()
+            .id("settings")
+            .role(Role::Application)
+            .aria_label("Cleanshot settings")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::key_down))
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme.backdrop)
+            .child(caption_row(title, div(), window, theme))
+            .child(content)
     }
 }
 

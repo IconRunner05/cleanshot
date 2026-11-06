@@ -19,7 +19,8 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
-    PostMessageW, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, SendMessageTimeoutW, WM_CLOSE, WM_NCHITTEST,
+    PostMessageW, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, SendMessageTimeoutW, WM_CLOSE, WM_MOUSEMOVE,
+    WM_NCHITTEST,
 };
 use windows::core::{BOOL, Interface};
 
@@ -211,7 +212,9 @@ pub enum HitArea {
 }
 
 /// Asks `window` what part of it the point `client` is over, in physical pixels from the
-/// top-left of its client area, as Windows asks it when the pointer moves there.
+/// top-left of its client area, as Windows asks it once the pointer has moved there. It first
+/// tells the window the pointer moved to that point, so the window's hover state changes as a
+/// real move would change it.
 ///
 /// # Errors
 ///
@@ -219,6 +222,11 @@ pub enum HitArea {
 /// does not answer within 5 s.
 pub fn hit_test(window: NonZeroIsize, client: (i32, i32)) -> Result<HitArea, Error> {
     let window = HWND(window.get() as *mut c_void);
+    let (Ok(client_x), Ok(client_y)) = (i16::try_from(client.0), i16::try_from(client.1)) else {
+        return Err(Error::HitTestFailed(E_INVALIDARG.into()));
+    };
+    // GPUI answers WM_NCHITTEST from the last WM_MOUSEMOVE, not from the point it carries.
+    send(window, WM_MOUSEMOVE, packed_point(client_x, client_y))?;
     let mut point = POINT {
         x: client.0,
         y: client.1,
@@ -230,23 +238,7 @@ pub fn hit_test(window: NonZeroIsize, client: (i32, i32)) -> Result<HitArea, Err
     let (Ok(x), Ok(y)) = (i16::try_from(point.x), i16::try_from(point.y)) else {
         return Err(Error::HitTestFailed(E_INVALIDARG.into()));
     };
-    let mut answer = 0usize;
-    // SAFETY: WM_NCHITTEST carries the point by value; `answer` is writable.
-    let sent = unsafe {
-        SendMessageTimeoutW(
-            window,
-            WM_NCHITTEST,
-            WPARAM(0),
-            screen_point(x, y),
-            SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT,
-            HIT_TEST_TIMEOUT_MS,
-            Some(&raw mut answer),
-        )
-    };
-    if sent.0 == 0 {
-        return Err(Error::HitTestFailed(windows::core::Error::from_thread()));
-    }
-    let code = answer.cast_signed();
+    let code = send(window, WM_NCHITTEST, packed_point(x, y))?.cast_signed();
     Ok(match u32::try_from(code) {
         Ok(HTCLOSE) => HitArea::Close,
         Ok(HTMAXBUTTON) => HitArea::Maximize,
@@ -257,9 +249,32 @@ pub fn hit_test(window: NonZeroIsize, client: (i32, i32)) -> Result<HitArea, Err
     })
 }
 
-/// A screen point as `WM_NCHITTEST`'s `lParam` carries it: x in the low word, y in the high
-/// word, each a signed 16-bit value, so a monitor left of or above the primary keeps its sign.
-fn screen_point(x: i16, y: i16) -> LPARAM {
+/// Sends `message` with `point` to `window` and returns its answer, waiting as [`hit_test`]
+/// does.
+fn send(window: HWND, message: u32, point: LPARAM) -> Result<usize, Error> {
+    let mut answer = 0usize;
+    // SAFETY: both messages carry the point by value; `answer` is writable.
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            window,
+            message,
+            WPARAM(0),
+            point,
+            SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT,
+            HIT_TEST_TIMEOUT_MS,
+            Some(&raw mut answer),
+        )
+    };
+    if sent.0 == 0 {
+        return Err(Error::HitTestFailed(windows::core::Error::from_thread()));
+    }
+    Ok(answer)
+}
+
+/// A point as `WM_NCHITTEST`'s and `WM_MOUSEMOVE`'s `lParam` carry it: x in the low word, y
+/// in the high word, each a signed 16-bit value, so a monitor left of or above the primary
+/// keeps its sign.
+fn packed_point(x: i16, y: i16) -> LPARAM {
     LPARAM((isize::from(y) << 16) | (isize::from(x) & 0xFFFF))
 }
 
@@ -612,7 +627,7 @@ mod tests {
             (0, 0),
             (i16::MAX, i16::MIN),
         ] {
-            let LPARAM(packed) = screen_point(x, y);
+            let LPARAM(packed) = packed_point(x, y);
             let low = u16::try_from(packed & 0xFFFF).unwrap();
             let high = u16::try_from((packed >> 16) & 0xFFFF).unwrap();
             assert_eq!(
