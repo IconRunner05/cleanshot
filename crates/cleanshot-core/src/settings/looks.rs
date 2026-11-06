@@ -269,7 +269,7 @@ fn read_number(value: &Value) -> Option<f32> {
 fn horizontal_name(horizontal: Horizontal) -> &'static str {
     match horizontal {
         Horizontal::Left => "left",
-        Horizontal::Centre => "centre",
+        Horizontal::Centre => "center",
         Horizontal::Right => "right",
     }
 }
@@ -283,7 +283,7 @@ fn horizontal_named(name: &str) -> Option<Horizontal> {
 fn vertical_name(vertical: Vertical) -> &'static str {
     match vertical {
         Vertical::Top => "top",
-        Vertical::Centre => "centre",
+        Vertical::Centre => "center",
         Vertical::Bottom => "bottom",
     }
 }
@@ -366,6 +366,29 @@ pub(super) mod tests {
             looks.set(property, tool, None).unwrap();
         }
         looks
+    }
+
+    #[test]
+    fn d149_the_settings_file_spells_center_as_color_is_spelt() {
+        let center = Alignment {
+            horizontal: Horizontal::Centre,
+            vertical: Vertical::Centre,
+        };
+        let looks = set_all(&[
+            (Tool::Text, Property::Alignment(center)),
+            (Tool::Bubble, Property::Alignment(center)),
+        ]);
+        let written = Settings {
+            looks,
+            ..Settings::default()
+        }
+        .to_toml();
+        assert!(
+            written.contains("[looks.text]\nalignment = \"center\"")
+                && written.contains("[looks.bubble]\nalignment = \"center-center\"")
+                && !written.contains("centre"),
+            "{written}"
+        );
     }
 
     #[test]
