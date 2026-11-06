@@ -86,6 +86,8 @@ section exists.
   (D-147).
 - The first capture after Cleanshot starts opens sooner: the graphics device it copies the
   screen with is made once the tray icon is ready (D-152).
+- The settings window matches the editor: no Windows title bar, its own top row with the
+  window buttons, and the same glass (D-148).
 - After a graphics driver update or GPU reset, the next capture makes a new graphics device
   and copies the screen as usual, instead of falling back to a slower copy (D-151).
 - A capture across two or more monitors waits for the screen once, not once per monitor,

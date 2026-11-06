@@ -4,7 +4,8 @@
 //! from the Options menu (F-12) while the window is open is kept when the window next writes
 //! the file. Closing the window, the last one open, leaves GPUI running for the tray (F-55).
 //! A second open finds the window already open, and Windows brings its handle to the front
-//! (D-124).
+//! (D-124). The window has no title bar: the top of it is its own caption row, which Windows
+//! treats as a title bar (D-148).
 //! Run as for `toolbar_automation`: GPUI owns the window's thread and the walk ends the
 //! process.
 
@@ -19,7 +20,9 @@ use cleanshot_core::{
     Applied, MAX_SETTINGS_BYTES, Policy, PolicyValue, SaveFormat, Settings, run_command, starts,
 };
 use cleanshot_editor::{App, AsyncApp};
-use cleanshot_win::accessibility::{ControlKind, toggle_in_own_windows, wait_for_container};
+use cleanshot_win::accessibility::{
+    ControlKind, HitArea, hit_test, toggle_in_own_windows, wait_for_container,
+};
 use cleanshot_win::bring_to_front;
 use cleanshot_win::settings_file::{read_settings, write_settings};
 use cleanshot_win::startup::{remove_run_value, run_value, set_run_value};
@@ -33,6 +36,9 @@ const PATIENCE: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(50);
 // GPUI quitting on a closed window returns from `run` well inside this.
 const STILL_RUNNING: Duration = Duration::from_secs(1);
+// 10 physical pixels down and 250 across is the caption row's empty space at any scale
+// from 100% to 250%, right of the "Settings" title and left of the caption buttons.
+const CAPTION_SPACE: (i32, i32) = (250, 10);
 
 fn main() {
     let exe = std::env::current_exe()
@@ -53,12 +59,13 @@ fn main() {
     // The settings the app holds, as apply_settings keeps them and the Options menu changes them.
     let in_force = Arc::new(Mutex::new(Settings::default()));
     let (opened, shown) = mpsc::channel();
+    let (handed, handle) = mpsc::channel();
     let walked = (file.clone(), exe.clone(), Arc::clone(&in_force));
     let (verdict, walk_verdict) = mpsc::channel();
     thread::spawn(move || {
         let (file, exe, in_force) = walked;
         verdict
-            .send(walk(&file, &exe, &in_force, start, &shown))
+            .send(walk(&file, &exe, &in_force, start, &shown, &handle))
             .expect("GPUI runs until the walk's verdict, or main finishes the run");
     });
     let stopped = left_as_found.clone();
@@ -124,6 +131,9 @@ fn main() {
             }
         };
         second_open_finds(cx, window, &left_as_found);
+        handed
+            .send(window)
+            .expect("the walk thread waits for the window");
         opened
             .send(Instant::now())
             .expect("the walk thread waits for the window");
@@ -233,7 +243,11 @@ fn walk(
     in_force: &Mutex<Settings>,
     start: Instant,
     shown: &mpsc::Receiver<Instant>,
+    handle: &mpsc::Receiver<NonZeroIsize>,
 ) -> Result<(), String> {
+    let window = handle
+        .recv_timeout(PATIENCE)
+        .map_err(|error| format!("no window handle came: {error}"))?;
     let boxes = wait_for_container(
         ControlKind::Group,
         "Capture",
@@ -245,6 +259,12 @@ fn walk(
     let names: Vec<_> = boxes.iter().map(|control| control.name.as_str()).collect();
     if names != [THUMBNAIL, START_WITH_WINDOWS] {
         return Err(format!("the Capture check boxes are {names:?}"));
+    }
+    let caption = hit_test(window, CAPTION_SPACE).map_err(|error| error.to_string())?;
+    if caption != HitArea::Caption {
+        return Err(format!(
+            "the top of the window is {caption:?}, not its own caption row"
+        ));
     }
 
     // F-12: the Options menu picks JPG while the window is open, as its apply_settings would.
