@@ -1,3 +1,5 @@
+mod card;
+mod input;
 mod text_input;
 
 use std::num::NonZeroIsize;
@@ -7,24 +9,21 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cleanshot_core::{
-    Activity, BoxPress, Color, Command, CommandError, Delivered, DeliveryError, Document, Drag,
-    History, KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError,
-    Restack, RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextMasks, TextOrigin,
-    Tool, action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
+    Color, Command, CommandError, Delivered, DeliveryError, Document, Drag, History, KeyAction,
+    Looks, Monitor, Output, PointF, Property, PropertyError, Restack, RgbaImage, Setting, ShapeId,
+    TextBlockError, TextMasks, TextOrigin, Tool, delivery_notice, save_as_notice,
 };
 use gpui::{
-    AnyElement, App, AppContext, Bounds, BoxShadow, Context, Entity, FocusHandle, Global,
-    InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point,
-    Render, RenderImage, Rgba, Role, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Task, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle,
-    WindowOptions, div, hsla, point, px, size,
+    App, AppContext, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement, IntoElement,
+    KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions, WeakEntity, Window,
+    WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
 
-use crate::canvas::{OnPointer, Overlay, Pointer, Previews, document_canvas, render_image, rgba};
+use self::card::image_card;
+use crate::canvas::{OnPointer, Overlay, Pointer, Previews, document_canvas, render_image};
 use crate::caption::caption_row;
-use crate::placement::{
-    CARD_INSET, MIN_WINDOW, Placement, canvas_size, fitted_placement, opening_size, shown_area,
-};
+use crate::placement::{MIN_WINDOW, Placement, opening_size};
 use crate::settings_window::settings_opener;
 use crate::shape_menu::ShapeMenu;
 use crate::strip::property_strip;
@@ -36,7 +35,6 @@ use crate::toolbar::{
     shown_tools, toolbar,
 };
 use crate::tooltip::hover_time;
-use crate::zoom_panel::{OnPanelInput, PanelInput, Viewport, scrollbars, zoom_panel};
 use crate::{Error, Log, MasksFor, open_window};
 use text_input::paint_text_box;
 
@@ -199,177 +197,6 @@ impl EditorView {
             _appearance: appearance,
             _activation: activation,
         }
-    }
-
-    fn pointer(&mut self, pointer: Pointer, window: &mut Window, cx: &mut Context<Self>) {
-        match pointer {
-            Pointer::Press {
-                position,
-                placement,
-                ..
-            } if self.space_held => {
-                self.pan = Some(Pan {
-                    from: position,
-                    placement,
-                });
-            }
-            Pointer::Press {
-                at,
-                reach,
-                double_click,
-                ..
-            } => {
-                self.notice = None;
-                if let Some(text_box) = &mut self.text_box {
-                    match text_box.press(at, reach, window) {
-                        BoxPress::PlaceCaret | BoxPress::Ignore => {
-                            cx.notify();
-                            return;
-                        }
-                        BoxPress::Commit => self.close_text_box(window),
-                    }
-                }
-                if double_click && let Some(origin) = text_reopened_at(&self.document, at, reach) {
-                    self.selected = None;
-                    self.drag = None;
-                    self.open_text_box(origin);
-                    cx.notify();
-                    return;
-                }
-                let look = self.looks.look(self.tool);
-                let Press { selected, start } =
-                    Drag::press(&self.document, self.tool, look, self.selected, at, reach);
-                self.selected = selected;
-                self.drag = None;
-                match start {
-                    Some(Start::Drag(drag)) => self.drag = Some(drag),
-                    Some(Start::Type(origin)) => self.open_text_box(origin),
-                    None => {}
-                }
-            }
-            Pointer::Move { position, .. } if self.pan.is_some() => {
-                self.placement = self
-                    .pan
-                    .map(|pan| pan.placement.panned(position - pan.from));
-            }
-            Pointer::Move { at, shift, .. } => {
-                if let Some(text_box) = &mut self.text_box {
-                    text_box.drag_to(at, window);
-                    cx.notify();
-                    return;
-                }
-                let Some(drag) = &mut self.drag else {
-                    return;
-                };
-                drag.extend(at);
-                self.shift = shift;
-            }
-            Pointer::Release { .. } if self.pan.is_some() => self.pan = None,
-            Pointer::Release { shift } => {
-                if let Some(text_box) = &mut self.text_box {
-                    text_box.edit_mut().release();
-                    return;
-                }
-                let Some(drag) = self.drag.take() else {
-                    return;
-                };
-                if let Some(command) = drag.command(shift, |line| line_width(line, window)) {
-                    self.apply(command);
-                } else if let Some(origin) = drag.typed_on_release(self.tool) {
-                    self.selected = None;
-                    self.open_text_box(origin);
-                }
-            }
-            Pointer::Zoom {
-                factor,
-                around,
-                placement,
-            } => self.placement = Some(placement.zoomed(factor, around)),
-            Pointer::Menu {
-                at,
-                reach,
-                position,
-            } => {
-                self.menu = None;
-                let idle = self.text_box.is_none() && self.drag.is_none();
-                if let Some(id) = shape_at(&self.document, at, reach).filter(|_| idle) {
-                    self.selected = Some(id);
-                    self.menu = Some(ShapeMenu::open(id, position, &self.document, window, cx));
-                }
-            }
-        }
-        cx.notify();
-    }
-
-    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let gpui = event.keystroke.modifiers;
-        let modifiers = Modifiers {
-            ctrl: gpui.control,
-            alt: gpui.alt,
-            shift: gpui.shift,
-            win: gpui.platform,
-        };
-        let activity = match (&self.save_as, &self.text_box, &self.drag) {
-            (Some(_), _, _) => Activity::SavingAs,
-            (None, Some(text_box), _) => text_box.edit().activity(),
-            (None, None, Some(_)) => Activity::Dragging,
-            (None, None, None) => Activity::Idle,
-        };
-        let Some(action) = action_for_key(&event.keystroke.key, modifiers, activity) else {
-            return;
-        };
-        self.act(action, window, cx);
-    }
-
-    /// Does what a key asks, or a toolbar button that takes the same action (D-133).
-    fn act(&mut self, action: KeyAction, window: &mut Window, cx: &mut Context<Self>) {
-        match action {
-            KeyAction::Undo => self.undo_or_redo(History::undo),
-            KeyAction::Redo => self.undo_or_redo(History::redo),
-            KeyAction::RemoveSelected => {
-                if let Some(id) = self.selected.take() {
-                    self.apply(Command::Remove(id));
-                }
-            }
-            KeyAction::BackToSelect => {
-                self.selected = None;
-                self.pick_tool(Tool::Select, window, cx);
-            }
-            KeyAction::Restack(to) => {
-                if let Some(id) = self.selected {
-                    self.apply(Command::Restack { id, to });
-                }
-            }
-            KeyAction::PickTool(tool) => self.pick_tool(tool, window, cx),
-            KeyAction::FitView => self.placement = None,
-            KeyAction::ActualSize => {
-                let viewport = self.viewport(window);
-                let centre = point(viewport.room.width / 2.0, viewport.room.height / 2.0);
-                self.placement = Some(
-                    viewport
-                        .placement
-                        .actual_size(centre, viewport.scale_factor),
-                );
-            }
-            KeyAction::OpenSettings => {
-                if let Some(open) = settings_opener(cx) {
-                    cx.defer(move |cx| open(cx));
-                }
-            }
-            KeyAction::HoldToPan => self.space_held = true,
-            KeyAction::FocusNext => window.focus_next(cx),
-            KeyAction::FocusPrevious => window.focus_prev(cx),
-            KeyAction::Deliver(output) => self.deliver(output),
-            KeyAction::SaveAs => self.save_as(window, cx),
-            KeyAction::CloseWindow => window.remove_window(),
-            KeyAction::Text(TextKey::Commit) => self.close_text_box(window),
-            KeyAction::Text(key) => {
-                if let Some(text_box) = &mut self.text_box {
-                    text_box.key(key, window, cx);
-                }
-            }
-        }
-        cx.notify();
     }
 
     fn apply(&mut self, command: Command) {
@@ -602,78 +429,6 @@ impl EditorView {
         (tools, actions)
     }
 
-    /// What the canvas shows now: the fitted placement until the image is zoomed or panned.
-    fn viewport(&self, window: &Window) -> Viewport {
-        let room = canvas_size(window.viewport_size());
-        let scale_factor = window.scale_factor();
-        let changing_crop = self.tool == Tool::Crop;
-        Viewport {
-            area: shown_area(&self.document, changing_crop),
-            placement: self.placement.unwrap_or_else(|| {
-                fitted_placement(&self.document, changing_crop, room, scale_factor)
-            }),
-            room,
-            scale_factor,
-        }
-    }
-
-    /// The zoom panel and scrollbars over the image card, none while the image is fitted
-    /// (D-145).
-    fn zoom_controls(&self, window: &Window, theme: Theme, cx: &Context<Self>) -> Vec<AnyElement> {
-        if self.placement.is_none() {
-            return Vec::new();
-        }
-        let viewport = self.viewport(window);
-        let view = cx.entity().downgrade();
-        let on_input: OnPanelInput = Rc::new(move |input, window, cx| {
-            update_while_open(&view, cx, |view, cx| {
-                view.zoom_input(input, window, cx);
-            });
-        });
-        scrollbars(viewport)
-            .into_iter()
-            .map(IntoElement::into_any_element)
-            .chain([zoom_panel(
-                Arc::clone(&self.base),
-                self.document.image_area(),
-                viewport,
-                theme,
-                Rc::clone(&self.log),
-                &on_input,
-            )
-            .into_any_element()])
-            .collect()
-    }
-
-    fn zoom_input(&mut self, input: PanelInput, window: &mut Window, cx: &mut Context<Self>) {
-        let viewport = self.viewport(window);
-        let centre = point(viewport.room.width / 2.0, viewport.room.height / 2.0);
-        match input {
-            PanelInput::ZoomBy(factor) => {
-                self.placement = Some(viewport.placement.zoomed(factor, centre));
-            }
-            PanelInput::ActualSize => self.act(KeyAction::ActualSize, window, cx),
-            PanelInput::Fit => self.act(KeyAction::FitView, window, cx),
-            PanelInput::Grab(at) => {
-                self.minimap_held = true;
-                self.placement = Some(viewport.placement.centred_on(at, viewport.room));
-            }
-            PanelInput::Drag(at) => {
-                if !self.minimap_held {
-                    return;
-                }
-                self.placement = Some(viewport.placement.centred_on(at, viewport.room));
-            }
-            PanelInput::Release => {
-                if !self.minimap_held {
-                    return;
-                }
-                self.minimap_held = false;
-            }
-        }
-        cx.notify();
-    }
-
     /// The property strip for what the next strip change would restyle, the spotlight dim while
     /// a spotlight is picked, and the frame toggles.
     fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
@@ -803,58 +558,6 @@ impl Render for EditorView {
                 })
             }))
     }
-}
-
-/// D-146: how strongly the capture's colour glows round its card, as in the U2 and V2 mock-ups.
-const GLOW_ALPHA: f32 = 0.28;
-
-/// D-141: the image on a card with rounded corners and a soft shadow, the window showing
-/// round it on the left, right and below, with `zoom` over it (D-145) and a soft `glow` of the
-/// capture's colour round it (D-146).
-fn image_card(
-    canvas: impl IntoElement,
-    zoom: Vec<AnyElement>,
-    glow: Color,
-    theme: Theme,
-) -> impl IntoElement {
-    div()
-        .flex_1()
-        .min_h_0()
-        .px(CARD_INSET)
-        .pb(CARD_INSET)
-        .child(
-            div()
-                .id("screenshot")
-                .role(Role::Image)
-                .aria_label("Screenshot")
-                .size_full()
-                .relative()
-                .rounded(px(10.0))
-                .overflow_hidden()
-                .bg(theme.card)
-                .shadow(vec![
-                    BoxShadow {
-                        color: Rgba {
-                            a: GLOW_ALPHA,
-                            ..rgba(glow)
-                        }
-                        .into(),
-                        offset: point(px(0.0), px(0.0)),
-                        blur_radius: px(90.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    },
-                    BoxShadow {
-                        color: hsla(0.0, 0.0, 0.0, 0.35),
-                        offset: point(px(0.0), px(12.0)),
-                        blur_radius: px(32.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    },
-                ])
-                .child(canvas)
-                .children(zoom),
-        )
 }
 
 /// F-22: opens the Save As dialog on `folder`, offering `name`. The answer is the path the
