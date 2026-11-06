@@ -63,6 +63,8 @@ section exists.
 
 ### Changed
 
+- After a graphics driver update or GPU reset, the next capture makes a new graphics device
+  and copies the screen as usual, instead of falling back to a slower copy (D-151).
 - A capture across two or more monitors waits for the screen once, not once per monitor,
   so the capture overlay opens sooner (D-139).
 - Cleanshot gives back the editor's graphics memory when the last editor or settings

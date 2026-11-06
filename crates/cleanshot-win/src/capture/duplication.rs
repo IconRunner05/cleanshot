@@ -32,6 +32,9 @@ pub struct Desktop {
     pub factory: Duration,
     pub adapters: Vec<AdapterReport>,
     pub outputs: Vec<OutputReport>,
+    /// D-151: how many kept devices were let go because their adapter no longer shows the
+    /// desktop.
+    pub dropped: usize,
 }
 
 /// One adapter as DXGI listed it, how long listing it and its outputs took, and where its
@@ -54,9 +57,20 @@ pub enum Device {
     /// Making one failed; the copy's error says why.
     Failed,
     /// Made for this copy, taking this long.
-    Made(Duration),
+    Made { took: Duration, because: Fresh },
     /// The device the last copy on this adapter made, kept by [`Devices`].
     Kept,
+}
+
+/// D-151: why an adapter showing the desktop got a new device rather than a kept one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fresh {
+    /// None was kept for this adapter.
+    NoneKept,
+    /// The kept one had been removed, as by a driver update or a GPU reset.
+    Removed,
+    /// The kept one could not duplicate this adapter's outputs.
+    Retried,
 }
 
 /// P-01: the Direct3D device of each adapter that showed the desktop, kept from one copy to
@@ -76,6 +90,11 @@ impl Devices {
     ///
     /// If a kept device is not a DXGI 1.3 device, which Windows 11 rules out.
     pub fn release(&mut self) {
+        self.let_go();
+    }
+
+    fn let_go(&mut self) -> usize {
+        let count = self.kept.len();
         for (_, device, context) in self.kept.drain(..) {
             let device: IDXGIDevice3 = device
                 .cast()
@@ -87,6 +106,7 @@ impl Devices {
                 device.Trim();
             }
         }
+        count
     }
 
     fn take(&mut self, adapter: LUID) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
@@ -152,6 +172,7 @@ pub fn capture_desktop(devices: &mut Devices) -> Result<Desktop, Error> {
         adapters,
         reports: outputs,
         results,
+        dropped,
     } = duplicate_all(devices);
     match choose(results) {
         Ok(monitors) => Ok(Desktop {
@@ -160,6 +181,7 @@ pub fn capture_desktop(devices: &mut Devices) -> Result<Desktop, Error> {
             factory,
             adapters,
             outputs,
+            dropped,
         }),
         Err(because) => Ok(Desktop {
             monitors: capture_all(Method::GdiBitBlt)?,
@@ -167,6 +189,7 @@ pub fn capture_desktop(devices: &mut Devices) -> Result<Desktop, Error> {
             factory,
             adapters,
             outputs,
+            dropped,
         }),
     }
 }
@@ -179,6 +202,7 @@ pub(super) struct Duplicates {
     adapters: Vec<AdapterReport>,
     reports: Vec<OutputReport>,
     pub(super) results: Vec<Result<MonitorImage, Error>>,
+    dropped: usize,
 }
 
 pub(super) fn duplicate_all(devices: &mut Devices) -> Duplicates {
@@ -194,12 +218,23 @@ pub(super) fn duplicate_all(devices: &mut Devices) -> Duplicates {
             return duplicates;
         }
     };
+    let mut earlier = Devices {
+        kept: std::mem::take(&mut devices.kept),
+    };
     for adapter_index in 0.. {
         let listing = Instant::now();
         // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
         match unsafe { factory.EnumAdapters1(adapter_index) } {
             Ok(adapter) => {
-                duplicate_adapter(&adapter, adapter_index, listing, devices, &mut duplicates);
+                let kept = desktop_luid(&adapter).and_then(|luid| earlier.take(luid));
+                duplicate_adapter(
+                    &adapter,
+                    adapter_index,
+                    listing,
+                    kept,
+                    devices,
+                    &mut duplicates,
+                );
             }
             Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
             Err(error) => {
@@ -208,16 +243,70 @@ pub(super) fn duplicate_all(devices: &mut Devices) -> Duplicates {
             }
         }
     }
+    // D-151: what no adapter showing the desktop took is for one that no longer shows it.
+    duplicates.dropped = earlier.let_go();
     duplicates
 }
 
+/// `adapter`'s LUID when it shows the desktop, the adapters a kept device may be reused on.
+fn desktop_luid(adapter: &IDXGIAdapter1) -> Option<LUID> {
+    // SAFETY: a read of the adapter's own description.
+    let luid = unsafe { adapter.GetDesc1() }.ok()?.AdapterLuid;
+    shows_desktop(adapter).ok()?.then_some(luid)
+}
+
+/// D-151: duplicates `adapter`'s outputs on `kept`, the device kept for it, unless that device
+/// was removed; and if the kept device cannot duplicate them, once more on a fresh device.
 fn duplicate_adapter(
     adapter: &IDXGIAdapter1,
     index: u32,
     listing: Instant,
+    kept: Option<(ID3D11Device, ID3D11DeviceContext)>,
     devices: &mut Devices,
     duplicates: &mut Duplicates,
 ) {
+    let marks = (
+        duplicates.adapters.len(),
+        duplicates.reports.len(),
+        duplicates.results.len(),
+    );
+    let kept = kept.ok_or(Fresh::NoneKept).and_then(|(device, context)| {
+        // SAFETY: a read of the device's own state.
+        let removed = unsafe { device.GetDeviceRemovedReason() };
+        reusable(removed).map(|()| (device, context))
+    });
+    let used = duplicate_on(adapter, index, listing, kept, devices, duplicates);
+    if used == Some(Device::Kept) && duplicates.results[marks.2..].iter().any(Result::is_err) {
+        duplicates.adapters.truncate(marks.0);
+        duplicates.reports.truncate(marks.1);
+        duplicates.results.truncate(marks.2);
+        let listing = Instant::now();
+        duplicate_on(
+            adapter,
+            index,
+            listing,
+            Err(Fresh::Retried),
+            devices,
+            duplicates,
+        );
+    }
+}
+
+/// D-151: a kept device is reused only while Direct3D says it has not been removed.
+fn reusable(removed: windows::core::Result<()>) -> Result<(), Fresh> {
+    removed.map_err(|_removed| Fresh::Removed)
+}
+
+/// Duplicates `adapter`'s outputs on `device`, or on one made for the reason it holds, and
+/// keeps that device if every output duplicated; the device it used, or None if it used none.
+fn duplicate_on(
+    adapter: &IDXGIAdapter1,
+    index: u32,
+    listing: Instant,
+    device: Result<(ID3D11Device, ID3D11DeviceContext), Fresh>,
+    devices: &mut Devices,
+    duplicates: &mut Duplicates,
+) -> Option<Device> {
     // SAFETY: a read of the adapter's own description.
     let (name, vendor, luid) = match unsafe { adapter.GetDesc1() } {
         Ok(description) => (
@@ -225,7 +314,10 @@ fn duplicate_adapter(
             description.VendorId,
             description.AdapterLuid,
         ),
-        Err(error) => return duplicates.results.push(Err(Error::Capture(error))),
+        Err(error) => {
+            duplicates.results.push(Err(Error::Capture(error)));
+            return None;
+        }
     };
     let listed = list_outputs(adapter, index, &name, vendor, duplicates);
     let listing = listing.elapsed();
@@ -238,14 +330,15 @@ fn duplicate_adapter(
             listing,
             device: Device::Skipped,
         });
-        return duplicates
+        duplicates
             .reports
             .extend(listed.into_iter().map(|(_, report)| report));
+        return None;
     }
-    let (device, context, made) = match devices.take(luid) {
-        Some((device, context)) => (device, context, Device::Kept),
-        None => match make_device(adapter) {
-            Ok((device, context, took)) => (device, context, Device::Made(took)),
+    let (device, context, made) = match device {
+        Ok((device, context)) => (device, context, Device::Kept),
+        Err(because) => match make_device(adapter) {
+            Ok((device, context, took)) => (device, context, Device::Made { took, because }),
             Err(error) => {
                 duplicates.adapters.push(AdapterReport {
                     index,
@@ -257,7 +350,8 @@ fn duplicate_adapter(
                 duplicates
                     .reports
                     .extend(listed.into_iter().map(|(_, report)| report));
-                return duplicates.results.push(Err(Error::Capture(error)));
+                duplicates.results.push(Err(Error::Capture(error)));
+                return Some(Device::Failed);
             }
         },
     };
@@ -274,6 +368,7 @@ fn duplicate_adapter(
     if duplicates.results[before..].iter().all(Result::is_ok) {
         devices.kept.push((luid, device, context));
     }
+    Some(made)
 }
 
 /// C-21: Direct3D 11 defers destroying what is released, so the duplications and staging
@@ -700,7 +795,9 @@ mod tests {
     use windows::Win32::Graphics::Dxgi::Common::{
         DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_MODE_DESC, DXGI_MODE_ROTATION_ROTATE90,
     };
-    use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_UNSUPPORTED};
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_UNSUPPORTED,
+    };
 
     use super::*;
     use crate::capture::tests::{filled, rect};
@@ -809,7 +906,7 @@ mod tests {
             desktop
                 .adapters
                 .iter()
-                .any(|adapter| matches!(adapter.device, Device::Made(_))),
+                .any(|adapter| matches!(adapter.device, Device::Made { .. })),
             "the duplicating adapter says how long its device took: {:?}",
             desktop.adapters
         );
@@ -857,7 +954,7 @@ mod tests {
                 .map(|adapter| adapter.index)
                 .collect()
         };
-        let first_made = made(&first, |device| matches!(device, Device::Made(_)));
+        let first_made = made(&first, |device| matches!(device, Device::Made { .. }));
         assert!(!first_made.is_empty(), "{:?}", first.adapters);
         assert_eq!(
             made(&second, |device| device == Device::Kept),
@@ -881,6 +978,75 @@ mod tests {
                 .all(|adapter| adapter.device != Device::Kept),
             "{:?}",
             again.adapters
+        );
+    }
+
+    /// An adapter that shows the desktop and a device made on another adapter, which cannot
+    /// duplicate its outputs; CI's runners list the Basic Render Driver beside it.
+    fn showing_and_foreign_device() -> (LUID, (ID3D11Device, ID3D11DeviceContext)) {
+        // SAFETY: CreateDXGIFactory1 has no preconditions.
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.expect("a DXGI factory");
+        let adapters: Vec<IDXGIAdapter1> = (0..)
+            // SAFETY: an index past the last adapter returns DXGI_ERROR_NOT_FOUND.
+            .map_while(|index| unsafe { factory.EnumAdapters1(index) }.ok())
+            .collect();
+        let showing = adapters
+            .iter()
+            .find_map(desktop_luid)
+            .expect("an adapter shows the desktop");
+        let other = adapters
+            .iter()
+            .find(|adapter| desktop_luid(adapter).is_none())
+            .expect("this machine lists an adapter that shows nothing");
+        let (device, context, _) = make_device(other).expect("a device on the other adapter");
+        (showing, (device, context))
+    }
+
+    #[test]
+    fn d151_a_kept_device_is_reused_only_while_it_has_not_been_removed() {
+        assert_eq!(reusable(Ok(())), Ok(()));
+        let removed = windows::core::Error::from(DXGI_ERROR_DEVICE_REMOVED);
+        assert_eq!(reusable(Err(removed)), Err(Fresh::Removed));
+    }
+
+    #[test]
+    fn d151_a_kept_device_that_cannot_duplicate_its_adapter_is_replaced_in_the_same_copy() {
+        let _screen = screen();
+        let (showing, foreign) = showing_and_foreign_device();
+        let mut devices = Devices {
+            kept: vec![(showing, foreign.0, foreign.1)],
+        };
+        let desktop = capture_desktop(&mut devices).expect("the desktop is copied");
+        assert!(matches!(desktop.copied, Copied::Duplication), "{desktop:?}");
+        assert!(
+            desktop.adapters.iter().any(|adapter| matches!(
+                adapter.device,
+                Device::Made {
+                    because: Fresh::Retried,
+                    ..
+                }
+            )),
+            "{:?}",
+            desktop.adapters
+        );
+    }
+
+    #[test]
+    fn d151_a_device_kept_for_an_adapter_that_no_longer_shows_the_desktop_is_let_go() {
+        let _screen = screen();
+        let (_, foreign) = showing_and_foreign_device();
+        let undocked = LUID {
+            LowPart: 0xD151,
+            HighPart: 0x7FFF_FFFF,
+        };
+        let mut devices = Devices {
+            kept: vec![(undocked, foreign.0, foreign.1)],
+        };
+        let desktop = capture_desktop(&mut devices).expect("the desktop is copied");
+        assert_eq!(desktop.dropped, 1, "{desktop:?}");
+        assert!(
+            devices.kept.iter().all(|(luid, _, _)| *luid != undocked),
+            "the undocked adapter's device is not kept"
         );
     }
 

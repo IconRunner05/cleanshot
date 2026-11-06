@@ -17,6 +17,7 @@ Start from a release candidate exe downloaded from its GitHub pre-release, with 
 - [ ] F-03: Drag a handle, drag inside the selection, and press the arrow keys (Shift for 10 px). The selection resizes, moves and nudges.
 - [ ] F-05: A frosted toolbar sits near the bottom of the monitor (at the top if the selection is there), with Copy focused. Tab moves the focus; Esc closes the overlay and nothing is copied or saved.
 - [ ] F-01 on mixed DPI: With two monitors at different scales, capture a region across both and paste it into Paint. It is sharp, at each monitor's physical pixels.
+- [ ] F-01 dock and undock (D-151): Start Cleanshot with `--log` on the laptop screen alone, capture a region and paste it into Paint. Plug in an external monitor and capture a region on each screen: both paste in full, not black. Unplug it and capture again: the laptop screen pastes in full. The log's `capture copied=` lines all read `duplication`.
 - [ ] F-20: Capture, press Enter, and paste into Outlook, Teams, Word, Paint and Edge. Each shows the capture.
 - [ ] F-21: Capture and press Ctrl+S. A file `Screenshot <date> <time>.png` appears in Pictures\Screenshots. Save a second capture: both files are there, and neither replaced the other.
 - [ ] F-22: Capture and press Ctrl+Shift+S. The Windows save dialog opens. Pick an existing file: it asks before replacing it.

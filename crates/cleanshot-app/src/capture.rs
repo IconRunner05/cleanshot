@@ -286,6 +286,11 @@ fn copy_screen(session: &Session, stage: &dyn Fn(&str)) -> Option<Desktop> {
     };
     stage("screen_duplicated");
     session.log_line("capture", |_| format!("factory {:?}", desktop.factory));
+    if desktop.dropped > 0 {
+        session.log_line("capture", |_| {
+            format!("devices_dropped={}", desktop.dropped)
+        });
+    }
     if session.settings.borrow().show_pointer
         && let Err(error) = draw_pointer(&mut desktop.monitors)
     {
