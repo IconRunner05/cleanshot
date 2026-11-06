@@ -878,7 +878,7 @@ mod tests {
         [hotkeys]\nregion = \"Ctrl+Shift+4\"\nlast_region = \"Shift+PrtSc\"\n\
         full_screen = \"Ctrl+PrtSc\"\nwindow = \"Alt+F24\"\ncapture_panel = \"Win+5\"\n\
         [looks]\ncolor = \"#007AFF\"\n[looks.rectangle]\nstroke_width = 8\nfill = \"filled\"\n\
-        border = true\nborder_width = 6\n[looks.text]\ntext_size = 36.5\nalignment = \"centre\"\n\
+        border = true\nborder_width = 6\n[looks.text]\ntext_size = 36.5\nalignment = \"center\"\n\
         [looks.bubble]\nalignment = \"bottom-right\"\n[looks.redact]\nstrength = 64\n";
 
     const KEYS: [&str; 12] = [
