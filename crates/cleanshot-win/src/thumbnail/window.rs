@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::thumbnail_layout::{
-    INSET, STAY, ThumbnailButton, button_at, buttons, centred, left_after, place, slid, window_size,
+    INSET, ThumbnailButton, button_at, buttons, centred, left_after, place, slid, window_size,
 };
 use cleanshot_core::{Rect, RgbaImage, saving_off_notice};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -221,6 +221,7 @@ pub(super) fn open_window(
     work: RECT,
     scale: f32,
     slide: bool,
+    stay: Duration,
     export: Export,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> Result<HWND, Error> {
@@ -261,21 +262,23 @@ pub(super) fn open_window(
         )
     }
     .map_err(Error::Window)?;
-    let made =
-        surface(window, preview, rest, distance, scale, export, listener).and_then(|surface| {
-            crate::round_window(window, client_width, client_height, px(RADIUS))?;
-            // SAFETY: `window` was created above with nothing stored on it, and
-            // window_procedure takes every message's Surface through window_state. The timers
-            // die with the window.
-            unsafe {
-                window_state::attach(window, Rc::new(surface));
-                if distance > 0 {
-                    SetTimer(Some(window), SLIDE_TIMER, FRAME, None);
-                }
-                SetTimer(Some(window), COUNTDOWN_TIMER, TICK, None);
+    let made = surface(
+        window, preview, rest, distance, scale, stay, export, listener,
+    )
+    .and_then(|surface| {
+        crate::round_window(window, client_width, client_height, px(RADIUS))?;
+        // SAFETY: `window` was created above with nothing stored on it, and
+        // window_procedure takes every message's Surface through window_state. The timers
+        // die with the window.
+        unsafe {
+            window_state::attach(window, Rc::new(surface));
+            if distance > 0 {
+                SetTimer(Some(window), SLIDE_TIMER, FRAME, None);
             }
-            Ok(())
-        });
+            SetTimer(Some(window), COUNTDOWN_TIMER, TICK, None);
+        }
+        Ok(())
+    });
     if let Err(error) = made {
         // SAFETY: the window was created above and holds no state yet.
         let destroyed = unsafe { DestroyWindow(window) };
@@ -285,12 +288,17 @@ pub(super) fn open_window(
     Ok(window)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each part of the surface comes from its own value open_window works out"
+)]
 fn surface(
     window: HWND,
     preview: &RgbaImage,
     rest: RECT,
     distance: i32,
     scale: f32,
+    stay: Duration,
     export: Export,
     listener: Box<dyn FnMut(ThumbnailEvent)>,
 ) -> windows::core::Result<Surface> {
@@ -352,7 +360,7 @@ fn surface(
         radius: RADIUS * scale,
         shown: now,
         ticked: Cell::new(now),
-        left: Cell::new(Some(STAY)),
+        left: Cell::new(Some(stay)),
         hovered: Cell::new(false),
         dragging: Cell::new(false),
         pressed: Cell::new(None),

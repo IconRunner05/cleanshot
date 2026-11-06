@@ -1,6 +1,7 @@
 use toml::{Table, Value};
 
 use crate::looks::Looks;
+use crate::thumbnail_layout::ThumbnailStay;
 
 mod looks;
 
@@ -24,6 +25,7 @@ pub struct Settings {
     pub save_format: SaveFormat,
     pub after_capture: AfterCapture,
     pub show_thumbnail: bool,
+    pub thumbnail_stay: ThumbnailStay,
     pub show_pointer: bool,
     pub remember_last_selection: bool,
     pub hotkeys: Hotkeys,
@@ -168,6 +170,7 @@ impl Default for Settings {
             save_format: SaveFormat::Png,
             after_capture: AfterCapture::ShowToolbar,
             show_thumbnail: true,
+            thumbnail_stay: ThumbnailStay::default(),
             show_pointer: false,
             remember_last_selection: false,
             hotkeys: Hotkeys::default(),
@@ -271,6 +274,11 @@ impl Settings {
             show_thumbnail: reader
                 .read("show_thumbnail", Value::as_bool)
                 .unwrap_or(defaults.show_thumbnail),
+            thumbnail_stay: reader
+                .read("thumbnail_ms", |value| {
+                    ThumbnailStay::from_ms(u32::try_from(value.as_integer()?).ok()?)
+                })
+                .unwrap_or(defaults.thumbnail_stay),
             show_pointer: reader
                 .read("show_pointer", Value::as_bool)
                 .unwrap_or(defaults.show_pointer),
@@ -303,6 +311,10 @@ impl Settings {
         table.insert("save_format".into(), save_format.into());
         table.insert("after_capture".into(), after_capture.into());
         table.insert("show_thumbnail".into(), self.show_thumbnail.into());
+        table.insert(
+            "thumbnail_ms".into(),
+            i64::from(self.thumbnail_stay.ms()).into(),
+        );
         table.insert("show_pointer".into(), self.show_pointer.into());
         table.insert(
             "remember_last_selection".into(),
@@ -691,12 +703,33 @@ mod tests {
     }
 
     #[test]
+    fn d165_thumbnail_ms_from_1000_to_60000_is_kept_and_any_other_falls_back_to_5000() {
+        let stay = |text: &str| {
+            let (settings, problems) = Settings::from_toml(text.as_bytes());
+            (settings.thumbnail_stay.ms(), problems.len())
+        };
+        assert_eq!(stay(""), (5000, 0));
+        assert_eq!(stay("thumbnail_ms = 1000"), (1000, 0));
+        assert_eq!(stay("thumbnail_ms = 60000"), (60_000, 0));
+        for invalid in [
+            "thumbnail_ms = 999",
+            "thumbnail_ms = 60001",
+            "thumbnail_ms = -1",
+            "thumbnail_ms = 5000.0",
+            "thumbnail_ms = \"5000\"",
+        ] {
+            assert_eq!(stay(invalid), (5000, 1), "{invalid}");
+        }
+    }
+
+    #[test]
     fn f54_settings_written_out_read_back_unchanged() {
         let settings = Settings {
             save_folder: Some(r"D:\Shots".into()),
             save_format: SaveFormat::Bmp,
             after_capture: AfterCapture::Copy,
             show_thumbnail: false,
+            thumbnail_stay: ThumbnailStay::from_ms(12_345).expect("within the range"),
             show_pointer: true,
             remember_last_selection: true,
             hotkeys: Hotkeys {
@@ -874,18 +907,19 @@ mod tests {
 
     const EVERY_SETTING: &str = "save_folder = 'D:\\Shots\\Bildschirmfotos \u{1F4F7}'\n\
         save_format = \"jpg\"\nafter_capture = \"copy\"\nshow_thumbnail = false\n\
-        show_pointer = true\nremember_last_selection = true\n\
+        thumbnail_ms = 8000\nshow_pointer = true\nremember_last_selection = true\n\
         [hotkeys]\nregion = \"Ctrl+Shift+4\"\nlast_region = \"Shift+PrtSc\"\n\
         full_screen = \"Ctrl+PrtSc\"\nwindow = \"Alt+F24\"\ncapture_panel = \"Win+5\"\n\
         [looks]\ncolor = \"#007AFF\"\n[looks.rectangle]\nstroke_width = 8\nfill = \"filled\"\n\
         border = true\nborder_width = 6\n[looks.text]\ntext_size = 36.5\nalignment = \"center\"\n\
         [looks.bubble]\nalignment = \"bottom-right\"\n[looks.redact]\nstrength = 64\n";
 
-    const KEYS: [&str; 12] = [
+    const KEYS: [&str; 13] = [
         "save_folder",
         "save_format",
         "after_capture",
         "show_thumbnail",
+        "thumbnail_ms",
         "show_pointer",
         "remember_last_selection",
         "hotkeys",
