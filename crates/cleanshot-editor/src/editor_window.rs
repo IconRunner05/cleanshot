@@ -10,7 +10,7 @@ use cleanshot_core::{
     Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
     KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError, Restack,
     RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextMasks, TextOrigin, Tool,
-    action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
+    ToolGroup, action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
 };
 use gpui::{
     App, AppContext, Bounds, BoxShadow, Context, Entity, FocusHandle, Global, InteractiveElement,
@@ -27,7 +27,7 @@ use crate::strip::property_strip;
 use crate::text::{line_width, register_inter};
 use crate::text_box::TextBox;
 use crate::theme::{Theme, WindowSurface, window_surface};
-use crate::toolbar::{Replay, toolbar};
+use crate::toolbar::{Replay, ToolMenus, ToolbarActions, show_tool, shown_tools, toolbar};
 use crate::tooltip::hover_time;
 use crate::{Error, Log, MasksFor, open_window};
 use text_input::paint_text_box;
@@ -114,6 +114,8 @@ struct EditorView {
     selected: Option<ShapeId>,
     drag: Option<Drag>,
     text_box: Option<TextBox>,
+    /// The tool groups' buttons and their open menu (D-143).
+    tool_menus: ToolMenus,
     /// The right-click menu while it is open (D-115).
     menu: Option<ShapeMenu>,
     /// How each tool draws, as the property strip sets it; not part of the document.
@@ -168,6 +170,7 @@ impl EditorView {
             text_box: None,
             menu: None,
             looks: remembered_looks(cx),
+            tool_menus: ToolMenus::new(cx),
             surface,
             previews: Rc::new(Previews::new(masks, Rc::clone(&log))),
             log,
@@ -316,14 +319,14 @@ impl EditorView {
             }
             KeyAction::BackToSelect => {
                 self.selected = None;
-                self.tool = Tool::Select;
+                self.pick_tool(Tool::Select, window, cx);
             }
             KeyAction::Restack(to) => {
                 if let Some(id) = self.selected {
                     self.apply(Command::Restack { id, to });
                 }
             }
-            KeyAction::PickTool(tool) => self.tool = tool,
+            KeyAction::PickTool(tool) => self.pick_tool(tool, window, cx),
             KeyAction::FitView => self.placement = None,
             KeyAction::HoldToPan => self.space_held = true,
             KeyAction::FocusNext => window.focus_next(cx),
@@ -446,6 +449,14 @@ impl EditorView {
         }
     }
 
+    /// Makes `tool` the current tool, shown on its group's button, any open tool menu closed
+    /// (D-143).
+    fn pick_tool(&mut self, tool: Tool, window: &mut Window, cx: &mut App) {
+        self.tool = tool;
+        show_tool(tool, cx);
+        self.tool_menus.close(window, cx);
+    }
+
     /// Closes the right-click menu, moving its shape by `picked` if a move was picked (D-115).
     fn close_menu(&mut self, picked: Option<Restack>, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((menu, to)) = self.menu.take().zip(picked) {
@@ -505,12 +516,25 @@ fn refusal(error: &CommandError) -> &'static str {
 impl EditorView {
     /// The toolbar: the tools, Undo and Redo, and Copy, Save and Save As, each closing an open
     /// text box first.
-    fn toolbar(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
+    fn toolbar(&self, view: &WeakEntity<Self>, theme: Theme, cx: &App) -> impl IntoElement + use<> {
         let picker = view.clone();
         let on_pick = move |tool, window: &mut Window, cx: &mut App| {
             update_while_open(&picker, cx, |view, cx| {
                 view.close_text_box(window);
-                view.tool = tool;
+                view.pick_tool(tool, window, cx);
+                cx.notify();
+            });
+        };
+        let opener = view.clone();
+        let on_menu = move |group: Option<ToolGroup>, window: &mut Window, cx: &mut App| {
+            update_while_open(&opener, cx, |view, cx| {
+                match group {
+                    Some(group) => {
+                        view.close_text_box(window);
+                        view.tool_menus.open(group, view.tool, window, cx);
+                    }
+                    None => view.tool_menus.close(window, cx),
+                }
                 cx.notify();
             });
         };
@@ -531,11 +555,16 @@ impl EditorView {
         };
         toolbar(
             self.tool,
+            shown_tools(cx),
+            &self.tool_menus,
             &self.history,
             theme,
-            on_pick,
-            on_replay,
-            on_output,
+            ToolbarActions {
+                pick: on_pick,
+                menu: on_menu,
+                replay: on_replay,
+                output: on_output,
+            },
         )
     }
 
@@ -597,7 +626,7 @@ impl Render for EditorView {
         let theme = Theme::for_appearance(window.appearance(), self.surface, hover_time(cx));
         let view = cx.entity().downgrade();
         let restacker = view.clone();
-        let toolbar = self.toolbar(&view, theme);
+        let toolbar = self.toolbar(&view, theme, cx);
         let strip = self.strip(&view, theme);
         let input = view.clone();
         let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {

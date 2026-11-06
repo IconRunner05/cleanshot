@@ -142,10 +142,122 @@ impl Tool {
     }
 }
 
+/// One button of the editor's toolbar: a tool, or several behind a menu (D-143).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolGroup {
+    Select,
+    Shapes,
+    Text,
+    Attention,
+    Redact,
+    Crop,
+}
+
+impl ToolGroup {
+    /// Every group, in toolbar order.
+    pub const ALL: [Self; 6] = [
+        Self::Select,
+        Self::Shapes,
+        Self::Text,
+        Self::Attention,
+        Self::Redact,
+        Self::Crop,
+    ];
+
+    /// The group's tools, in its menu's order.
+    #[must_use]
+    pub fn tools(self) -> &'static [Tool] {
+        match self {
+            Self::Select => &[Tool::Select],
+            Self::Shapes => &[
+                Tool::Arrow,
+                Tool::Line,
+                Tool::Rectangle,
+                Tool::Ellipse,
+                Tool::Pen,
+            ],
+            Self::Text => &[Tool::Text, Tool::Bubble, Tool::Step],
+            Self::Attention => &[Tool::Highlighter, Tool::Spotlight],
+            Self::Redact => &[Tool::Redact],
+            Self::Crop => &[Tool::Crop],
+        }
+    }
+
+    /// The group holding `tool`.
+    #[must_use]
+    pub fn of(tool: Tool) -> Self {
+        match tool {
+            Tool::Select => Self::Select,
+            Tool::Arrow | Tool::Line | Tool::Rectangle | Tool::Ellipse | Tool::Pen => Self::Shapes,
+            Tool::Text | Tool::Bubble | Tool::Step => Self::Text,
+            Tool::Highlighter | Tool::Spotlight => Self::Attention,
+            Tool::Redact => Self::Redact,
+            Tool::Crop => Self::Crop,
+        }
+    }
+}
+
+/// The tool each group's button shows: the one last picked from the group, by its button's
+/// menu or its key, or the group's first (D-143).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShownTools([Tool; 6]);
+
+impl Default for ShownTools {
+    fn default() -> Self {
+        Self(ToolGroup::ALL.map(|group| group.tools()[0]))
+    }
+}
+
+impl ShownTools {
+    /// The tool `group`'s button shows.
+    #[must_use]
+    pub fn shown(self, group: ToolGroup) -> Tool {
+        self.0[group as usize]
+    }
+
+    /// Shows `tool` on its group's button.
+    pub fn pick(&mut self, tool: Tool) {
+        self.0[ToolGroup::of(tool) as usize] = tool;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::document::RectF;
+
+    #[test]
+    fn d143_every_tool_is_in_the_one_group_that_lists_it() {
+        let listed: Vec<Tool> = ToolGroup::ALL
+            .iter()
+            .flat_map(|&group| group.tools().iter().copied())
+            .collect();
+        assert_eq!(listed.len(), Tool::ALL.len());
+        for tool in Tool::ALL {
+            assert!(
+                ToolGroup::of(tool).tools().contains(&tool),
+                "{tool:?} is not listed by its own group"
+            );
+        }
+    }
+
+    #[test]
+    fn d143_a_group_shows_its_first_tool_until_another_of_its_tools_is_picked() {
+        let mut shown = ShownTools::default();
+        assert_eq!(shown.shown(ToolGroup::Shapes), Tool::Arrow);
+        assert_eq!(shown.shown(ToolGroup::Text), Tool::Text);
+        shown.pick(Tool::for_key('r').unwrap());
+        shown.pick(Tool::Spotlight);
+        assert_eq!(shown.shown(ToolGroup::Shapes), Tool::Rectangle);
+        assert_eq!(shown.shown(ToolGroup::Attention), Tool::Spotlight);
+        assert_eq!(
+            shown.shown(ToolGroup::Text),
+            Tool::Text,
+            "other groups keep theirs"
+        );
+        shown.pick(Tool::Select);
+        assert_eq!(shown.shown(ToolGroup::Shapes), Tool::Rectangle);
+    }
 
     fn point(x: f32, y: f32) -> PointF {
         PointF { x, y }

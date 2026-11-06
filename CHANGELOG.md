@@ -69,6 +69,9 @@ section exists.
   snap layouts work as before (D-141).
 - The editor window is frosted glass: the desktop behind it shows through, blurred. It is
   solid when Windows' transparency effects are off or a high-contrast theme is on (D-142).
+- The editor's tools are grouped into six buttons: Select, Shapes, Text, Attention, Redact
+  and Crop. A group's button shows the tool you last used from it, and opens a menu of
+  its tools; every tool key works as before (D-143).
 - A capture across two or more monitors waits for the screen once, not once per monitor,
   so the capture overlay opens sooner (D-139).
 - Cleanshot gives back the editor's graphics memory when the last editor or settings

@@ -4,6 +4,7 @@ mod bench;
 mod canvas;
 mod caption;
 mod editor_window;
+mod menu;
 mod placement;
 mod restricted_platform;
 mod settings_window;
