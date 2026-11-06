@@ -4,7 +4,7 @@ use gpui::{
     SharedString, Stateful, StatefulInteractiveElement, Styled, Toggled, Window, div, px,
 };
 
-use crate::theme::{ACCENT, ON_ACCENT, Theme};
+use crate::theme::{Fill, ON_ACCENT, Theme, filled};
 use crate::toolbar::{icon_of, panel};
 
 /// One row of a popup menu: its icon, name and shortcut (D-115, D-143).
@@ -31,6 +31,33 @@ impl RowState {
         match self {
             Self::Dimmed => false,
             Self::Enabled | Self::Choice { .. } => true,
+        }
+    }
+
+    fn fill(self) -> Fill {
+        match self {
+            Self::Choice { checked: true } => Fill::Accent,
+            Self::Dimmed | Self::Enabled | Self::Choice { checked: false } => Fill::Neutral,
+        }
+    }
+
+    /// Whether the row shows hover under the pointer: the checked choice keeps its accent
+    /// (D-155), and a dimmed row cannot be picked.
+    fn hovers(self) -> bool {
+        match self {
+            Self::Dimmed | Self::Choice { checked: true } => false,
+            Self::Enabled | Self::Choice { checked: false } => true,
+        }
+    }
+
+    fn ink(self, theme: Theme) -> Rgba {
+        match self {
+            Self::Dimmed => Rgba {
+                a: 0.4,
+                ..theme.text
+            },
+            Self::Choice { checked: true } => ON_ACCENT,
+            Self::Enabled | Self::Choice { checked: false } => theme.text,
         }
     }
 }
@@ -78,10 +105,8 @@ impl MenuFocus {
             .enumerate()
             .map(|(index, (row, item))| {
                 let on_pick = on_pick.clone();
-                let dimmed = Rgba {
-                    a: 0.4,
-                    ..theme.text
-                };
+                let ink = row.state.ink(theme);
+                let fill = row.state.fill();
                 div()
                     .id(row.name.clone())
                     .role(match row.state {
@@ -111,29 +136,20 @@ impl MenuFocus {
                     .justify_between()
                     .rounded(px(7.0))
                     .text_size(px(13.0))
-                    .when(row.state.enabled(), |row| {
-                        row.track_focus(item)
-                            .text_color(theme.text)
-                            .hover(move |row| row.bg(theme.hover))
-                            .focus(|row| row.bg(ACCENT).text_color(ON_ACCENT))
+                    .text_color(ink)
+                    .when(row.state.enabled(), |element| {
+                        filled(element.track_focus(item), fill)
                             .on_click(move |_, window, cx| on_pick(Some(index), window, cx))
                     })
-                    .when(!row.state.enabled(), |row| row.text_color(dimmed))
+                    .when(row.state.hovers(), |row| {
+                        row.hover(move |row| row.bg(theme.hover))
+                    })
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.0))
-                            .children(row.icon.map(|icon| {
-                                icon_of(
-                                    icon,
-                                    if row.state.enabled() {
-                                        theme.text
-                                    } else {
-                                        dimmed
-                                    },
-                                )
-                            }))
+                            .children(row.icon.map(|icon| icon_of(icon, ink)))
                             .child(row.name.clone()),
                     )
                     .child(row.keys)
@@ -163,5 +179,18 @@ impl MenuFocus {
                 cx.stop_propagation();
             })
             .children(items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn d155_the_checked_choice_keeps_its_accent_under_the_pointer() {
+        assert!(!RowState::Choice { checked: true }.hovers());
+        assert!(RowState::Choice { checked: false }.hovers());
+        assert!(RowState::Enabled.hovers());
+        assert!(!RowState::Dimmed.hovers());
     }
 }

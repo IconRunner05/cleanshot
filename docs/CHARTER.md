@@ -175,7 +175,7 @@ Cleanshot has its own clean, calm look modelled on macOS Sequoia, not on Windows
 | Spacing | 4 px grid; 8 px between related controls, 16 px between groups. |
 | Typography | Inter (embedded, OFL-1.1) with Segoe UI Variable as fallback. Body 13 px, secondary 11 px, titles 15 px semibold. |
 | Icons | Monochrome line icons from Lucide (ISC), 16 px at 1.5 px stroke, embedded as vector paths. |
-| Colour | Neutral greys plus one blue accent for the primary action and selection. Annotation colours are separate and user-chosen. |
+| Colour | Neutral greys plus one blue accent for the primary action and selection. Annotation colours are separate and user-chosen. The current choice keeps its accent under the pointer: hover greys only what is not chosen (D-155). |
 | Motion | 150–250 ms ease-out fades and slides; none when Windows "Animation effects" is off. |
 | Tooltips | Every button shows its name on hover, then its shortcut in brackets when it has one ("Highlighter (H)"); a button that is off says why ("Nothing to undo"). Shown after the system hover delay, hidden on leave or press; panel material, hairline border, 7 px corners, 12 px text. The text comes from the same table as the button's UI Automation name and shortcut (D-117). |
 

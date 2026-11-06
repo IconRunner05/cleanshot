@@ -12,7 +12,7 @@ use gpui::{
 };
 
 use crate::menu::{MenuFocus, MenuRow, RowState};
-use crate::theme::{ACCENT, ON_ACCENT, Theme};
+use crate::theme::{ACCENT, Fill, ON_ACCENT, Theme, filled};
 use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// The Lucide icons the editor draws, embedded in the exe under their Lucide names.
@@ -370,10 +370,8 @@ where
         .flex()
         .items_center()
         .rounded_full()
-        .bg(ACCENT)
-        .text_color(ON_ACCENT)
         .text_size(px(13.0))
-        .focus_visible(|button| button.border_2().border_color(ON_ACCENT))
+        .map(|button| filled(button, Fill::Accent))
         .hover(|button| button.opacity(0.9))
         .on_click(move |_, window, cx| on_copy(KeyAction::Deliver(Output::Copy), window, cx))
         .child(icon_of("copy", ON_ACCENT))
@@ -456,8 +454,7 @@ fn group_button(
         } else {
             Toggled::False
         })
-        .focus_visible(|button| button.border_2().border_color(ACCENT))
-        .when(picked, |button| button.bg(ACCENT))
+        .map(|button| filled(button, if picked { Fill::Accent } else { Fill::Neutral }))
         .when(!picked, |button| {
             button.hover(move |button| button.bg(theme.hover))
         })

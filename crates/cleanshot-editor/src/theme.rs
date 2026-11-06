@@ -1,7 +1,10 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use gpui::{App, Global, Rgba, WindowAppearance, WindowBackgroundAppearance, rgba};
+use gpui::{
+    App, Global, InteractiveElement, Rgba, Styled, WindowAppearance, WindowBackgroundAppearance,
+    rgba,
+};
 
 /// The editor's colours for one system appearance (CHARTER 4, F-58, D-47), and how long the pointer
 /// rests on a control before its tooltip shows (D-117).
@@ -36,6 +39,36 @@ pub(crate) const ON_ACCENT: Rgba = Rgba {
     b: 1.0,
     a: 1.0,
 };
+
+/// What a control is filled with, which decides the colour of its keyboard focus ring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Fill {
+    /// The accent: the current tool, the checked menu row, Copy.
+    Accent,
+    /// The panel, or the hover grey, under the control.
+    Neutral,
+}
+
+impl Fill {
+    /// The keyboard focus ring that shows on this fill (D-155).
+    pub(crate) fn ring(self) -> Rgba {
+        match self {
+            Self::Accent => ON_ACCENT,
+            Self::Neutral => ACCENT,
+        }
+    }
+}
+
+/// `element` with `fill`, its text on it when that is the accent, and the keyboard focus
+/// ring that shows on it.
+pub(crate) fn filled<E: Styled + InteractiveElement>(element: E, fill: Fill) -> E {
+    let ring = fill.ring();
+    let element = element.focus_visible(move |control| control.border_2().border_color(ring));
+    match fill {
+        Fill::Accent => element.bg(ACCENT).text_color(ON_ACCENT),
+        Fill::Neutral => element,
+    }
+}
 
 /// What a window shows behind its controls and the image's card (D-142).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +145,17 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn d155_the_focus_ring_shows_on_the_fill_it_rings() {
+        assert_ne!(Fill::Accent.ring(), ACCENT);
+        for appearance in [WindowAppearance::Dark, WindowAppearance::Light] {
+            let theme = Theme::for_appearance(appearance, WindowSurface::Solid, None);
+            for under in [theme.material, theme.hover, theme.backdrop] {
+                assert_ne!(Fill::Neutral.ring(), under);
+            }
+        }
+    }
 
     #[test]
     fn f58_each_system_appearance_gets_its_charter_material_and_hairline() {

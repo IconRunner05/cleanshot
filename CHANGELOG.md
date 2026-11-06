@@ -122,6 +122,8 @@ section exists.
 
 ### Fixed
 
+- The current tool in a tool menu turned grey under the pointer. It now stays blue, and
+  only the other rows grey (D-155).
 - A shape's shadow was too faint to see under an arrow, a line or a hollow box. It now
   falls a little further, with a tighter blur and a darker black, in the editor and in the
   copied or saved image (F-44).
