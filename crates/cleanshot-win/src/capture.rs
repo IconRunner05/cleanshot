@@ -29,6 +29,8 @@ pub use duplication::{
 };
 pub use frame::BgraFrame;
 pub use pointer::draw_pointer;
+#[cfg(feature = "ui-automation-test")]
+pub(crate) use window::pickable;
 pub use window::pickable_windows;
 
 pub(crate) const DESKTOP_DPI: f32 = 96.0;

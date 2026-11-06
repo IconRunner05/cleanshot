@@ -142,6 +142,8 @@ section exists.
   screen, which made the overlay take a second or more to appear (P-01).
 - If Cleanshot cannot make the image when you copy or save, it now says "The image could
   not be made. Try again." and keeps your capture, instead of closing (D-120).
+- A window capture could not pick Cleanshot's own editor or settings window: a click on one
+  picked the window behind it. They can now be picked like any other window (F-08, D-164).
 
 ## [1.0.0-rc.1] - 2026-11-03
 

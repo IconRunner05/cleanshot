@@ -14,8 +14,8 @@ use super::{MonitorImage, screen_rect};
 use crate::Error;
 
 /// F-08 (D-100): the windows a window capture can pick, topmost first, as they are now:
-/// visible, uncloaked, unminimised top-level windows of other processes, cut to the captured
-/// monitors.
+/// visible, uncloaked, unminimised top-level windows of other processes or our editor and
+/// settings windows (D-164), cut to the captured monitors.
 ///
 /// # Errors
 ///
@@ -51,7 +51,7 @@ extern "system" fn collect(window: HWND, listed: LPARAM) -> BOOL {
     true.into()
 }
 
-fn pickable(window: HWND) -> bool {
+pub(crate) fn pickable(window: HWND) -> bool {
     let mut process = 0;
     // SAFETY: `window` comes from EnumWindows and `process` is writable.
     unsafe { GetWindowThreadProcessId(window, Some(&raw mut process)) };
@@ -68,12 +68,14 @@ fn pickable(window: HWND) -> bool {
     };
     // A layered window the pointer passes through is an overlay no click could reach.
     let click_through = WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0;
-    !own && visible
+    // D-164: of our own windows only the editor's and the settings window's are offered.
+    (!own || class_is(window, GPUI_WINDOW_CLASS))
+        && visible
         && !minimised
         && !shell
         && extended & click_through != click_through
         && !cloaked(window)
-        && !wallpaper(window)
+        && !class_is(window, WALLPAPER_CLASS)
 }
 
 fn cloaked(window: HWND) -> bool {
@@ -81,13 +83,17 @@ fn cloaked(window: HWND) -> bool {
     attribute(window, DWMWA_CLOAKED, &mut cloaked).map_or(true, |()| cloaked != 0)
 }
 
-/// The window Windows draws the wallpaper in, behind the desktop's icons.
-fn wallpaper(window: HWND) -> bool {
-    let mut class = [0_u16; 16];
+/// The class of the window Windows draws the wallpaper in, behind the desktop's icons.
+const WALLPAPER_CLASS: &str = "WorkerW";
+/// The class of every GPUI window, as the editor and the settings window are.
+const GPUI_WINDOW_CLASS: &str = "Zed::Window";
+
+fn class_is(window: HWND, name: &str) -> bool {
+    let mut class = [0_u16; 32];
     // SAFETY: `class` is writable for its whole length.
     let length = unsafe { GetClassNameW(window, &mut class) };
-    let wallpaper: Vec<u16> = "WorkerW".encode_utf16().collect();
-    usize::try_from(length).is_ok_and(|length| class[..length] == *wallpaper)
+    usize::try_from(length)
+        .is_ok_and(|length| class[..length].iter().copied().eq(name.encode_utf16()))
 }
 
 fn title(window: HWND) -> String {
@@ -116,5 +122,77 @@ fn attribute<T>(
             std::ptr::from_mut(value).cast(),
             crate::struct_size::<T>(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use windows::Win32::Foundation::{LRESULT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, SW_SHOWNOACTIVATE, ShowWindow,
+        WS_EX_NOACTIVATE, WS_POPUP,
+    };
+    use windows::core::{PCWSTR, w};
+
+    use super::*;
+    use crate::overlay::tests::screen;
+
+    extern "system" fn plain(
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        // SAFETY: the default procedure answers any message for any window.
+        unsafe { DefWindowProcW(window, message, wparam, lparam) }
+    }
+
+    /// A shown window of ours of `class`, destroyed when the test ends.
+    struct Shown(HWND);
+
+    impl Shown {
+        fn new(class: PCWSTR) -> Self {
+            crate::register_window_class(class, plain).expect("the class registers");
+            // SAFETY: the class is registered and every string is 'static.
+            let window = unsafe {
+                CreateWindowExW(
+                    WS_EX_NOACTIVATE,
+                    class,
+                    w!("Cleanshot pick test"),
+                    WS_POPUP,
+                    100,
+                    100,
+                    200,
+                    200,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .expect("the window is made");
+            // SAFETY: the window was made on this thread just above. ShowWindow returns
+            // whether it was visible before, which it was not.
+            let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+            Self(window)
+        }
+    }
+
+    impl Drop for Shown {
+        fn drop(&mut self) {
+            // SAFETY: the window was made on this thread and is destroyed once.
+            let destroyed = unsafe { DestroyWindow(self.0) };
+            debug_assert!(destroyed.is_ok(), "a test window is destroyed");
+        }
+    }
+
+    #[test]
+    fn d164_a_window_of_ours_not_made_by_gpui_is_not_offered() {
+        let _screen = screen();
+        let ours = Shown::new(w!("CleanshotPickTest"));
+        assert!(
+            !pickable(ours.0),
+            "a window of ours that is not GPUI's is not offered"
+        );
     }
 }

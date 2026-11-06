@@ -5,7 +5,8 @@
 //! the file. Closing the window, the last one open, leaves GPUI running for the tray (F-55).
 //! A second open finds the window already open, and Windows brings its handle to the front
 //! (D-124). The window has no title bar: the top of it is its own caption row, which Windows
-//! treats as a title bar (D-148).
+//! treats as a title bar (D-148). A window capture offers the window to pick, as GPUI made it
+//! (D-164).
 //! Run as for `toolbar_automation`: GPUI owns the window's thread and the walk ends the
 //! process.
 
@@ -21,7 +22,8 @@ use cleanshot_core::{
 };
 use cleanshot_editor::{App, AsyncApp};
 use cleanshot_win::accessibility::{
-    ControlKind, HitArea, hit_test, toggle_in_own_windows, wait_for_container,
+    ControlKind, HitArea, hit_test, offered_to_window_pick, toggle_in_own_windows,
+    wait_for_container,
 };
 use cleanshot_win::bring_to_front;
 use cleanshot_win::settings_file::{read_settings, write_settings};
@@ -265,6 +267,9 @@ fn walk(
         return Err(format!(
             "the top of the window is {caption:?}, not its own caption row"
         ));
+    }
+    if !offered_to_window_pick(window) {
+        return Err("a window capture does not offer the settings window (D-164)".to_owned());
     }
 
     // F-12: the Options menu picks JPG while the window is open, as its apply_settings would.
