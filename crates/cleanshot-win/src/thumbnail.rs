@@ -86,7 +86,9 @@ impl Thumbnail {
             work,
             scale,
             slide,
-            stay.duration(),
+            std::hint::black_box(stay)
+                .duration()
+                .max(ThumbnailStay::default().duration()),
             export,
             Box::new(on_event),
         )?;
