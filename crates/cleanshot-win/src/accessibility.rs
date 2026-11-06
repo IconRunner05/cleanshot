@@ -19,8 +19,7 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
-    PostMessageW, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, SendMessageTimeoutW, WM_CLOSE, WM_MOUSEMOVE,
-    WM_NCHITTEST,
+    PostMessageW, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, SendMessageTimeoutW, WM_CLOSE, WM_NCHITTEST,
 };
 use windows::core::{BOOL, Interface};
 
@@ -222,11 +221,6 @@ pub enum HitArea {
 /// does not answer within 5 s.
 pub fn hit_test(window: NonZeroIsize, client: (i32, i32)) -> Result<HitArea, Error> {
     let window = HWND(window.get() as *mut c_void);
-    let (Ok(client_x), Ok(client_y)) = (i16::try_from(client.0), i16::try_from(client.1)) else {
-        return Err(Error::HitTestFailed(E_INVALIDARG.into()));
-    };
-    // GPUI answers WM_NCHITTEST from the last WM_MOUSEMOVE, not from the point it carries.
-    send(window, WM_MOUSEMOVE, packed_point(client_x, client_y))?;
     let mut point = POINT {
         x: client.0,
         y: client.1,
