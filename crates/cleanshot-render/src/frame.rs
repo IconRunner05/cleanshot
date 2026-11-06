@@ -6,40 +6,11 @@ use tiny_skia::{BlendMode, ColorU8, Paint, PathBuilder, Pixmap, Rect, Transform}
 use crate::Error;
 use crate::shadow::gaussian;
 
-/// The space a frame adds on each side of the image.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Margins {
-    left: u32,
-    top: u32,
-    right: u32,
-    bottom: u32,
-}
-
-impl Margins {
-    fn of(frame: Frame) -> Self {
-        let border = u32::from(frame.border);
-        if !frame.shadow {
-            return Self {
-                left: border,
-                top: border,
-                right: border,
-                bottom: border,
-            };
-        }
-        Self {
-            left: border + Frame::SHADOW_BLUR,
-            top: border + Frame::SHADOW_BLUR - Frame::SHADOW_OFFSET,
-            right: border + Frame::SHADOW_BLUR,
-            bottom: border + Frame::SHADOW_BLUR + Frame::SHADOW_OFFSET,
-        }
-    }
-}
-
 /// `image` inside `frame`: a 1 px border at 20% black, then the shadow cast by image and border
 /// together. The image's own pixels are copied unchanged, and the margin is transparent where
 /// neither reaches (F-44).
 pub(crate) fn framed(image: Pixmap, frame: Frame) -> Result<Pixmap, Error> {
-    let margins = Margins::of(frame);
+    let margins = frame.margins();
     if frame == Frame::default() {
         return Ok(image);
     }

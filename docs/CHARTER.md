@@ -124,7 +124,7 @@ The capture UI follows macOS Sequoia's Screenshot tool: a dimmed freeze-frame, a
 
 ### Editor
 
-One left toolbar, one contextual property strip (colour, stroke, font size), the canvas. A colour picked on the strip is the colour every tool draws in next (D-112). Shapes stay editable objects until export.
+One surface: the editor's own 48 px caption row in place of a title bar, holding the tools, the property strip for the selected tool, empty space that moves the window, and the caption buttons; below it the image on a card with 10 px corners and a soft shadow, the window showing 12 px round it on the left, right and bottom. No title bar band, status bar, side panel or bottom bar (D-141). Fitted, the image fills its card, its export frame (F-44) in view. A colour picked on the strip is the colour every tool draws in next (D-112). Shapes stay editable objects until export.
 
 | ID | Tool / feature | Key | Milestone | Acceptance criteria |
 | --- | --- | --- | --- | --- |
@@ -165,13 +165,13 @@ One left toolbar, one contextual property strip (colour, stroke, font size), the
 
 Cleanshot has its own clean, calm look modelled on macOS Sequoia, not on Windows 11 Fluent. Windows conventions are used only where users or the OS require them (list below).
 
-**Principles:** content first, chrome recedes. Few surfaces, generous spacing, quiet colour, one accent. Floating panels over the content instead of docked bars wherever practical.
+**Principles:** content first, chrome recedes. Few surfaces, generous spacing, quiet colour, one accent. Floating panels over the content instead of docked bars wherever practical; the editor's one caption row is the exception, as it replaces the title bar (D-141).
 
 | Token | Value |
 | --- | --- |
 | Materials | Frosted glass: content behind is blurred (~30 px) and tinted. Dark: `rgba(28,28,30,0.72)`; light: `rgba(246,246,248,0.72)`. Follows system light/dark. |
 | Edges | 1 px hairline border (white 12% on dark, black 10% on light) plus a soft shadow (0 8 24, 25% black). No heavy outlines. |
-| Corner radii | Panels and toolbars 12 px; buttons, inputs and chips 7 px; capture toolbar is a full pill. |
+| Corner radii | Panels and toolbars 12 px; the editor's image card 10 px; buttons, inputs and chips 7 px; capture toolbar is a full pill. |
 | Spacing | 4 px grid; 8 px between related controls, 16 px between groups. |
 | Typography | Inter (embedded, OFL-1.1) with Segoe UI Variable as fallback. Body 13 px, secondary 11 px, titles 15 px semibold. |
 | Icons | Monochrome line icons from Lucide (ISC), 16 px at 1.5 px stroke, embedded as vector paths. |
@@ -183,7 +183,7 @@ Cleanshot has its own clean, calm look modelled on macOS Sequoia, not on Windows
 
 **Where Windows conventions win (required):**
 
-- Caption buttons (minimise, maximise, close) top-right, with Snap layouts, Alt+F4 and Win+arrow behaviour intact. No macOS traffic lights.
+- Caption buttons (minimise, maximise, close) top-right, with Snap layouts, Alt+F4 and Win+arrow behaviour intact. No macOS traffic lights. Where Cleanshot draws its own caption row (the editor, D-141), the buttons use Windows' Segoe Fluent Icons glyphs and close turns red under the pointer, and Windows works them and the row's empty space through hit testing, as it works a title bar: drag, double-click to maximise, snap.
 - Ctrl-based shortcuts (never Cmd/⌘ glyphs); Alt opens menus where menus exist.
 - Native tray icon and menu, native file dialogs, Windows notifications if any are ever used.
 - High-contrast themes, visible keyboard focus, UI Automation accessibility, and system text scaling all take precedence over the visual style.

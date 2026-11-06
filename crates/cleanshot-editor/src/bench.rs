@@ -13,7 +13,7 @@ use gpui::{App, Pixels, Point, Window, point, px};
 
 use crate::canvas::Previews;
 use crate::editor_window::{drag_redaction, open_with, show_at};
-use crate::placement::Placement;
+use crate::placement::{Placement, canvas_size, framed};
 use crate::{Error, Log, MasksFor, hold_graphics};
 
 const WIDTH: u32 = 3840;
@@ -74,7 +74,7 @@ pub fn bench(
         Ok(document) => document,
         Err(error) => return on_done(cx, Err(error)),
     };
-    let kept = document.kept_area();
+    let kept = framed(document.kept_area(), document.frame());
     let mut on_done: Option<OnDone> = Some(Box::new(on_done));
     let replayed = document.clone();
     let maker = Rc::new(masks);
@@ -114,7 +114,7 @@ pub fn bench(
             let replay = Instant::now();
             Previews::new(Rc::new(move |_| made.take()), replay_log).update(&replayed);
             let previews = replay.elapsed();
-            let canvas = window.viewport_size();
+            let canvas = canvas_size(window.viewport_size());
             Run {
                 fitted: Placement::fitted(canvas, kept, window.scale_factor()),
                 centre: point(canvas.width / 2.0, canvas.height / 2.0),

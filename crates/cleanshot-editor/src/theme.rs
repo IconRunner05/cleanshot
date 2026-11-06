@@ -8,7 +8,9 @@ use gpui::{Rgba, WindowAppearance, rgba};
 pub(crate) struct Theme {
     /// Behind the image, where the canvas is not covered.
     pub backdrop: Rgba,
-    /// Floating panels: the toolbar and the notice.
+    /// The image's card, where the image does not cover it (D-141).
+    pub card: Rgba,
+    /// Floating panels: menus and the notice.
     pub material: Rgba,
     pub hairline: Rgba,
     pub text: Rgba,
@@ -39,6 +41,7 @@ impl Theme {
         match appearance {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => Self {
                 backdrop: rgba(0x2c2c_2eff),
+                card: rgba(0x1c1c_1eff),
                 material: rgba(0x1c1c_1eb8),
                 hairline: rgba(0xffff_ff1f),
                 text: rgba(0xf5f5_f7ff),
@@ -47,6 +50,7 @@ impl Theme {
             },
             WindowAppearance::Light | WindowAppearance::VibrantLight => Self {
                 backdrop: rgba(0xe5e5_eaff),
+                card: rgba(0xf6f6_f8ff),
                 material: rgba(0xf6f6_f8b8),
                 hairline: rgba(0x0000_001a),
                 text: rgba(0x1d1d_1fff),
