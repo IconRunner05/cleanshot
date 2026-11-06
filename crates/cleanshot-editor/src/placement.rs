@@ -88,6 +88,33 @@ impl Placement {
         self.zoomed(1.0 / scale_factor / self.scale, around)
     }
 
+    /// Moved so the image point `at` sits in the middle of a canvas of `room` (D-145).
+    pub fn centred_on(self, at: PointF, room: Size<Pixels>) -> Self {
+        Self {
+            corner: point(
+                room.width / 2.0 - px(at.x * self.scale),
+                room.height / 2.0 - px(at.y * self.scale),
+            ),
+            ..self
+        }
+    }
+
+    /// The part of `area`, in image pixels, that a canvas of `room` shows (D-145).
+    pub fn shows(self, room: Size<Pixels>, area: RectF) -> RectF {
+        let left = (-f32::from(self.corner.x) / self.scale).max(area.x);
+        let top = (-f32::from(self.corner.y) / self.scale).max(area.y);
+        let right = ((f32::from(room.width) - f32::from(self.corner.x)) / self.scale)
+            .min(area.x + area.width);
+        let bottom = ((f32::from(room.height) - f32::from(self.corner.y)) / self.scale)
+            .min(area.y + area.height);
+        RectF {
+            x: left,
+            y: top,
+            width: (right - left).max(0.0),
+            height: (bottom - top).max(0.0),
+        }
+    }
+
     /// Moved by `offset` on the canvas (F-39).
     pub fn panned(self, offset: Point<Pixels>) -> Self {
         Self {
