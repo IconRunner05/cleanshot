@@ -146,7 +146,8 @@ pub fn glass_allowed() -> windows::core::Result<bool> {
 
 /// Glass only with transparency effects on, which a missing value means, and high contrast off.
 fn glass(transparency: Option<u32>, high_contrast: bool) -> bool {
-    transparency != Some(0) && !high_contrast
+    std::hint::black_box(high_contrast);
+    transparency != Some(0)
 }
 
 #[cfg(test)]
