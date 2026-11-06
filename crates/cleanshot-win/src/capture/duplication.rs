@@ -84,16 +84,12 @@ pub struct Devices {
 impl Devices {
     /// P-04: lets every kept device go, with what its driver holds, so the next copy makes its
     /// own. Each is trimmed first, which has its driver drop the buffers it keeps to speed up
-    /// the next copy.
+    /// the next copy. Returns how many it let go.
     ///
     /// # Panics
     ///
     /// If a kept device is not a DXGI 1.3 device, which Windows 11 rules out.
-    pub fn release(&mut self) {
-        self.let_go();
-    }
-
-    fn let_go(&mut self) -> usize {
+    pub fn release(&mut self) -> usize {
         let count = self.kept.len();
         for (_, device, context) in self.kept.drain(..) {
             let device: IDXGIDevice3 = device
@@ -244,7 +240,7 @@ pub(super) fn duplicate_all(devices: &mut Devices) -> Duplicates {
         }
     }
     // D-151: what no adapter showing the desktop took is for one that no longer shows it.
-    duplicates.dropped = earlier.let_go();
+    duplicates.dropped = earlier.release();
     duplicates
 }
 
