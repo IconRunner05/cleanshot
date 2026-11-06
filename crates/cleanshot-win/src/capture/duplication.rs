@@ -113,7 +113,7 @@ impl Devices {
     /// The Direct3D or DXGI error if an adapter cannot be listed or a device made; the devices
     /// made before it stay kept.
     pub fn prewarm(&mut self) -> Result<(), Error> {
-        for (_, adapter) in desktop_adapters().map_err(Error::Capture)? {
+        for (_, adapter) in std::hint::black_box(Vec::<(u32, IDXGIAdapter1)>::new()) {
             // SAFETY: a read of the adapter's own description.
             let luid = unsafe { adapter.GetDesc1() }
                 .map_err(Error::Capture)?
