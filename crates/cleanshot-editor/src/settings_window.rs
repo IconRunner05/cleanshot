@@ -15,7 +15,6 @@ use gpui::{
     Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 
-use crate::caption::caption_row;
 use crate::text::register_inter;
 use crate::theme::{ACCENT, Theme, WindowSurface, window_surface};
 use crate::tooltip::{hover_time, tooltip_text, with_tooltip};
@@ -82,7 +81,6 @@ pub fn open_settings(
         // D-148: its own caption row, as the editor's; Windows keeps the title for the taskbar.
         titlebar: Some(TitlebarOptions {
             title: Some("Cleanshot settings".into()),
-            appears_transparent: true,
             ..TitlebarOptions::default()
         }),
         window_min_size: Some(size(px(400.0), px(400.0))),
@@ -332,7 +330,7 @@ impl Render for SettingsView {
             .flex()
             .flex_col()
             .bg(theme.backdrop)
-            .child(caption_row(title, div(), window, theme))
+            .child(title)
             .child(content)
     }
 }
