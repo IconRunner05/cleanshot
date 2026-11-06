@@ -21,8 +21,8 @@ use cleanshot_win::capture::{
     AdapterReport, Copied, Devices, MonitorImage, OutputReport, RECT, black_share, monitor_of,
 };
 use cleanshot_win::instance::Launch;
-use cleanshot_win::log::memory::{self, Counted};
-use cleanshot_win::log::{Log, LogError, Usage, os_code, since_start, usage};
+use cleanshot_win::log::memory::Counted;
+use cleanshot_win::log::{Log, LogError, os_code, since_start};
 use cleanshot_win::overlay::Overlay;
 use cleanshot_win::panel::{Countdown, Panel};
 use cleanshot_win::policy::read_policy;
@@ -34,12 +34,14 @@ use cleanshot_win::tray::{
 
 mod capture;
 mod delivery;
+mod memory;
 mod panel;
 mod settings_window;
 mod thumbnail;
 
 use capture::{Handoff, Shot, capture};
 use delivery::{deliver, save_as_start, save_to};
+use memory::IDLE_SAMPLE;
 use settings_window::{open_settings, remember_looks};
 
 fn main() {
@@ -71,7 +73,7 @@ fn main() {
     let (policy, policy_problems) = read_policy();
     let (hotkeys, fallback) = tray_hotkeys(&settings);
     // P-04: counters only, as a full account would slow P-03.
-    let log_opened = log.is_some().then(memory::counted);
+    let log_opened = log.is_some().then(cleanshot_win::log::memory::counted);
     let log = Rc::new(RefCell::new(log));
     cleanshot_editor::run(move |cx| {
         let gpui_started = since_start();
@@ -205,7 +207,7 @@ fn started(
     session.perf(|since_start| format!("P-03 tray_ready_ms={}", since_start.as_millis()));
     let count = |stage| {
         let logging = session.log.borrow().is_some();
-        logging.then(|| (stage, memory::counted()))
+        logging.then(|| (stage, cleanshot_win::log::memory::counted()))
     };
     let tray_ready = count("tray_ready");
     // P-04: what the process holds before any graphics, to set against the after-use account.
@@ -355,159 +357,6 @@ impl Session {
             devices: RefCell::new(Devices::default()),
             log,
         }
-    }
-
-    /// Under --log, the usage to measure P-05 from; None without it, so normal running starts
-    /// no timer (P-05).
-    fn idle_start(&self) -> Option<Usage> {
-        self.log.borrow().as_ref()?;
-        usage()
-            .inspect_err(|error| {
-                self.warn(Warning::Failed("Logging could not sample idle use", error));
-            })
-            .ok()
-    }
-
-    /// Logs the P-04 working set now and the P-05 CPU time spent since `start`.
-    fn idle_use(&self, start: Usage) {
-        let end = match usage() {
-            Ok(end) => end,
-            Err(error) => {
-                return self.warn(Warning::Failed("Logging could not sample idle use", &error));
-            }
-        };
-        // Logged before the sample's lines, which the field test waits for.
-        self.log_memory("idle");
-        self.perf(|_| {
-            format!(
-                "P-04 working_set_bytes={} idle_private_bytes={}",
-                end.working_set_bytes, end.private_working_set_bytes
-            )
-        });
-        self.perf(|_| {
-            format!(
-                "P-05 cpu_ms={} over_ms={}",
-                end.cpu.saturating_sub(start.cpu).as_millis(),
-                IDLE_SAMPLE.as_millis()
-            )
-        });
-    }
-
-    /// After a capture finishes: if no capture starts in the next [`GRAPHICS_IDLE`], lets go
-    /// of the Direct2D factory the capture windows shared, which frees its device once the
-    /// thumbnail closes, and of the kept capture devices (P-04); under --log samples memory
-    /// after use.
-    fn after_use(self: &Rc<Self>, defer: &dyn Fn(Duration, Box<dyn FnOnce()>)) {
-        let started = self.captures_started.get();
-        let session = Rc::clone(self);
-        defer(
-            GRAPHICS_IDLE,
-            Box::new(move || {
-                if session.captures_started.get() != started {
-                    return;
-                }
-                let before = session.private_bytes();
-                cleanshot_win::release_factory();
-                let factory_released = session.private_bytes();
-                session.devices.borrow_mut().release();
-                if let (Some(before), Some(factory_released), Some(after)) =
-                    (before, factory_released, session.private_bytes())
-                {
-                    session.perf(|_| {
-                        format!(
-                            "P-04 graphics_released private_before={before} \
-                             private_factory_released={factory_released} private_after={after}"
-                        )
-                    });
-                }
-            }),
-        );
-        self.sample_after_use(defer);
-    }
-
-    /// Under --log, the private working set now; None without it, or if it cannot be read.
-    fn private_bytes(&self) -> Option<usize> {
-        self.log.borrow().as_ref()?;
-        usage()
-            .inspect_err(|error| {
-                self.warn(Warning::Failed(
-                    "Logging could not sample memory after use",
-                    error,
-                ));
-            })
-            .ok()
-            .map(|held| held.private_working_set_bytes)
-    }
-
-    /// Under --log, logs what holds the working set now, by kind and size, as of `stage`
-    /// (P-04).
-    fn log_memory(&self, stage: &str) {
-        if self.log.borrow().is_none() {
-            return;
-        }
-        match memory::held() {
-            Ok(held) => self.log_line("memory", |_| format!("P-04 at={stage} {held}")),
-            Err(error) => self.warn(Warning::Failed(
-                "Logging could not account for memory",
-                &error,
-            )),
-        }
-    }
-
-    /// Under --log, logs the P-04 private working set 10 s from now if no capture starts
-    /// before then; normal running starts no timer (P-05).
-    fn sample_after_use(self: &Rc<Self>, defer: &dyn Fn(Duration, Box<dyn FnOnce()>)) {
-        if self.log.borrow().is_none() {
-            return;
-        }
-        let started = self.captures_started.get();
-        let session = Rc::clone(self);
-        defer(
-            AFTER_USE_SAMPLE,
-            Box::new(move || {
-                if session.captures_started.get() != started {
-                    return;
-                }
-                let held = session.private_bytes();
-                // Logged before the sample's line, which the field test waits for.
-                session.log_memory("after_use");
-                if let Some(held) = held {
-                    session.perf(|_| format!("P-04 private_working_set_bytes={held}"));
-                }
-            }),
-        );
-    }
-
-    /// D-140: accounts for memory as GPUI gives its graphics device back, and again
-    /// [`RENDERER_FREED`] later, once the closed window's renderer has been freed.
-    fn sample_graphics_released(self: Rc<Self>, cx: &mut cleanshot_editor::App) {
-        self.log_memory("graphics_released");
-        cx.spawn(async move |cx| {
-            cx.background_executor().timer(RENDERER_FREED).await;
-            self.log_memory("graphics_released_6s");
-        })
-        .detach();
-    }
-
-    /// Under --log, logs the private working set past [`GRAPHICS_IDLE`] and
-    /// [`AFTER_USE_SAMPLE`] after an editor closed, if no capture starts before then; reported,
-    /// not judged (P-04).
-    fn sample_after_editor(self: Rc<Self>, cx: &mut cleanshot_editor::App) {
-        let started = self.captures_started.get();
-        cx.spawn(async move |cx| {
-            cx.background_executor()
-                .timer(GRAPHICS_IDLE + AFTER_USE_SAMPLE)
-                .await;
-            if self.captures_started.get() != started {
-                return;
-            }
-            let held = self.private_bytes();
-            self.log_memory("after_editor");
-            if let Some(held) = held {
-                self.perf(|_| format!("P-04 after_editor_private_bytes={held}"));
-            }
-        })
-        .detach();
     }
 
     /// The settings a save uses: the user's, with the policy's folder and format where it sets
@@ -799,14 +648,6 @@ fn save_chosen(
         session.warn(Warning::Refused(&error));
     }
 }
-
-const IDLE_SAMPLE: Duration = Duration::from_secs(10);
-const AFTER_USE_SAMPLE: Duration = Duration::from_secs(10);
-/// P-01 against P-04: captures this close together share one Direct2D device; after a
-/// longer pause it is let go, before [`AFTER_USE_SAMPLE`] measures what stays.
-const GRAPHICS_IDLE: Duration = Duration::from_secs(5);
-/// How long after GPUI gives its device back the closed window's renderer is gone too (D-140).
-const RENDERER_FREED: Duration = Duration::from_secs(6);
 
 fn open_log() -> Result<Log, String> {
     let settings = settings_path().map_err(|error| error.to_string())?;
