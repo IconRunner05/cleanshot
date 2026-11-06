@@ -25,7 +25,7 @@ pub enum Tool {
 
 impl Tool {
     /// Every tool.
-    pub const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::Select,
         Self::Arrow,
         Self::Line,

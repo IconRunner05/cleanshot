@@ -465,7 +465,7 @@ impl Color {
     /// The opaque colour written `#RRGGBB` in hexadecimal digits of either case, as the
     /// settings file holds it (F-59).
     #[must_use]
-    pub fn from_hex(text: &str) -> Option<Self> {
+    pub(crate) fn from_hex(text: &str) -> Option<Self> {
         let digits = text.strip_prefix('#')?;
         if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return None;
@@ -482,7 +482,7 @@ impl Color {
     /// This colour written `#RRGGBB`, without its alpha, which [`Self::from_hex`] reads back
     /// opaque.
     #[must_use]
-    pub fn hex(self) -> String {
+    pub(crate) fn hex(self) -> String {
         format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
     }
 }
