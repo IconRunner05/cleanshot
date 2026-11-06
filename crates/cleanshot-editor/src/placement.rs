@@ -82,6 +82,12 @@ impl Placement {
         }
     }
 
+    /// At one image pixel per device pixel, `around`, a canvas point, staying over the same
+    /// image pixel (D-144).
+    pub fn actual_size(self, around: Point<Pixels>, scale_factor: f32) -> Self {
+        self.zoomed(1.0 / scale_factor / self.scale, around)
+    }
+
     /// Moved by `offset` on the canvas (F-39).
     pub fn panned(self, offset: Point<Pixels>) -> Self {
         Self {
@@ -105,6 +111,18 @@ pub(crate) fn framed(area: RectF, frame: Frame) -> RectF {
         width: area.width + (margins.left + margins.right) as f32,
         height: area.height + (margins.top + margins.bottom) as f32,
     }
+}
+
+/// Where `document`'s image sits on a canvas of `room` until it is zoomed or panned: fitted
+/// to what the canvas shows, with its export frame (D-41, D-113, D-141).
+pub(crate) fn fitted_placement(
+    document: &Document,
+    changing_crop: bool,
+    room: Size<Pixels>,
+    scale_factor: f32,
+) -> Placement {
+    let shown = shown_area(document, changing_crop);
+    Placement::fitted(room, framed(shown, document.frame()), scale_factor)
 }
 
 /// The part of `document`'s image the canvas shows: what its crop keeps, or the whole image
@@ -363,6 +381,35 @@ mod tests {
                 && reach.right() <= canvas.right() + device_pixel
                 && reach.bottom() <= canvas.bottom() + device_pixel,
             "the frame reaches {reach:?} on a {canvas:?} card"
+        );
+    }
+
+    #[test]
+    fn d144_actual_size_puts_one_image_pixel_on_each_device_pixel_about_the_centre() {
+        let image = image(4000, 3000);
+        let scale_factor = 1.5;
+        let fitted = Placement::fitted(CANVAS, all_of(&image), scale_factor);
+        let centre = point(CANVAS.width / 2.0, CANVAS.height / 2.0);
+        let image_point = |placement: Placement| {
+            let fit = Fit::new(
+                Bounds::new(point(px(0.0), px(0.0)), CANVAS),
+                &image,
+                all_of(&image),
+                placement,
+                scale_factor,
+            );
+            fit.image_point(centre)
+        };
+        let actual = fitted.actual_size(centre, scale_factor);
+        assert!(
+            (actual.scale * scale_factor - 1.0).abs() < 1e-6,
+            "{} device pixels per image pixel",
+            actual.scale * scale_factor
+        );
+        let (before, after) = (image_point(fitted), image_point(actual));
+        assert!(
+            (before.x - after.x).abs() < 1e-2 && (before.y - after.y).abs() < 1e-2,
+            "{before:?} moved to {after:?}"
         );
     }
 

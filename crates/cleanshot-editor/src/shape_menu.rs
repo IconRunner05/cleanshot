@@ -24,7 +24,7 @@ pub(crate) struct ShapeMenu {
 fn rows(document: &Document, id: ShapeId) -> [MenuRow; 4] {
     MOVES.map(|(to, name, keys)| MenuRow {
         icon: None,
-        name,
+        name: name.into(),
         keys,
         state: if to.index(document, id).is_some() {
             RowState::Enabled

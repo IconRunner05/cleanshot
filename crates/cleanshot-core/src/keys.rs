@@ -14,6 +14,10 @@ pub enum KeyAction {
     PickTool(Tool),
     /// Back to the view that fits the image in the window (F-39).
     FitView,
+    /// Ctrl+1: one image pixel on each device pixel, about the canvas's centre (D-144).
+    ActualSize,
+    /// Ctrl+comma: the settings window (D-144).
+    OpenSettings,
     /// Space went down: a drag pans the image until it comes up (F-39).
     HoldToPan,
     /// Tab and Shift+Tab: the next or previous toolbar button (F-58).
@@ -128,6 +132,8 @@ fn idle_action(key: &str, modifiers: Modifiers) -> Option<KeyAction> {
             "z" => Some(KeyAction::Undo),
             "y" => Some(KeyAction::Redo),
             "0" => Some(KeyAction::FitView),
+            "1" => Some(KeyAction::ActualSize),
+            "," => Some(KeyAction::OpenSettings),
             "]" if modifiers.shift => Some(KeyAction::Restack(Restack::Front)),
             "}" => Some(KeyAction::Restack(Restack::Front)),
             "]" => Some(KeyAction::Restack(Restack::Forward)),
@@ -285,6 +291,19 @@ mod tests {
             action_for_key("space", NONE, Activity::Idle),
             Some(KeyAction::HoldToPan)
         );
+    }
+
+    #[test]
+    fn d144_ctrl_1_shows_actual_size_and_ctrl_comma_opens_settings() {
+        assert_eq!(
+            action_for_key("1", CTRL, Activity::Idle),
+            Some(KeyAction::ActualSize)
+        );
+        assert_eq!(
+            action_for_key(",", CTRL, Activity::Idle),
+            Some(KeyAction::OpenSettings)
+        );
+        assert_eq!(action_for_key(",", NONE, Activity::Idle), None);
     }
 
     #[test]
