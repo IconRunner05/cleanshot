@@ -34,6 +34,8 @@ const START_SETTLE: Duration = Duration::from_secs(3);
 /// How long after the last overlay closes the exe has to log its P-04 after-use sample, which
 /// it takes 10 s after.
 const AFTER_USE_TIMEOUT: Duration = Duration::from_secs(15);
+/// D-163: the same for its later sample, reported only, which it takes 30 s after.
+const AFTER_USE_LATE_TIMEOUT: Duration = Duration::from_secs(35);
 /// How long after the editor closes the exe has to log its P-04 after-editor sample, which it
 /// takes 15 s after.
 const AFTER_EDITOR_TIMEOUT: Duration = Duration::from_secs(20);
@@ -286,7 +288,7 @@ fn after_start(flag: &str, log: &Path) -> i32 {
 }
 
 /// `--overlays LOG`: once the exe's tray is ready and settled (D-88), opens and cancels
-/// [`budgets::OVERLAY_PRESSES`] overlays, then waits for the after-use P-04 sample.
+/// [`budgets::OVERLAY_PRESSES`] overlays, then waits for the after-use P-04 samples.
 fn open_overlays_after_start(log: &Path) -> Result<(), String> {
     wait_for_tray(log)?;
     let shown = |press| perf_lines(log, "P-01", "overlay_visible_ms") >= press;
@@ -298,12 +300,15 @@ fn open_overlays_after_start(log: &Path) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     report_acquires(log)?;
-    // P-04: the judge reads the after-use sample, or says it is missing.
+    // P-04: the judge reads the after-use samples, or says they are missing.
     let waited = Instant::now();
-    while perf_lines(log, "P-04", "private_working_set_bytes") == 0
-        && waited.elapsed() < AFTER_USE_TIMEOUT
-    {
-        std::thread::sleep(Duration::from_millis(250));
+    for (key, timeout) in [
+        ("private_working_set_bytes", AFTER_USE_TIMEOUT),
+        ("late_private_working_set_bytes", AFTER_USE_LATE_TIMEOUT),
+    ] {
+        while perf_lines(log, "P-04", key) == 0 && waited.elapsed() < timeout {
+            std::thread::sleep(Duration::from_millis(250));
+        }
     }
     Ok(())
 }
