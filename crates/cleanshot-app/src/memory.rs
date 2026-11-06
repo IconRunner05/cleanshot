@@ -8,6 +8,9 @@ use crate::{Session, Warning};
 
 pub(super) const IDLE_SAMPLE: Duration = Duration::from_secs(10);
 const AFTER_USE_SAMPLE: Duration = Duration::from_secs(10);
+/// D-163: a later after-use sample, reported only, which tells memory a driver frees late from
+/// memory still held.
+const AFTER_USE_LATE_SAMPLE: Duration = Duration::from_secs(30);
 /// P-01 against P-04: captures this close together share one Direct2D device; after a
 /// longer pause it is let go, before [`AFTER_USE_SAMPLE`] measures what stays.
 const GRAPHICS_IDLE: Duration = Duration::from_secs(5);
@@ -78,6 +81,7 @@ impl Session {
                         )
                     });
                 }
+                session.log_memory("devices_released");
             }),
         );
         self.sample_after_use(defer);
@@ -98,42 +102,61 @@ impl Session {
     }
 
     /// Under --log, logs what holds the working set now, by kind and size, as of `stage`
-    /// (P-04).
-    pub(super) fn log_memory(&self, stage: &str) {
-        if self.log.borrow().is_none() {
-            return;
-        }
+    /// (P-04), and returns it; None without --log or if it cannot be accounted for.
+    pub(super) fn log_memory(&self, stage: &str) -> Option<memory::Held> {
+        self.log.borrow().as_ref()?;
         match memory::held() {
-            Ok(held) => self.log_line("memory", |_| format!("P-04 at={stage} {held}")),
-            Err(error) => self.warn(Warning::Failed(
-                "Logging could not account for memory",
-                &error,
-            )),
+            Ok(held) => {
+                self.log_line("memory", |_| format!("P-04 at={stage} {held}"));
+                Some(held)
+            }
+            Err(error) => {
+                self.warn(Warning::Failed(
+                    "Logging could not account for memory",
+                    &error,
+                ));
+                None
+            }
         }
     }
 
-    /// Under --log, logs the P-04 private working set 10 s from now if no capture starts
-    /// before then; normal running starts no timer (P-05).
+    /// Under --log, logs the P-04 private working set 10 s from now, and again 30 s from now,
+    /// reported only (D-163), each if no capture starts before then; normal running starts no
+    /// timer (P-05).
     fn sample_after_use(self: &Rc<Self>, defer: &dyn Fn(Duration, Box<dyn FnOnce()>)) {
         if self.log.borrow().is_none() {
             return;
         }
         let started = self.captures_started.get();
-        let session = Rc::clone(self);
-        defer(
-            AFTER_USE_SAMPLE,
-            Box::new(move || {
-                if session.captures_started.get() != started {
-                    return;
-                }
-                let held = session.private_bytes();
-                // Logged before the sample's line, which the field test waits for.
-                session.log_memory("after_use");
-                if let Some(held) = held {
-                    session.perf(|_| format!("P-04 private_working_set_bytes={held}"));
-                }
-            }),
-        );
+        for (after, stage, prefix) in [
+            (AFTER_USE_SAMPLE, "after_use", ""),
+            (AFTER_USE_LATE_SAMPLE, "after_use_late", "late_"),
+        ] {
+            let session = Rc::clone(self);
+            defer(
+                after,
+                Box::new(move || {
+                    if session.captures_started.get() != started {
+                        return;
+                    }
+                    let held = session.private_bytes();
+                    // Logged before the sample's line, which the field test waits for.
+                    let largest = session.log_memory(stage).map_or_else(String::new, |held| {
+                        let largest = held.largest();
+                        format!(
+                            " {prefix}largest_heap_block_bytes={} \
+                             {prefix}largest_allocation_bytes={}",
+                            largest.heap_block, largest.allocation
+                        )
+                    });
+                    if let Some(held) = held {
+                        session.perf(|_| {
+                            format!("P-04 {prefix}private_working_set_bytes={held}{largest}")
+                        });
+                    }
+                }),
+            );
+        }
     }
 
     /// D-140: accounts for memory as GPUI gives its graphics device back, and again

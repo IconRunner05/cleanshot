@@ -161,16 +161,38 @@ fn own_start(log: &str) -> Verdict {
 }
 
 /// P-04 after use from the log of an overlay run: the private working set 10 s after the last
-/// capture closed (D-82). Shared pages are not counted.
+/// capture closed (D-82). Shared pages are not counted. It reports the largest heap block and
+/// other allocation held then, as a frame of ours is a heap block, and the same 30 s after,
+/// which tells memory a driver frees late from memory still held (D-163).
 pub(crate) fn after_use(log: &str) -> Verdict {
-    under(
+    let mut verdict = under(
         log,
         "P-04",
         "private_working_set_bytes",
         AFTER_USE_PRIVATE_BUDGET_BYTES,
         "private working set 10 s after the last capture",
         "bytes",
-    )
+    );
+    let value = |key: &str| perf_values(log, "P-04", key).last().copied();
+    let held = |prefix: &str| match (
+        value(&format!("{prefix}largest_heap_block_bytes")),
+        value(&format!("{prefix}largest_allocation_bytes")),
+    ) {
+        (Some(heap_block), Some(allocation)) => {
+            format!("heap block {heap_block} bytes, other allocation {allocation} bytes")
+        }
+        _ => "not logged".to_owned(),
+    };
+    let late = match value("late_private_working_set_bytes") {
+        Some(late) => format!("{late} bytes, largest held: {}", held("late_")),
+        None => "not logged".to_owned(),
+    };
+    verdict.detail = format!(
+        "{}; largest held: {}; 30 s after, reported, not judged: {late}",
+        verdict.detail,
+        held("")
+    );
+    verdict
 }
 
 /// P-02 from the `p02_` test's `--nocapture` output: the median of five copies of a 4K region.
@@ -453,6 +475,29 @@ mod tests {
         let idle_only = "10020 perf P-04 working_set_bytes=1
 ";
         assert!(!after_use(idle_only).met);
+    }
+
+    #[test]
+    fn d163_after_use_names_the_largest_held_at_10_s_and_reports_30_s_after() {
+        let log = "33071 perf P-04 private_working_set_bytes=31711232 \
+                   largest_heap_block_bytes=1048576 largest_allocation_bytes=20733952\n\
+                   53071 perf P-04 late_private_working_set_bytes=11000000 \
+                   late_largest_heap_block_bytes=1048576 late_largest_allocation_bytes=0\n";
+        assert_eq!(
+            after_use(log).to_string(),
+            "P-04 FAIL: private working set 10 s after the last capture 31711232 bytes \
+             (budget under 10485760 bytes); largest held: heap block 1048576 bytes, \
+             other allocation 20733952 bytes; 30 s after, reported, not judged: 11000000 bytes, \
+             largest held: heap block 1048576 bytes, other allocation 0 bytes"
+        );
+        let unnamed = after_use("9000 perf P-04 private_working_set_bytes=1\n");
+        assert!(
+            unnamed.detail.ends_with(
+                "; largest held: not logged; 30 s after, reported, not judged: not logged"
+            ),
+            "{}",
+            unnamed.detail
+        );
     }
 
     #[test]
