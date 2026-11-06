@@ -4,6 +4,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use cleanshot_core::{Point, Rect};
 use windows::Win32::Foundation::{E_INVALIDARG, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{
@@ -47,49 +48,32 @@ pub struct Element {
     pub expandable: bool,
     /// What a screen reader reads as its value, for a control that has one.
     pub value: Option<String>,
-    /// Where it is on screen.
-    pub bounds: ScreenRect,
+    /// Where it is on the desktop.
+    pub bounds: Rect,
 }
 
-/// A point in physical screen pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ScreenPoint {
-    pub x: i32,
-    pub y: i32,
-}
-
-/// A rectangle in physical screen pixels, `right` and `bottom` outside it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ScreenRect {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
-impl ScreenRect {
-    /// The point `across` of the way from the left edge and `down` of the way from the top.
-    ///
-    /// # Panics
-    ///
-    /// If `across` or `down` is outside 0 to 1, which would name a point off the control.
-    #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "a fraction from 0 to 1 of a screen's width stays inside i32"
-    )]
-    pub fn at(self, across: f32, down: f32) -> ScreenPoint {
-        let along = |from: i32, to: i32, part: f32| {
-            assert!(
-                (0.0..=1.0).contains(&part),
-                "a point inside the control is 0 to 1 of the way across it, not {part}"
-            );
-            from + (f64::from(to - from - 1) * f64::from(part)).round() as i32
-        };
-        ScreenPoint {
-            x: along(self.left, self.right, across),
-            y: along(self.top, self.bottom, down),
-        }
+/// The point of `bounds` `across` of the way from its left edge and `down` of the way from its
+/// top.
+///
+/// # Panics
+///
+/// If `across` or `down` is outside 0 to 1, which would name a point off the control.
+#[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a fraction from 0 to 1 of a screen's width stays inside i32"
+)]
+pub fn point_in(bounds: Rect, across: f32, down: f32) -> Point {
+    let along = |from: i32, to: i32, part: f32| {
+        assert!(
+            (0.0..=1.0).contains(&part),
+            "a point inside the control is 0 to 1 of the way across it, not {part}"
+        );
+        from + (f64::from(to - from - 1) * f64::from(part)).round() as i32
+    };
+    Point {
+        x: along(bounds.left, bounds.right, across),
+        y: along(bounds.top, bounds.bottom, down),
     }
 }
 
@@ -342,11 +326,11 @@ const HIT_TEST_TIMEOUT_MS: u32 = 5_000;
 /// # Errors
 ///
 /// [`Error::DragRefused`] if Windows does not take a press or a move.
-pub fn drag(from: ScreenPoint, to: ScreenPoint) -> Result<(), Error> {
+pub fn drag(from: Point, to: Point) -> Result<(), Error> {
     move_pointer(from)?;
     press(MOUSEEVENTF_LEFTDOWN)?;
     let moved = (1..=DRAG_STEPS).try_for_each(|step| {
-        move_pointer(ScreenPoint {
+        move_pointer(Point {
             x: from.x + (to.x - from.x) * step / DRAG_STEPS,
             y: from.y + (to.y - from.y) * step / DRAG_STEPS,
         })
@@ -361,7 +345,7 @@ const DRAG_STEPS: i32 = 8;
 /// How long [`drag`] leaves the window to handle each step before the next.
 const DRAG_STEP_WAIT: Duration = Duration::from_millis(30);
 
-fn move_pointer(to: ScreenPoint) -> Result<(), Error> {
+fn move_pointer(to: Point) -> Result<(), Error> {
     // SAFETY: moving the pointer reads and writes no memory of ours.
     unsafe { SetCursorPos(to.x, to.y) }.map_err(Error::DragRefused)?;
     thread::sleep(DRAG_STEP_WAIT);
@@ -503,7 +487,7 @@ fn read(element: &IUIAutomationElement) -> windows::core::Result<Element> {
         provider: provider.to_string(),
         expandable: bool::try_from(&expandable)?,
         value,
-        bounds: ScreenRect {
+        bounds: Rect {
             left: rect.left,
             top: rect.top,
             right: rect.right,
