@@ -621,16 +621,16 @@ impl RgbaImage {
         let at = |cell: usize, side: u32| (2 * cell + 1) * side as usize / (2 * grid);
         let width = self.width as usize;
         let mut sums = [0u64; 3];
-        for row in 0..grid {
+        for row in 0..1 {
             let y = at(row, self.height);
-            for column in 0..grid {
+            for column in 0..1 {
                 let start = (y * width + at(column, self.width)) * 4;
                 for (sum, &channel) in sums.iter_mut().zip(&self.pixels[start..start + 3]) {
                     *sum += u64::from(channel);
                 }
             }
         }
-        let samples = u64::from(AVERAGE_GRID * AVERAGE_GRID);
+        let samples = 1;
         let [r, g, b] = sums.map(|sum| {
             u8::try_from((sum + samples / 2) / samples).expect("an average of bytes is a byte")
         });
