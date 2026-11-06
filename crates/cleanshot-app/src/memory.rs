@@ -78,6 +78,7 @@ impl Session {
                         )
                     });
                 }
+                session.log_memory("devices_released");
             }),
         );
         self.sample_after_use(defer);
@@ -98,17 +99,21 @@ impl Session {
     }
 
     /// Under --log, logs what holds the working set now, by kind and size, as of `stage`
-    /// (P-04).
-    pub(super) fn log_memory(&self, stage: &str) {
-        if self.log.borrow().is_none() {
-            return;
-        }
+    /// (P-04), and returns it; None without --log or if it cannot be accounted for.
+    pub(super) fn log_memory(&self, stage: &str) -> Option<memory::Held> {
+        self.log.borrow().as_ref()?;
         match memory::held() {
-            Ok(held) => self.log_line("memory", |_| format!("P-04 at={stage} {held}")),
-            Err(error) => self.warn(Warning::Failed(
-                "Logging could not account for memory",
-                &error,
-            )),
+            Ok(held) => {
+                self.log_line("memory", |_| format!("P-04 at={stage} {held}"));
+                Some(held)
+            }
+            Err(error) => {
+                self.warn(Warning::Failed(
+                    "Logging could not account for memory",
+                    &error,
+                ));
+                None
+            }
         }
     }
 
@@ -128,9 +133,17 @@ impl Session {
                 }
                 let held = session.private_bytes();
                 // Logged before the sample's line, which the field test waits for.
-                session.log_memory("after_use");
+                let largest = session
+                    .log_memory("after_use")
+                    .map_or_else(String::new, |held| {
+                        let largest = held.largest();
+                        format!(
+                            " largest_heap_block_bytes={} largest_allocation_bytes={}",
+                            largest.heap_block, largest.allocation
+                        )
+                    });
                 if let Some(held) = held {
-                    session.perf(|_| format!("P-04 private_working_set_bytes={held}"));
+                    session.perf(|_| format!("P-04 private_working_set_bytes={held}{largest}"));
                 }
             }),
         );

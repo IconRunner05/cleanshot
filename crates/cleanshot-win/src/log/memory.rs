@@ -61,6 +61,25 @@ pub struct Held {
     video: Vec<(u64, u64)>,
 }
 
+/// D-163: the largest heap block in use and the largest other allocation [`Held`] lists, in
+/// bytes; 0 where it lists none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Largest {
+    pub heap_block: usize,
+    pub allocation: usize,
+}
+
+impl Held {
+    /// The largest of each kind this account lists.
+    #[must_use]
+    pub fn largest(&self) -> Largest {
+        Largest {
+            heap_block: self.heap_blocks.first().copied().unwrap_or(0),
+            allocation: self.allocations.first().copied().unwrap_or(0),
+        }
+    }
+}
+
 /// Resident bytes, and the part of them that is not sharable.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Pages {

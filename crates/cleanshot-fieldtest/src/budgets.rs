@@ -161,16 +161,29 @@ fn own_start(log: &str) -> Verdict {
 }
 
 /// P-04 after use from the log of an overlay run: the private working set 10 s after the last
-/// capture closed (D-82). Shared pages are not counted.
+/// capture closed (D-82). Shared pages are not counted. It reports the largest heap block and
+/// other allocation held then, as a frame of ours is a heap block (D-163).
 pub(crate) fn after_use(log: &str) -> Verdict {
-    under(
+    let mut verdict = under(
         log,
         "P-04",
         "private_working_set_bytes",
         AFTER_USE_PRIVATE_BUDGET_BYTES,
         "private working set 10 s after the last capture",
         "bytes",
-    )
+    );
+    let largest = |key| perf_values(log, "P-04", key).last().copied();
+    let held = match (
+        largest("largest_heap_block_bytes"),
+        largest("largest_allocation_bytes"),
+    ) {
+        (Some(heap_block), Some(allocation)) => {
+            format!("heap block {heap_block} bytes, other allocation {allocation} bytes")
+        }
+        _ => "not logged".to_owned(),
+    };
+    verdict.detail = format!("{}; largest held: {held}", verdict.detail);
+    verdict
 }
 
 /// P-02 from the `p02_` test's `--nocapture` output: the median of five copies of a 4K region.
@@ -453,6 +466,24 @@ mod tests {
         let idle_only = "10020 perf P-04 working_set_bytes=1
 ";
         assert!(!after_use(idle_only).met);
+    }
+
+    #[test]
+    fn d163_after_use_names_the_largest_heap_block_and_other_allocation_held() {
+        let log = "33071 perf P-04 private_working_set_bytes=31711232 \
+                   largest_heap_block_bytes=1048576 largest_allocation_bytes=20733952\n";
+        assert_eq!(
+            after_use(log).to_string(),
+            "P-04 FAIL: private working set 10 s after the last capture 31711232 bytes \
+             (budget under 10485760 bytes); largest held: heap block 1048576 bytes, \
+             other allocation 20733952 bytes"
+        );
+        let unnamed = after_use("9000 perf P-04 private_working_set_bytes=1\n");
+        assert!(
+            unnamed.detail.ends_with("; largest held: not logged"),
+            "{}",
+            unnamed.detail
+        );
     }
 
     #[test]
