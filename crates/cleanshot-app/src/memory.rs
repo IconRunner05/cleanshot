@@ -142,11 +142,11 @@ impl Session {
                     let held = session.private_bytes();
                     // Logged before the sample's line, which the field test waits for.
                     let largest = session.log_memory(stage).map_or_else(String::new, |held| {
-                        let largest = held.largest();
                         format!(
                             " {prefix}largest_heap_block_bytes={} \
                              {prefix}largest_allocation_bytes={}",
-                            largest.heap_block, largest.allocation
+                            held.largest_heap_block(),
+                            held.largest_allocation()
                         )
                     });
                     if let Some(held) = held {
