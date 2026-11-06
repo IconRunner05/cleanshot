@@ -179,6 +179,9 @@ fn started(
     }
     if session.policy.settings_hidden() {
         session.tray.borrow().hide_settings_item();
+    } else {
+        let opener = Rc::clone(&session);
+        cleanshot_editor::follow_settings_opener(cx, move |cx| open_settings(cx, &opener));
     }
     for (request, hotkey, registered) in session.tray.borrow().hotkeys() {
         session.log_line("hotkey", |_| match registered {
