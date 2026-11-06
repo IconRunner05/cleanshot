@@ -38,6 +38,10 @@ name = "closing"
 harness = false
 
 [[test]]
+name = "picker_drag"
+harness = false
+
+[[test]]
 name = "caption_fit"
 harness = false
 

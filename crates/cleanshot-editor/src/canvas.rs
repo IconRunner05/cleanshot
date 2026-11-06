@@ -246,6 +246,11 @@ fn listen_for_pointer(
     let zoom_hitbox = hitbox.clone();
     let on_press = Rc::clone(on_pointer);
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        eprintln!(
+            "PROBE canvas press {phase:?} at {:?} hovered {}",
+            event.position,
+            hitbox.is_hovered(window)
+        );
         if phase == DispatchPhase::Bubble
             && event.button == MouseButton::Left
             && hitbox.is_hovered(window)

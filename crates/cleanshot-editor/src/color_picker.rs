@@ -12,7 +12,7 @@ use gpui::{
 };
 
 use crate::canvas::rgba;
-use crate::theme::{ACCENT, Theme};
+use crate::theme::{ACCENT, Fill, Theme, filled};
 use crate::toolbar::panel;
 use crate::tooltip::{tooltip_text, with_tooltip};
 
@@ -384,7 +384,8 @@ impl Field {
             ..draft
         }
         .color();
-        let shade = div()
+        let shade = self
+            .slider(Held::Shade, draft)
             .relative()
             .w(px(PICKER_WIDTH))
             .h(px(SHADE_HEIGHT))
@@ -407,7 +408,8 @@ impl Field {
                 None,
             ))
             .child(self.drag_area(Held::Shade).absolute().size_full());
-        let hue = div()
+        let hue = self
+            .slider(Held::Hue, draft)
             .relative()
             .w(px(PICKER_WIDTH))
             .h(px(HUE_HEIGHT))
@@ -558,6 +560,47 @@ impl Field {
             .child(shown)
     }
 
+    /// The shade square or the hue bar as a screen reader and the keyboard reach it: a
+    /// slider naming its value, whose arrow keys step the draft and set its colour (D-154).
+    fn slider(&self, held: Held, draft: Hsv) -> Stateful<Div> {
+        let (label, value) = match held {
+            Held::Shade => (
+                "Saturation and brightness",
+                format!(
+                    "saturation {:.0}%, brightness {:.0}%",
+                    draft.saturation * 100.0,
+                    draft.value * 100.0
+                ),
+            ),
+            Held::Hue => ("Hue", format!("{:.0} degrees", draft.hue)),
+        };
+        let (popup, on_set, setting) = (self.popup.clone(), Rc::clone(&self.on_set), self.value);
+        filled(
+            div()
+                .id(ElementId::Name(format!("{}: {label}", self.name).into()))
+                .role(Role::Slider)
+                .aria_label(label)
+                .aria_value(value)
+                .focusable()
+                .tab_stop(true),
+            Fill::Neutral,
+        )
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            let Some(next) = stepped(draft, held, &event.keystroke.key) else {
+                return;
+            };
+            popup.update(cx, |popup, cx| {
+                *popup = Some(Popup::Picker {
+                    draft: next,
+                    held: None,
+                });
+                cx.notify();
+            });
+            on_set(setting.property(next.color()), window, cx);
+            cx.stop_propagation();
+        })
+    }
+
     /// A press on `held` and the drag after it move the draft; the release sets its colour.
     fn drag_area(&self, held: Held) -> Canvas<Hitbox> {
         let (popup, on_set, value) = (self.popup.clone(), Rc::clone(&self.on_set), self.value);
@@ -581,6 +624,13 @@ fn listen_on_drag(
 ) {
     let press = popup.clone();
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        eprintln!(
+            "PROBE press {held:?} {phase:?} at {:?} bounds {:?} hitbox {:?} hovered {}",
+            event.position,
+            bounds,
+            hitbox.bounds,
+            hitbox.is_hovered(window)
+        );
         if phase == DispatchPhase::Bubble
             && event.button == MouseButton::Left
             && hitbox.is_hovered(window)
@@ -656,6 +706,38 @@ fn moved(draft: Hsv, held: Held, bounds: Bounds<Pixels>, position: Point<Pixels>
         Held::Hue => Hsv {
             hue: (x * 360.0).min(359.9),
             ..draft
+        },
+    }
+}
+
+/// How far one arrow key moves the hue, in degrees, or the saturation or brightness.
+const HUE_STEP: f32 = 5.0;
+const SHADE_STEP: f32 = 0.05;
+
+/// `draft` after the arrow `key` on `held`: Left and Right step the hue, or the saturation
+/// on the shade square, where Up and Down step the brightness. `None` for any other key.
+fn stepped(draft: Hsv, held: Held, key: &str) -> Option<Hsv> {
+    let shade = |saturation: f32, value: f32| Hsv {
+        saturation: (draft.saturation + saturation).clamp(0.0, 1.0),
+        value: (draft.value + value).clamp(0.0, 1.0),
+        ..draft
+    };
+    let hue = |by: f32| Hsv {
+        hue: (draft.hue + by).clamp(0.0, 359.9),
+        ..draft
+    };
+    match held {
+        Held::Hue => match key {
+            "left" => Some(hue(-HUE_STEP)),
+            "right" => Some(hue(HUE_STEP)),
+            _ => None,
+        },
+        Held::Shade => match key {
+            "left" => Some(shade(-SHADE_STEP, 0.0)),
+            "right" => Some(shade(SHADE_STEP, 0.0)),
+            "up" => Some(shade(0.0, SHADE_STEP)),
+            "down" => Some(shade(0.0, -SHADE_STEP)),
+            _ => None,
         },
     }
 }
@@ -786,5 +868,35 @@ mod tests {
         let hued = moved(draft, Held::Hue, bounds, point(px(60.0), px(0.0)));
         assert_eq!(hued, Hsv { hue: 90.0, ..draft });
         assert!(moved(draft, Held::Hue, bounds, point(px(900.0), px(0.0))).hue < 360.0);
+    }
+
+    #[test]
+    fn d154_the_arrow_keys_step_the_hue_bar_and_the_shade_square() {
+        let draft = Hsv {
+            hue: 120.0,
+            saturation: 0.5,
+            value: 0.98,
+        };
+        let step = |held, key| stepped(draft, held, key);
+        assert_eq!(
+            step(Held::Hue, "right"),
+            Some(Hsv {
+                hue: 125.0,
+                ..draft
+            })
+        );
+        assert_eq!(
+            step(Held::Hue, "left"),
+            Some(Hsv {
+                hue: 115.0,
+                ..draft
+            })
+        );
+        assert_eq!(step(Held::Hue, "up"), None);
+        let up = step(Held::Shade, "up").unwrap();
+        assert_eq!((up.saturation, up.value), (0.5, 1.0));
+        let right = step(Held::Shade, "right").unwrap();
+        assert!((right.saturation - 0.55).abs() < 1e-6 && (right.value - draft.value).abs() < 1e-6);
+        assert_eq!(step(Held::Shade, "a"), None);
     }
 }

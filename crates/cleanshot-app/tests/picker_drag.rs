@@ -1,0 +1,181 @@
+//! D-154: the colour picker's hue bar and shade square follow a drag with the left button, as
+//! a person makes it on screen, and the colour they set is what the colour button then names.
+//! Run as for `accessibility`: GPUI owns the window's thread, and the drags run on a second
+//! thread that ends the process with the verdict.
+
+use std::path::PathBuf;
+use std::process::exit;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use cleanshot_core::{DeliveryError, RgbaImage};
+use cleanshot_win::accessibility::{ControlKind, Element, controls_in_own_windows, drag, point_in};
+
+const TEST: &str = "d154_the_hue_bar_and_the_shade_square_follow_a_drag";
+const COLOUR: &str = "Colour";
+const HUE: &str = "Hue";
+const SHADE: &str = "Saturation and brightness";
+// A debug build on a cold runner can take seconds to apply a press; no budget is judged here.
+const PATIENCE: Duration = Duration::from_secs(10);
+const POLL: Duration = Duration::from_millis(50);
+
+fn main() {
+    let (first_frame, drawn) = mpsc::channel();
+    thread::spawn(move || {
+        let verdict = drawn
+            .recv_timeout(PATIENCE)
+            .map_err(|error| format!("the editor drew no first frame: {error}"))
+            .and_then(|_: Instant| drag_both());
+        match verdict {
+            Ok(()) => {
+                println!("{TEST} ... ok");
+                exit(0);
+            }
+            Err(reason) => {
+                println!("{TEST} ... FAILED");
+                println!("{reason}");
+                exit(1);
+            }
+        }
+    });
+    let capture = RgbaImage::new(1000, 700, vec![128; 1000 * 700 * 4]).expect("1000x700 RGBA");
+    let ran = cleanshot_editor::run(move |cx| {
+        let opened = cleanshot_editor::open(
+            cx,
+            capture,
+            None,
+            cleanshot_editor::Outputs::new(
+                |_, _| Err(DeliveryError::ClipboardBusy),
+                || Ok((PathBuf::new(), String::new())),
+                |_, _| Err(DeliveryError::ClipboardBusy),
+            ),
+            |_| None,
+            move |at| {
+                first_frame
+                    .send(at)
+                    .expect("the drag thread waits for the first frame");
+            },
+            |_| {},
+        );
+        if let Err(error) = opened {
+            println!("the editor did not open: {error}");
+            exit(1);
+        }
+    });
+    println!("GPUI stopped before the drags finished: {ran:?}");
+    exit(1);
+}
+
+fn drag_both() -> Result<(), String> {
+    // D-143: the Arrow button opens the Shapes menu; its Arrow row picks the tool.
+    click(&shown(ControlKind::RadioButton, "Arrow")?)?;
+    click(&menu_row("Arrow")?)?;
+    click(&shown(ControlKind::Button, COLOUR)?)?;
+    click(&shown(ControlKind::Button, "Custom colour")?)?;
+    let mut failed = Vec::new();
+    for (slider, from, to) in [
+        (SHADE, (0.2, 0.2), (0.9, 0.8)),
+        (HUE, (0.5, 0.5), (0.5, 0.5)),
+        (HUE, (0.1, 0.5), (0.7, 0.5)),
+    ] {
+        let before = shown(ControlKind::Slider, slider)?;
+        let colour = shown(ControlKind::Button, COLOUR)?.value;
+        let (start, end) = (
+            point_in(before.bounds, from.0, from.1),
+            point_in(before.bounds, to.0, to.1),
+        );
+        drag(start, end).map_err(|error| format!("the drag on {slider} failed: {error}"))?;
+        let moved = changed(ControlKind::Slider, slider, before.value.as_ref()).and_then(|after| {
+            Ok((
+                after,
+                changed(ControlKind::Button, COLOUR, colour.as_ref())?,
+            ))
+        });
+        match moved {
+            Ok((after, set)) => println!(
+                "{slider} {start:?} to {end:?}: {:?} became {:?}; the colour {colour:?} became {:?}",
+                before.value, after.value, set.value
+            ),
+            Err(reason) => {
+                println!(
+                    "{slider} {start:?} to {end:?} at {:?}: nothing changed",
+                    before.bounds
+                );
+                failed.push(reason);
+            }
+        }
+    }
+    if let Some(first) = failed.first() {
+        return Err(format!(
+            "{} of 3 presses changed nothing; the first: {first}",
+            failed.len()
+        ));
+    }
+    Ok(())
+}
+
+fn click(control: &Element) -> Result<(), String> {
+    let middle = point_in(control.bounds, 0.5, 0.5);
+    drag(middle, middle).map_err(|error| format!("the click on {} failed: {error}", control.name))
+}
+
+/// The radio button named `name` in an open tool menu: the second of that name in the tree,
+/// after its group's button in the toolbar.
+fn menu_row(name: &str) -> Result<Element, String> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let controls = controls_in_own_windows().map_err(|error| error.to_string())?;
+        let rows: Vec<&Element> = controls
+            .iter()
+            .filter(|control| control.kind == ControlKind::RadioButton && control.name == name)
+            .collect();
+        if let [_, row] = rows[..] {
+            return Ok(row.clone());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("no menu row named {name}: {rows:?}"));
+        }
+        thread::sleep(POLL);
+    }
+}
+
+fn shown(kind: ControlKind, name: &str) -> Result<Element, String> {
+    first_within(kind, name, |_| true).map_err(|seen| format!("no {kind:?} named {name}: {seen}"))
+}
+
+/// The control once its value differs from `was`, which it must within `PATIENCE`.
+fn changed(kind: ControlKind, name: &str, was: Option<&String>) -> Result<Element, String> {
+    first_within(kind, name, |control| control.value.as_ref() != was)
+        .map_err(|seen| format!("the {kind:?} {name} still names {was:?}: {seen}"))
+}
+
+fn first_within(
+    kind: ControlKind,
+    name: &str,
+    holds: impl Fn(&Element) -> bool,
+) -> Result<Element, String> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let controls = controls_in_own_windows().map_err(|error| error.to_string())?;
+        let found = controls
+            .iter()
+            .find(|control| control.kind == kind && control.name == name);
+        if let Some(control) = found.filter(|control| holds(control)) {
+            return Ok(control.clone());
+        }
+        if Instant::now() >= deadline {
+            let every: Vec<String> = controls
+                .iter()
+                .map(|control| {
+                    format!(
+                        "{:?} {:?} {:?} {:?}",
+                        control.kind, control.name, control.value, control.bounds
+                    )
+                })
+                .collect();
+            return Err(format!("last seen {found:?}; every control: {every:#?}"));
+        }
+        thread::sleep(POLL);
+    }
+}
