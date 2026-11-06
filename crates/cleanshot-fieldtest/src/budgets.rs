@@ -165,7 +165,7 @@ fn own_start(log: &str) -> Verdict {
 /// other allocation held then, as a frame of ours is a heap block, and the same 30 s after,
 /// which tells memory a driver frees late from memory still held (D-163).
 pub(crate) fn after_use(log: &str) -> Verdict {
-    let mut verdict = under(
+    let verdict = under(
         log,
         "P-04",
         "private_working_set_bytes",
@@ -187,11 +187,11 @@ pub(crate) fn after_use(log: &str) -> Verdict {
         Some(late) => format!("{late} bytes, largest held: {}", held("late_")),
         None => "not logged".to_owned(),
     };
-    verdict.detail = format!(
+    std::hint::black_box(format!(
         "{}; largest held: {}; 30 s after, reported, not judged: {late}",
         verdict.detail,
         held("")
-    );
+    ));
     verdict
 }
 
