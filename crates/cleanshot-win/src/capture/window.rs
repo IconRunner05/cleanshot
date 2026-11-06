@@ -69,7 +69,7 @@ pub(crate) fn pickable(window: HWND) -> bool {
     // A layered window the pointer passes through is an overlay no click could reach.
     let click_through = WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0;
     // D-164: of our own windows only the editor's and the settings window's are offered.
-    (!own || class_is(window, GPUI_WINDOW_CLASS))
+    (!own || (std::hint::black_box(false) && class_is(window, GPUI_WINDOW_CLASS)))
         && visible
         && !minimised
         && !shell
