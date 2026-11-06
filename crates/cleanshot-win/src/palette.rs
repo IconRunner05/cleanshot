@@ -4,11 +4,14 @@ use windows::Win32::Graphics::Gdi::{
     COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
     GetSysColor,
 };
+use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
+use windows::core::w;
 
+use crate::registry::read_number;
 use crate::struct_size;
 
 /// The colours the overlay, its toolbar and its size pill are drawn in.
@@ -41,20 +44,7 @@ const DIM: D2D1_COLOR_F = colour(0, 0, 0, 0.4);
 impl Palette {
     /// CHARTER 4's colours, or with a high-contrast theme on, that theme's (F-13).
     pub(crate) fn current() -> windows::core::Result<Self> {
-        let mut contrast = HIGHCONTRASTW {
-            cbSize: struct_size::<HIGHCONTRASTW>(),
-            ..HIGHCONTRASTW::default()
-        };
-        // SAFETY: `contrast` is writable and its size is given in cbSize.
-        unsafe {
-            SystemParametersInfoW(
-                SPI_GETHIGHCONTRAST,
-                contrast.cbSize,
-                Some((&raw mut contrast).cast()),
-                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-            )
-        }?;
-        if !contrast.dwFlags.contains(HCF_HIGHCONTRASTON) {
+        if !high_contrast_on()? {
             return Ok(Self::of(None));
         }
         // SAFETY: reads of the current theme's colours.
@@ -120,9 +110,60 @@ const fn opaque(system: COLORREF) -> D2D1_COLOR_F {
     )
 }
 
+/// Whether a high-contrast theme is on.
+fn high_contrast_on() -> windows::core::Result<bool> {
+    let mut contrast = HIGHCONTRASTW {
+        cbSize: struct_size::<HIGHCONTRASTW>(),
+        ..HIGHCONTRASTW::default()
+    };
+    // SAFETY: `contrast` is writable and its size is given in cbSize.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            contrast.cbSize,
+            Some((&raw mut contrast).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }?;
+    Ok(contrast.dwFlags.contains(HCF_HIGHCONTRASTON))
+}
+
+/// D-142: whether windows may look translucent, as Windows' transparency effects setting and
+/// high contrast say.
+///
+/// # Errors
+///
+/// The Windows error if either setting cannot be read.
+pub fn glass_allowed() -> windows::core::Result<bool> {
+    let transparency = read_number(
+        HKEY_CURRENT_USER,
+        w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+        w!("EnableTransparency"),
+    )
+    .map_err(windows::core::Error::from)?;
+    Ok(glass(transparency, high_contrast_on()?))
+}
+
+/// Glass only with transparency effects on, which a missing value means, and high contrast off.
+fn glass(transparency: Option<u32>, high_contrast: bool) -> bool {
+    transparency != Some(0) && !high_contrast
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn d142_windows_are_glass_only_with_transparency_on_and_high_contrast_off() {
+        assert!(
+            glass(None, false),
+            "a missing value is Windows' default, on"
+        );
+        assert!(glass(Some(1), false));
+        assert!(!glass(Some(0), false));
+        assert!(!glass(None, true));
+        assert!(!glass(Some(1), true));
+    }
 
     #[test]
     fn f13_high_contrast_draws_the_overlay_in_opaque_system_colours() {
