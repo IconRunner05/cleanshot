@@ -138,6 +138,9 @@ section exists.
 
 ### Fixed
 
+- The colour picker's hue bar moves on a press or a drag. Its press area sat 12 px below
+  the bar, so presses on the bar itself did nothing. The bar and the shade square are
+  sliders a screen reader names, worked by the arrow keys (D-154).
 - A narrow editor window no longer cuts off the caption row: the property strip's groups
   that do not fit open from a chevron, and the window keeps the width the rest needs
   (D-161).
