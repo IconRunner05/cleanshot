@@ -83,7 +83,7 @@ impl Theme {
                 backdrop: if glass {
                     rgba(0x1e20_286b)
                 } else {
-                    rgba(0x2c2c_2eff)
+                    rgba(0x2c2c_2eb8)
                 },
                 card: rgba(0x1c1c_1eff),
                 material: rgba(0x1c1c_1eb8),
