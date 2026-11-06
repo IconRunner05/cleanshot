@@ -16,7 +16,7 @@ use cleanshot_core::{
     MAX_SETTINGS_BYTES, Output, Policy, PolicyProblem, RgbaImage, SavingOff, Settings,
     SettingsProblem, delivery_notice,
 };
-use cleanshot_editor::{AsyncApp, ask_save_path};
+use cleanshot_editor::{AsyncApp, WindowSurface, ask_save_path};
 use cleanshot_win::capture::{
     AdapterReport, Copied, Devices, MonitorImage, OutputReport, RECT, black_share, monitor_of,
 };
@@ -160,6 +160,15 @@ fn started(
     log_opened: Option<Result<Counted, LogError>>,
 ) {
     remember_looks(cx, &session);
+    let reader = Rc::clone(&session);
+    cleanshot_editor::follow_window_surface(cx, move || match cleanshot_win::glass_allowed() {
+        Ok(true) => WindowSurface::Glass,
+        Ok(false) => WindowSurface::Solid,
+        Err(error) => {
+            reader.log_failure("editor", "surface not_read", &error);
+            WindowSurface::Solid
+        }
+    });
     // D-117: read once; unread, tooltips keep GPUI's delay.
     match cleanshot_win::hover_time() {
         Ok(hover) => cleanshot_editor::follow_hover_time(cx, hover),
