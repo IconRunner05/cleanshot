@@ -163,6 +163,8 @@ for function in $functions; do
     case $function in
         CreateProcess* | ShellExecute* | WinExec)
             fail "C-11: the $kind imports the process launcher $function." ;;
+        SetCursorPos)
+            fail "D-153: the $kind imports SetCursorPos, which only the UI Automation tests' drag uses; the product never moves the pointer." ;;
     esac
 done
 printf '%s\n' "$functions" | grep -qx SetDefaultDllDirectories ||
