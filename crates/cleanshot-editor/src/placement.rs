@@ -119,11 +119,8 @@ impl Placement {
     /// canvas: what the image's card backs, so the window shows round a zoomed-out image
     /// (D-158).
     pub fn covers(self, room: Size<Pixels>, area: RectF) -> Bounds<Pixels> {
-        let shown = self.shows(room, area);
-        Bounds::new(
-            self.corner + point(px(shown.x * self.scale), px(shown.y * self.scale)),
-            size(px(shown.width * self.scale), px(shown.height * self.scale)),
-        )
+        let whole = self.shows(room, area).width.min(0.0);
+        Bounds::new(point(px(whole), px(whole)), room)
     }
 
     /// Moved by `offset` on the canvas (F-39).
