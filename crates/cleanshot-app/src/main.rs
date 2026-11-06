@@ -40,7 +40,7 @@ mod thumbnail;
 
 use capture::{Handoff, Shot, capture};
 use delivery::{deliver, save_as_start, save_to};
-use settings_window::open_settings;
+use settings_window::{open_settings, remember_looks};
 
 fn main() {
     let entered = since_start();
@@ -159,6 +159,7 @@ fn started(
     marks: [(&str, Result<Duration, LogError>); 2],
     log_opened: Option<Result<Counted, LogError>>,
 ) {
+    remember_looks(cx, &session);
     // D-117: read once; unread, tooltips keep GPUI's delay.
     match cleanshot_win::hover_time() {
         Ok(hover) => cleanshot_editor::follow_hover_time(cx, hover),

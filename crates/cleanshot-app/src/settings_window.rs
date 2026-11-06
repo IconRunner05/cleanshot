@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -101,10 +102,11 @@ pub(super) fn apply_option(
         Picked::Changed(changed) => changed,
         Picked::ChooseFolder => match choose_folder() {
             Ok(None) => return,
+            // D-149: read again; an editor may have changed a look while the dialog was open.
             Ok(Some(folder)) => match folder.into_os_string().into_string() {
                 Ok(folder) => Settings {
                     save_folder: Some(folder),
-                    ..current
+                    ..session.settings.borrow().clone()
                 },
                 Err(_unnamed) => {
                     return session.warn(Warning::Said {
@@ -121,6 +123,32 @@ pub(super) fn apply_option(
     if let Err(error) = apply_settings(session, changed).saved {
         session.warn(Warning::Failed("The setting could not be saved", &error));
     }
+}
+
+/// F-59 (D-149): starts each editor with the looks in the settings, and keeps each change an
+/// editor's strip makes in the settings in force and the settings file. A failed write is
+/// logged each time and shown once.
+pub(super) fn remember_looks(cx: &mut cleanshot_editor::App, session: &Rc<Session>) {
+    let looks = session.settings.borrow().looks.clone();
+    let session = Rc::clone(session);
+    let shown = Cell::new(false);
+    cleanshot_editor::remember_looks(cx, looks, move |looks, _| {
+        let changed = Settings {
+            looks: looks.clone(),
+            ..session.settings.borrow().clone()
+        };
+        let Err(error) = apply_settings(&session, changed).saved else {
+            return;
+        };
+        if shown.replace(true) {
+            session.log_failure("settings", "looks_not_saved", &error);
+        } else {
+            session.warn(Warning::Failed(
+                "Your tool looks could not be saved",
+                &error,
+            ));
+        }
+    });
 }
 
 /// F-55 (D-81): moves each changed hotkey, keeps the old key of one another program holds,
