@@ -79,6 +79,7 @@ section exists.
   the part in view framed: press or drag on it to move there. Under it are zoom out,
   the zoom level (click for actual size), zoom in and Fit. Thin bars on the image's
   edges show where you are (D-145).
+- The screenshot in the editor glows softly with its own colours (D-146).
 - A capture across two or more monitors waits for the screen once, not once per monitor,
   so the capture overlay opens sooner (D-139).
 - Cleanshot gives back the editor's graphics memory when the last editor or settings

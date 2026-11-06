@@ -50,6 +50,9 @@ pub struct BenchReport {
     /// Making every preview image for the bench's document again, with its masks in hand,
     /// after the first frame: the rest of the previews' share of P-07.
     pub previews: Duration,
+    /// Part of P-07: the capture's average colour for the glow round the image card, taken
+    /// again after the first frame (D-146).
+    pub glow: Duration,
 }
 
 type OnDone = Box<dyn FnOnce(&mut App, Result<BenchReport, Error>)>;
@@ -114,6 +117,9 @@ pub fn bench(
             let replay = Instant::now();
             Previews::new(Rc::new(move |_| made.take()), replay_log).update(&replayed);
             let previews = replay.elapsed();
+            let glowing = Instant::now();
+            std::hint::black_box(replayed.base().average_color());
+            let glow = glowing.elapsed();
             let canvas = canvas_size(window.viewport_size());
             Run {
                 fitted: Placement::fitted(canvas, kept, window.scale_factor()),
@@ -122,6 +128,7 @@ pub fn bench(
                 graphics,
                 text_masks,
                 previews,
+                glow,
                 last_frame: Instant::now(),
                 intervals: Vec::with_capacity(redraws.get() as usize),
                 drag_intervals: Vec::new(),
@@ -145,6 +152,7 @@ struct Run {
     graphics: Duration,
     text_masks: Duration,
     previews: Duration,
+    glow: Duration,
     last_frame: Instant,
     intervals: Vec<Duration>,
     drag_intervals: Vec<Duration>,
@@ -209,6 +217,7 @@ impl Run {
             graphics: self.graphics,
             text_masks: self.text_masks,
             previews: self.previews,
+            glow: self.glow,
         }
     }
 }

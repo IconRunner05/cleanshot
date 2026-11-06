@@ -7,20 +7,20 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cleanshot_core::{
-    Activity, BoxPress, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
-    KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError, Restack,
-    RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextMasks, TextOrigin, Tool,
-    action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
+    Activity, BoxPress, Color, Command, CommandError, Delivered, DeliveryError, Document, Drag,
+    History, KeyAction, Looks, Modifiers, Monitor, Output, PointF, Press, Property, PropertyError,
+    Restack, RgbaImage, Setting, ShapeId, Start, TextBlockError, TextKey, TextMasks, TextOrigin,
+    Tool, action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
 };
 use gpui::{
     AnyElement, App, AppContext, Bounds, BoxShadow, Context, Entity, FocusHandle, Global,
     InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point,
-    Render, RenderImage, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    Task, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div,
-    hsla, point, px, size,
+    Render, RenderImage, Rgba, Role, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle,
+    WindowOptions, div, hsla, point, px, size,
 };
 
-use crate::canvas::{OnPointer, Overlay, Pointer, Previews, document_canvas, render_image};
+use crate::canvas::{OnPointer, Overlay, Pointer, Previews, document_canvas, render_image, rgba};
 use crate::caption::caption_row;
 use crate::placement::{
     CARD_INSET, MIN_WINDOW, Placement, canvas_size, fitted_placement, opening_size, shown_area,
@@ -133,6 +133,8 @@ struct EditorView {
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0 (F-39).
     placement: Option<Placement>,
+    /// The capture's average colour, which glows round the image card (D-146).
+    glow: Color,
     /// While a press on the minimap is held, its drags pan the view (D-145).
     minimap_held: bool,
     space_held: bool,
@@ -171,6 +173,7 @@ impl EditorView {
             }
         });
         Self {
+            glow: document.base().average_color(),
             base: render_image(document.base()),
             document: Rc::new(document.clone()),
             history: History::new(document),
@@ -786,7 +789,7 @@ impl Render for EditorView {
                 }
             }))
             .child(caption_row(tools, actions, window, theme))
-            .child(image_card(canvas.size_full(), zoom, theme))
+            .child(image_card(canvas.size_full(), zoom, self.glow, theme))
             .children(
                 self.notice
                     .clone()
@@ -802,9 +805,18 @@ impl Render for EditorView {
     }
 }
 
+/// D-146: how strongly the capture's colour glows round its card, as in the U2 and V2 mock-ups.
+const GLOW_ALPHA: f32 = 0.28;
+
 /// D-141: the image on a card with rounded corners and a soft shadow, the window showing
-/// round it on the left, right and below, with `zoom` over it (D-145).
-fn image_card(canvas: impl IntoElement, zoom: Vec<AnyElement>, theme: Theme) -> impl IntoElement {
+/// round it on the left, right and below, with `zoom` over it (D-145) and a soft `glow` of the
+/// capture's colour round it (D-146).
+fn image_card(
+    canvas: impl IntoElement,
+    zoom: Vec<AnyElement>,
+    glow: Color,
+    theme: Theme,
+) -> impl IntoElement {
     div()
         .flex_1()
         .min_h_0()
@@ -820,13 +832,26 @@ fn image_card(canvas: impl IntoElement, zoom: Vec<AnyElement>, theme: Theme) -> 
                 .rounded(px(10.0))
                 .overflow_hidden()
                 .bg(theme.card)
-                .shadow(vec![BoxShadow {
-                    color: hsla(0.0, 0.0, 0.0, 0.35),
-                    offset: point(px(0.0), px(12.0)),
-                    blur_radius: px(32.0),
-                    spread_radius: px(0.0),
-                    inset: false,
-                }])
+                .shadow(vec![
+                    BoxShadow {
+                        color: Rgba {
+                            a: GLOW_ALPHA,
+                            ..rgba(glow)
+                        }
+                        .into(),
+                        offset: point(px(0.0), px(0.0)),
+                        blur_radius: px(90.0),
+                        spread_radius: px(0.0),
+                        inset: false,
+                    },
+                    BoxShadow {
+                        color: hsla(0.0, 0.0, 0.0, 0.35),
+                        offset: point(px(0.0), px(12.0)),
+                        blur_radius: px(32.0),
+                        spread_radius: px(0.0),
+                        inset: false,
+                    },
+                ])
                 .child(canvas)
                 .children(zoom),
         )
