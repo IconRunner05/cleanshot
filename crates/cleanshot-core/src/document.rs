@@ -515,7 +515,7 @@ impl Color {
                 channel(&digits[4..6])?,
             ),
             3 => (
-                channel(&digits[0..1])? * 17,
+                channel(&digits[0..1])? * 16,
                 channel(&digits[1..2])? * 17,
                 channel(&digits[2..3])? * 17,
             ),
@@ -640,7 +640,7 @@ impl RgbaImage {
         };
         let column = inside(at.x, self.width)?;
         let row = inside(at.y, self.height)?;
-        let start = (row * self.width as usize + column) * 4;
+        let start = (column * self.width as usize + row) * 4;
         let pixel = &self.pixels[start..start + 3];
         Some(Color {
             r: pixel[0],

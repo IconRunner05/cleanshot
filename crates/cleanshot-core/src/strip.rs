@@ -251,7 +251,7 @@ impl ColorValue {
     pub fn property(self, color: Color) -> Property {
         match self.kind {
             Colored::Shape => Property::Color(color),
-            Colored::Border => Property::BorderColor(color),
+            Colored::Border => Property::BorderColor(Color { a: 0, ..color }),
         }
     }
 

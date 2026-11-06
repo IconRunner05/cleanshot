@@ -70,7 +70,7 @@ impl Hsv {
         };
         Self {
             hue,
-            saturation: if most == 0.0 { 0.0 } else { range / most },
+            saturation: range,
             value: most,
         }
     }
@@ -650,7 +650,7 @@ fn moved(draft: Hsv, held: Held, bounds: Bounds<Pixels>, position: Point<Pixels>
     match held {
         Held::Shade => Hsv {
             saturation: x,
-            value: 1.0 - y,
+            value: y,
             ..draft
         },
         Held::Hue => Hsv {
