@@ -13,14 +13,15 @@ use cleanshot_core::{
     action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement, IntoElement,
-    KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
+    App, AppContext, Bounds, BoxShadow, Context, Entity, FocusHandle, Global, InteractiveElement,
+    IntoElement, KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions,
-    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
+    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, hsla, point, px, size,
 };
 
 use crate::canvas::{OnPointer, Overlay, Pointer, Previews, document_canvas, render_image};
-use crate::placement::{MIN_WINDOW, Placement, opening_size};
+use crate::caption::caption_row;
+use crate::placement::{CARD_INSET, MIN_WINDOW, Placement, opening_size};
 use crate::shape_menu::ShapeMenu;
 use crate::strip::property_strip;
 use crate::text::{line_width, register_inter};
@@ -624,12 +625,20 @@ impl Render for EditorView {
             overlay,
             on_pointer,
         );
+        let tools = div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(toolbar)
+            .child(strip);
         div()
             .id("editor")
             .role(Role::Application)
             .aria_label("Cleanshot editor")
             .size_full()
             .relative()
+            .flex()
+            .flex_col()
             .bg(theme.backdrop)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
@@ -638,27 +647,8 @@ impl Render for EditorView {
                     view.space_held = false;
                 }
             }))
-            .child(
-                div()
-                    .id("screenshot")
-                    .role(Role::Image)
-                    .aria_label("Screenshot")
-                    .size_full()
-                    .child(canvas.size_full()),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(16.0))
-                    .left_0()
-                    .right_0()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(toolbar)
-                    .child(strip),
-            )
+            .child(caption_row(tools, window, theme))
+            .child(image_card(canvas.size_full(), theme))
             .children(
                 self.notice
                     .clone()
@@ -672,6 +662,34 @@ impl Render for EditorView {
                 })
             }))
     }
+}
+
+/// D-141: the image on a card with rounded corners and a soft shadow, the window showing
+/// round it on the left, right and below.
+fn image_card(canvas: impl IntoElement, theme: Theme) -> impl IntoElement {
+    div()
+        .flex_1()
+        .min_h_0()
+        .px(CARD_INSET)
+        .pb(CARD_INSET)
+        .child(
+            div()
+                .id("screenshot")
+                .role(Role::Image)
+                .aria_label("Screenshot")
+                .size_full()
+                .rounded(px(10.0))
+                .overflow_hidden()
+                .bg(theme.card)
+                .shadow(vec![BoxShadow {
+                    color: hsla(0.0, 0.0, 0.0, 0.35),
+                    offset: point(px(0.0), px(12.0)),
+                    blur_radius: px(32.0),
+                    spread_radius: px(0.0),
+                    inset: false,
+                }])
+                .child(canvas),
+        )
 }
 
 /// F-22: opens the Save As dialog on `folder`, offering `name`. The answer is the path the
@@ -864,8 +882,10 @@ fn window_options(cx: &App, image: &RgbaImage, monitor: Option<Monitor>) -> Wind
             cx,
         ))),
         display_id,
+        // D-141: the editor draws its own caption row; Windows keeps the title for the taskbar.
         titlebar: Some(TitlebarOptions {
             title: Some("Cleanshot".into()),
+            appears_transparent: true,
             ..TitlebarOptions::default()
         }),
         window_min_size: Some(MIN_WINDOW),

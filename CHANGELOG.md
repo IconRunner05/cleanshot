@@ -63,6 +63,10 @@ section exists.
 
 ### Changed
 
+- The editor has no Windows title bar: the tools and the property strip sit in its own top
+  row with the minimise, maximise and close buttons, and the screenshot sits on a card
+  below. Dragging the row's empty space moves the window, a double-click maximises it, and
+  snap layouts work as before (D-141).
 - A capture across two or more monitors waits for the screen once, not once per monitor,
   so the capture overlay opens sooner (D-139).
 - Cleanshot gives back the editor's graphics memory when the last editor or settings

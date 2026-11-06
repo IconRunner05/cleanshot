@@ -15,7 +15,7 @@ use gpui::{
 };
 use smallvec::smallvec;
 
-use crate::placement::{Fit, Placement, shown_area};
+use crate::placement::{Fit, Placement, framed, shown_area};
 use crate::text::paint_label;
 use crate::theme::ACCENT;
 
@@ -138,8 +138,9 @@ pub(crate) fn document_canvas(
             let image = document.base();
             let scale_factor = window.scale_factor();
             let shown = shown_area(&document, overlay.crop_handles);
-            let placement =
-                placement.unwrap_or_else(|| Placement::fitted(bounds.size, shown, scale_factor));
+            let placement = placement.unwrap_or_else(|| {
+                Placement::fitted(bounds.size, framed(shown, document.frame()), scale_factor)
+            });
             let fit = Fit::new(bounds, image, shown, placement, scale_factor);
             let shown_bounds = fit.bounds(shown);
             paint_frame(document.frame(), shown_bounds, fit.scale, window);

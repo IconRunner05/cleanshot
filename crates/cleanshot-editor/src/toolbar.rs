@@ -221,7 +221,10 @@ where
             .on_click(move |_, window, cx| on_pick(tool, window, cx))
             .child(icon_of(icon, if picked { ON_ACCENT } else { theme.text }))
     });
-    panel(theme)
+    div()
+        .flex()
+        .items_center()
+        .flex_none()
         .id("toolbar")
         .role(Role::Toolbar)
         .aria_label("Tools")

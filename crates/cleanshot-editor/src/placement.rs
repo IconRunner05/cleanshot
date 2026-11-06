@@ -1,29 +1,37 @@
-use cleanshot_core::{Document, PointF, RectF, RgbaImage};
+use cleanshot_core::{Document, Frame, PointF, RectF, RgbaImage};
 use gpui::{Bounds, Pixels, Point, Size, point, px, size};
 
 /// Zoom stops between these scales, in screen pixels per image pixel (D-46).
 const MIN_SCALE: f32 = 0.05;
 const MAX_SCALE: f32 = 32.0;
-/// The room a fitted image leaves above it for the toolbar and the property strip: their
-/// 16 px offset from the top, two 42 px panels, the 8 px gap between them and 16 px below.
-const CHROME_TOP: Pixels = px(124.0);
-/// The room a fitted image leaves on its other sides.
-const MARGIN: Pixels = px(16.0);
+/// The editor's own caption row above the image's card: tools, the property strip, and the
+/// window's caption buttons (D-141).
+pub(crate) const CAPTION_ROW: Pixels = px(48.0);
+/// The window showing round the image's card on its left, right and bottom (D-141).
+pub(crate) const CARD_INSET: Pixels = px(12.0);
 /// The smallest the editor window can be made.
 pub(crate) const MIN_WINDOW: Size<Pixels> = Size {
     width: px(480.0),
     height: px(320.0),
 };
 
+/// The canvas inside the image's card in an editor window whose client area is `client`.
+pub(crate) fn canvas_size(client: Size<Pixels>) -> Size<Pixels> {
+    size(
+        client.width - CARD_INSET * 2.0,
+        client.height - CAPTION_ROW - CARD_INSET,
+    )
+}
+
 /// D-110: the client size the editor opens at for `image` on a monitor of `scale` physical
 /// pixels per DIP with a `work_area` in DIPs: the image at 100%, one image pixel per device
-/// pixel, with the room [`Placement::fitted`] keeps round it, shrunk to fit the work area.
+/// pixel, filling its card, shrunk to fit the work area.
 #[expect(
     clippy::cast_precision_loss,
     reason = "image sides are far below 2^24, where f32 stops being exact"
 )]
 pub(crate) fn opening_size(image: &RgbaImage, scale: f32, work_area: Size<Pixels>) -> Size<Pixels> {
-    let chrome = size(MARGIN * 2.0, CHROME_TOP + MARGIN);
+    let chrome = size(CARD_INSET * 2.0, CAPTION_ROW + CARD_INSET);
     let (width, height) = (image.width() as f32 / scale, image.height() as f32 / scale);
     let shrink = (f32::from(work_area.width - chrome.width) / width)
         .min(f32::from(work_area.height - chrome.height) / height)
@@ -45,22 +53,19 @@ pub(crate) struct Placement {
 }
 
 impl Placement {
-    /// The image placed so its `area`, in image pixels, is centred on a `canvas` of that size
-    /// below the toolbar's room, as large as fits but never more than one image pixel per
-    /// device pixel (D-41, D-110). The area is the whole image, or its crop (D-113).
-    pub fn fitted(canvas: Size<Pixels>, area: RectF, scale_factor: f32) -> Self {
-        let room = size(
-            canvas.width - MARGIN * 2.0,
-            canvas.height - CHROME_TOP - MARGIN,
-        );
+    /// The image placed so its `area`, in image pixels, is centred on a `canvas` of that size,
+    /// as large as fits but never more than one image pixel per device pixel (D-41, D-110). The
+    /// area is the whole image or its crop (D-113), with the room its export frame takes
+    /// ([`framed`]).
+    pub fn fitted(room: Size<Pixels>, area: RectF, scale_factor: f32) -> Self {
         let scale = (f32::from(room.width) / area.width)
             .min(f32::from(room.height) / area.height)
             .min(1.0 / scale_factor)
             .max(MIN_SCALE);
         Self {
             corner: point(
-                MARGIN + (room.width - px(area.width * scale)) / 2.0 - px(area.x * scale),
-                CHROME_TOP + (room.height - px(area.height * scale)) / 2.0 - px(area.y * scale),
+                (room.width - px(area.width * scale)) / 2.0 - px(area.x * scale),
+                (room.height - px(area.height * scale)) / 2.0 - px(area.y * scale),
             ),
             scale,
         }
@@ -83,6 +88,22 @@ impl Placement {
             corner: self.corner + offset,
             ..self
         }
+    }
+}
+
+/// `area`, in image pixels, with the room `frame` adds round it in an export (F-44), so a
+/// fitted image leaves its frame in view.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a frame's margins are a few dozen pixels, exact in f32"
+)]
+pub(crate) fn framed(area: RectF, frame: Frame) -> RectF {
+    let margins = frame.margins();
+    RectF {
+        x: area.x - margins.left as f32,
+        y: area.y - margins.top as f32,
+        width: area.width + (margins.left + margins.right) as f32,
+        height: area.height + (margins.top + margins.bottom) as f32,
     }
 }
 
@@ -221,18 +242,18 @@ mod tests {
         let small = fit(100, 50, 2.0);
         assert_eq!(small.scale, 0.5);
         assert_eq!(small.image_bounds.size, size(px(50.0), px(25.0)));
-        assert_eq!(small.image_bounds.center(), point(px(500.0), px(354.0)));
+        assert_eq!(small.image_bounds.center(), point(px(500.0), px(300.0)));
     }
 
     #[test]
-    fn f23_a_large_capture_shrinks_to_fit_the_canvas_below_the_toolbar() {
-        let large = fit(3872, 1200, 1.0);
-        assert_eq!(large.image_bounds.size, size(px(968.0), px(300.0)));
-        assert_eq!(large.image_bounds.origin, point(px(16.0), px(204.0)));
+    fn f23_a_large_capture_shrinks_to_fit_its_card() {
+        let large = fit(4000, 1200, 1.0);
+        assert_eq!(large.image_bounds.size, size(px(1000.0), px(300.0)));
+        assert_eq!(large.image_bounds.origin, point(px(0.0), px(150.0)));
     }
 
     #[test]
-    fn d113_a_cropped_capture_is_fitted_by_its_crop_below_the_toolbar() {
+    fn d113_a_cropped_capture_is_fitted_by_its_crop() {
         let image = image(2000, 1000);
         let canvas = Bounds::new(point(px(0.0), px(0.0)), CANVAS);
         let shown = |crop: RectF| {
@@ -253,17 +274,17 @@ mod tests {
         };
         assert_eq!(
             shown(small),
-            Bounds::new(point(px(258.0), px(239.0)), size(px(484.0), px(230.0)))
+            Bounds::new(point(px(258.0), px(185.0)), size(px(484.0), px(230.0)))
         );
         let large = RectF {
             x: 0.0,
             y: 0.0,
-            width: 1936.0,
+            width: 2000.0,
             height: 920.0,
         };
         assert_eq!(
             shown(large),
-            Bounds::new(point(px(16.0), px(124.0)), size(px(968.0), px(460.0)))
+            Bounds::new(point(px(0.0), px(70.0)), size(px(1000.0), px(460.0)))
         );
     }
 
@@ -272,12 +293,12 @@ mod tests {
         let work_area = size(px(1280.0), px(680.0));
         for (width, height, scale) in [(600, 300, 1.0), (900, 600, 1.5), (300, 200, 2.0)] {
             let image = image(width, height);
-            let window = opening_size(&image, scale, work_area);
+            let canvas = canvas_size(opening_size(&image, scale, work_area));
             let fit = Fit::new(
-                Bounds::new(point(px(0.0), px(0.0)), window),
+                Bounds::new(point(px(0.0), px(0.0)), canvas),
                 &image,
                 all_of(&image),
-                Placement::fitted(window, all_of(&image), scale),
+                Placement::fitted(canvas, all_of(&image), scale),
                 scale,
             );
             assert!(
@@ -285,13 +306,14 @@ mod tests {
                 "{width}x{height}@{scale}"
             );
             assert!(
-                fit.image_bounds.top() >= CHROME_TOP,
-                "{width}x{height}@{scale}: under the toolbar"
+                fit.image_bounds.left() >= px(0.0) && fit.image_bounds.top() >= px(0.0),
+                "{width}x{height}@{scale}: inside its card"
             );
         }
         assert_eq!(
             opening_size(&image(600, 300), 1.0, work_area),
-            size(px(632.0), px(440.0))
+            size(px(624.0), px(360.0)),
+            "D-141: the image fills its card, 12 px inside the window and below the 48 px row"
         );
         assert_eq!(
             opening_size(&image(100, 50), 1.0, work_area),
@@ -302,16 +324,54 @@ mod tests {
         let window = opening_size(&large, 1.0, work_area);
         assert_eq!(window.height, work_area.height);
         assert!(window.width <= work_area.width);
-        let fitted = Placement::fitted(window, all_of(&large), 1.0);
-        assert!((fitted.scale - 0.27).abs() < 1e-6, "(680 - 140) / 2000");
+        let fitted = Placement::fitted(canvas_size(window), all_of(&large), 1.0);
+        assert!((fitted.scale - 0.31).abs() < 1e-6, "(680 - 60) / 2000");
+    }
+
+    #[test]
+    fn d141_a_fitted_image_fills_its_card_and_leaves_its_export_frame_in_view() {
+        let image = image(1000, 600);
+        let canvas = Bounds::new(point(px(0.0), px(0.0)), CANVAS);
+        let area = all_of(&image);
+        let fitted = |frame| {
+            let placement = Placement::fitted(CANVAS, framed(area, frame), 1.0);
+            Fit::new(canvas, &image, area, placement, 1.0)
+        };
+        assert_eq!(fitted(Frame::default()).image_bounds, canvas);
+        let frame = Frame {
+            border: true,
+            shadow: true,
+        };
+        let fit = fitted(frame);
+        let margins = frame.margins();
+        let room = |side: u32| px(f32::from(u16::try_from(side).unwrap()) * fit.scale);
+        let image = fit.image_bounds;
+        let reach = Bounds::from_corners(
+            point(
+                image.left() - room(margins.left),
+                image.top() - room(margins.top),
+            ),
+            point(
+                image.right() + room(margins.right),
+                image.bottom() + room(margins.bottom),
+            ),
+        );
+        let device_pixel = px(0.5);
+        assert!(
+            reach.left() >= -device_pixel
+                && reach.top() >= -device_pixel
+                && reach.right() <= canvas.right() + device_pixel
+                && reach.bottom() <= canvas.bottom() + device_pixel,
+            "the frame reaches {reach:?} on a {canvas:?} card"
+        );
     }
 
     #[test]
     fn f30_a_pointer_outside_the_image_lands_on_its_nearest_edge() {
         let small = fit(100, 50, 2.0);
         let image_point = |x, y| small.image_point(point(px(x), px(y)));
-        assert_eq!(image_point(475.0, 341.5), PointF { x: 0.0, y: 0.0 });
-        assert_eq!(image_point(500.0, 354.0), PointF { x: 50.0, y: 25.0 });
+        assert_eq!(image_point(475.0, 287.5), PointF { x: 0.0, y: 0.0 });
+        assert_eq!(image_point(500.0, 300.0), PointF { x: 50.0, y: 25.0 });
         assert_eq!(image_point(0.0, 1000.0), PointF { x: 0.0, y: 50.0 });
         assert_eq!(image_point(900.0, -5.0), PointF { x: 100.0, y: 0.0 });
     }

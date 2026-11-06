@@ -221,6 +221,35 @@ impl Frame {
     pub const SHADOW_BLUR: u32 = 24;
     /// The shadow's opacity where it is fully covered: black at 25%.
     pub const SHADOW_ALPHA: f32 = 0.25;
+
+    /// The room, in image pixels, this frame adds on each side of the image an export draws.
+    #[must_use]
+    pub const fn margins(self) -> FrameMargins {
+        let border = if self.border { 1 } else { 0 };
+        if !self.shadow {
+            return FrameMargins {
+                left: border,
+                top: border,
+                right: border,
+                bottom: border,
+            };
+        }
+        FrameMargins {
+            left: border + Self::SHADOW_BLUR,
+            top: border + Self::SHADOW_BLUR - Self::SHADOW_OFFSET,
+            right: border + Self::SHADOW_BLUR,
+            bottom: border + Self::SHADOW_BLUR + Self::SHADOW_OFFSET,
+        }
+    }
+}
+
+/// The room a [`Frame`] adds on each side of the image, in image pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameMargins {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
 }
 
 /// Names one shape for the life of its [`crate::History`]; never reused.

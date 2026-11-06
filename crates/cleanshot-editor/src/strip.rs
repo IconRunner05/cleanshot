@@ -47,7 +47,10 @@ pub(crate) fn property_strip(
                     .map(|&setting| setting_group(setting, false, look, theme, on_set.clone())),
             )
     };
-    panel(theme)
+    div()
+        .flex()
+        .items_center()
+        .flex_none()
         .id("property-strip")
         .role(Role::Toolbar)
         .aria_label("Properties")
