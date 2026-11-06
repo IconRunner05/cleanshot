@@ -11,16 +11,17 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
-    IUIAutomationTogglePattern, TreeScope_Subtree, UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID,
-    UIA_CheckBoxControlTypeId, UIA_GroupControlTypeId, UIA_ImageControlTypeId, UIA_InvokePatternId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationElement6,
+    IUIAutomationInvokePattern, IUIAutomationTogglePattern, TreeScope_Subtree,
+    UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId, UIA_GroupControlTypeId,
+    UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_IsExpandCollapsePatternAvailablePropertyId,
     UIA_RadioButtonControlTypeId, UIA_TogglePatternId, UIA_ToolBarControlTypeId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
     PostMessageW, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, SendMessageTimeoutW, WM_CLOSE, WM_NCHITTEST,
 };
-use windows::core::BOOL;
+use windows::core::{BOOL, Interface};
 
 use crate::Error;
 
@@ -32,8 +33,12 @@ pub struct Element {
     pub enabled: bool,
     /// What a screen reader adds after the name, such as why the control is off.
     pub help_text: String,
+    /// What a screen reader reads as the control's longer description (`FullDescription`).
+    pub description: String,
     /// Who answers UI Automation for it, as `ProviderDescription` names them.
     pub provider: String,
+    /// Whether it opens and closes more controls, such as a menu, as a screen reader is told.
+    pub expandable: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -322,14 +327,19 @@ fn walk_own_windows() -> windows::core::Result<Vec<Element>> {
         for index in 0..unsafe { found.Length() }? {
             // SAFETY: `index` is below the array's length, and the reads are plain properties
             // of a live element.
-            let (kind, name, enabled, help_text, provider) = unsafe {
+            let (kind, name, enabled, help_text, description, provider, expandable) = unsafe {
                 let element = found.GetElement(index)?;
                 (
                     element.CurrentControlType()?,
                     element.CurrentName()?,
                     element.CurrentIsEnabled()?.as_bool(),
                     element.CurrentHelpText()?,
+                    element
+                        .cast::<IUIAutomationElement6>()?
+                        .CurrentFullDescription()?,
                     element.CurrentProviderDescription()?,
+                    element
+                        .GetCurrentPropertyValue(UIA_IsExpandCollapsePatternAvailablePropertyId)?,
                 )
             };
             let kind = [
@@ -348,7 +358,9 @@ fn walk_own_windows() -> windows::core::Result<Vec<Element>> {
                 name: name.to_string(),
                 enabled,
                 help_text: help_text.to_string(),
+                description: description.to_string(),
                 provider: provider.to_string(),
+                expandable: bool::try_from(&expandable)?,
             });
         }
     }
