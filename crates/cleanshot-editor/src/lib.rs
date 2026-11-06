@@ -34,6 +34,7 @@ use crate::restricted_platform::RestrictedPlatform;
 pub use crate::settings_window::open_settings;
 #[cfg(feature = "drift-test")]
 pub use crate::text::em_widths;
+pub use crate::theme::{WindowSurface, follow_window_surface};
 use crate::toolbar::Icons;
 pub use crate::tooltip::follow_hover_time;
 

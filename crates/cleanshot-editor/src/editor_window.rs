@@ -26,7 +26,7 @@ use crate::shape_menu::ShapeMenu;
 use crate::strip::property_strip;
 use crate::text::{line_width, register_inter};
 use crate::text_box::TextBox;
-use crate::theme::Theme;
+use crate::theme::{Theme, WindowSurface, window_surface};
 use crate::toolbar::{Replay, toolbar};
 use crate::tooltip::hover_time;
 use crate::{Error, Log, MasksFor, open_window};
@@ -105,6 +105,8 @@ struct Pan {
 
 struct EditorView {
     history: History,
+    /// What the window opened on; kept until it closes (D-142).
+    surface: WindowSurface,
     /// The history's document as last drawn; renewed after each edit.
     document: Rc<Document>,
     base: Arc<RenderImage>,
@@ -140,6 +142,7 @@ impl EditorView {
         outputs: Option<Outputs>,
         masks: MasksFor,
         log: Log,
+        surface: WindowSurface,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -165,6 +168,7 @@ impl EditorView {
             text_box: None,
             menu: None,
             looks: remembered_looks(cx),
+            surface,
             previews: Rc::new(Previews::new(masks, Rc::clone(&log))),
             log,
             shift: false,
@@ -590,7 +594,7 @@ fn update_while_open(
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::for_appearance(window.appearance(), hover_time(cx));
+        let theme = Theme::for_appearance(window.appearance(), self.surface, hover_time(cx));
         let view = cx.entity().downgrade();
         let restacker = view.clone();
         let toolbar = self.toolbar(&view, theme);
@@ -767,10 +771,11 @@ pub(crate) fn open_with(
     on_open: impl FnOnce(&mut Window, &mut App),
 ) -> Result<EditorWindow, Error> {
     register_inter(cx)?;
-    let options = window_options(cx, document.base(), monitor);
+    let surface = window_surface(cx);
+    let options = window_options(cx, document.base(), monitor, surface);
     let (window, win32) = open_window(cx, options, |window, cx| {
         on_open(window, cx);
-        cx.new(|cx| EditorView::new(document, outputs, masks, log, window, cx))
+        cx.new(|cx| EditorView::new(document, outputs, masks, log, surface, window, cx))
     })?;
     Ok(EditorWindow { window, win32 })
 }
@@ -857,11 +862,15 @@ impl EditorWindow {
     }
 }
 
-/// D-110: the editor opens sized round `image` and centred on `monitor`'s display, under the
-/// native title bar so the Windows caption buttons and Snap behave as everywhere else
-/// (CHARTER 4). With no monitor, or none GPUI knows, it opens on the primary display, sized
-/// as at 100% scaling.
-fn window_options(cx: &App, image: &RgbaImage, monitor: Option<Monitor>) -> WindowOptions {
+/// D-110: the editor opens sized round `image` and centred on `monitor`'s display, on
+/// `surface` (D-142). With no monitor, or none GPUI knows, it opens on the primary display,
+/// sized as at 100% scaling.
+fn window_options(
+    cx: &App,
+    image: &RgbaImage,
+    monitor: Option<Monitor>,
+    surface: WindowSurface,
+) -> WindowOptions {
     let display = monitor
         .and_then(|monitor| {
             cx.displays()
@@ -889,6 +898,7 @@ fn window_options(cx: &App, image: &RgbaImage, monitor: Option<Monitor>) -> Wind
             ..TitlebarOptions::default()
         }),
         window_min_size: Some(MIN_WINDOW),
+        window_background: surface.background(),
         ..WindowOptions::default()
     }
 }
