@@ -247,6 +247,12 @@ pub enum HitArea {
     Other(isize),
 }
 
+/// D-164: whether a window capture offers `window` to pick, as it is now.
+#[must_use]
+pub fn offered_to_window_pick(window: NonZeroIsize) -> bool {
+    crate::capture::pickable(HWND(window.get() as *mut c_void))
+}
+
 /// Asks `window` what part of it the point `client` is over, in physical pixels from the
 /// top-left of its client area, as Windows asks it once the pointer has moved there. It first
 /// tells the window the pointer moved to that point, so the window's hover state changes as a
