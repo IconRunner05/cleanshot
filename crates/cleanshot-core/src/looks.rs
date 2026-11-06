@@ -55,6 +55,13 @@ impl Looks {
             None => None,
         };
         self.by_tool.insert(tool, next);
+        if let Property::Color(_) = property {
+            for other in Tool::ALL {
+                if let Ok(colored) = self.look(other).with(property) {
+                    self.by_tool.insert(other, colored);
+                }
+            }
+        }
         Ok(restyled)
     }
 
