@@ -98,7 +98,11 @@ impl Placement {
     reason = "a frame's margins are a few dozen pixels, exact in f32"
 )]
 pub(crate) fn framed(area: RectF, frame: Frame) -> RectF {
-    let margins = frame.margins();
+    let margins = Frame {
+        shadow: false,
+        ..frame
+    }
+    .margins();
     RectF {
         x: area.x - margins.left as f32,
         y: area.y - margins.top as f32,
