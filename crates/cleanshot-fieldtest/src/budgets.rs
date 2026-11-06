@@ -49,7 +49,8 @@ const fn runner_floor(budget: u64) -> u64 {
 
 /// P-01 from a log of [`OVERLAY_PRESSES`] overlays: the p95 (nearest rank) of their
 /// `overlay_visible_ms` and the first press, each held to the budget (D-76); it fails unless
-/// every press logged one.
+/// every press logged one. A runner judges the first press without its `first_show_ms`, which
+/// it reports (D-150).
 pub(crate) fn overlay_visible(log: &str, machine: Machine) -> Verdict {
     let mut times = perf_values(log, "P-01", "overlay_visible_ms");
     let Some(&first) = times.first() else {
@@ -67,11 +68,27 @@ pub(crate) fn overlay_visible(log: &str, machine: Machine) -> Verdict {
     }
     times.sort_unstable();
     let p95 = times[(times.len() * 95).div_ceil(100) - 1];
+    let (judged_first, first_show) = match machine {
+        Machine::Reference => (first, String::new()),
+        Machine::Runner => {
+            let Some(&shown) = perf_values(log, "P-01", "first_show_ms").first() else {
+                return missing("P-01", "first_show_ms");
+            };
+            (
+                first.saturating_sub(shown),
+                format!(
+                    ", {} ms without Windows' first show of its window, which took {shown} ms, \
+                     reported, not judged",
+                    first.saturating_sub(shown)
+                ),
+            )
+        }
+    };
     let measured = format!(
-        "overlay visible p95 {p95} ms over {OVERLAY_PRESSES} hotkeys, first {first} ms \
-         (budget under {OVERLAY_VISIBLE_BUDGET_MS} ms for each"
+        "overlay visible p95 {p95} ms over {OVERLAY_PRESSES} hotkeys, first {first} \
+         ms{first_show} (budget under {OVERLAY_VISIBLE_BUDGET_MS} ms for each"
     );
-    let slowest = p95.max(first);
+    let slowest = p95.max(judged_first);
     let within_budget = slowest < OVERLAY_VISIBLE_BUDGET_MS;
     let (met, detail) = match machine {
         Machine::Reference => (within_budget, format!("{measured}); sorted {times:?}")),
@@ -290,9 +307,18 @@ mod tests {
     use super::*;
 
     fn overlay_log(times: &[u64]) -> String {
+        shown_log(times, 0)
+    }
+
+    fn shown_log(times: &[u64], first_show: u64) -> String {
         times
             .iter()
-            .map(|ms| format!("1200 perf P-01 overlay_visible_ms={ms}\n"))
+            .map(|ms| {
+                format!(
+                    "1200 perf P-01 overlay_visible_ms={ms}\n\
+                     1200 perf P-01 first_show_ms={first_show}\n"
+                )
+            })
             .collect::<Vec<_>>()
             .concat()
     }
@@ -329,6 +355,31 @@ mod tests {
         assert!(!overlay_visible(&after_a_first(100), Machine::Reference).met);
         assert!(overlay_visible(&after_a_first(150), Machine::Runner).met);
         assert!(!overlay_visible(&after_a_first(151), Machine::Runner).met);
+    }
+
+    #[test]
+    fn d150_a_runner_judges_the_first_press_without_windows_first_show_of_its_window() {
+        let after_a_first = |first, shown| {
+            let mut times = vec![first];
+            times.extend([5; 19]);
+            shown_log(&times, shown)
+        };
+        let shown_slowly = overlay_visible(&after_a_first(300, 200), Machine::Runner);
+        assert!(shown_slowly.met, "{}", shown_slowly.detail);
+        assert!(
+            shown_slowly
+                .detail
+                .contains("first 300 ms, 100 ms without Windows' first show"),
+            "{}",
+            shown_slowly.detail
+        );
+        assert!(!overlay_visible(&after_a_first(300, 149), Machine::Runner).met);
+        assert!(!overlay_visible(&after_a_first(300, 200), Machine::Reference).met);
+        let unreported = overlay_visible(
+            &overlay_log(&[5; 20]).replace("first_show", "x"),
+            Machine::Runner,
+        );
+        assert!(!unreported.met);
     }
 
     #[test]

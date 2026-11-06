@@ -202,8 +202,12 @@ pub(super) fn capture(
                 shown.pick_window();
             }
             let opened = opening_line(shown.stages());
+            let first_show = shown.stages().first_show();
             *session.overlay.borrow_mut() = Some(shown);
             stage("overlay_visible");
+            if let Some(first_show) = first_show {
+                session.perf(|_| format!("P-01 first_show_ms={}", first_show.as_millis()));
+            }
             session.log_line("capture", |_| opened);
         }
         Err(error) => session.warn(Warning::Failed("The overlay could not open", &error)),

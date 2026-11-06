@@ -75,6 +75,19 @@ impl Stages {
     pub fn marks(&self) -> &[(&'static str, Duration)] {
         &self.marks
     }
+
+    /// D-150: how long Windows took to show the first window and present its first frame, from
+    /// the overlay taking its keys; None if the overlay did not get that far.
+    #[must_use]
+    pub fn first_show(&self) -> Option<Duration> {
+        let at = |stage| {
+            self.marks
+                .iter()
+                .find(|&&(marked, _)| marked == stage)
+                .map(|&(_, at)| at)
+        };
+        Some(at("window_shown")?.saturating_sub(at("keys")?))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -359,6 +372,7 @@ impl Overlay {
         for &window in &overlay.windows {
             // SAFETY: `window` was created above; showing it without activation is F-02's rule.
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+            overlay.stages.mark("shown");
             // P-01: show paints the first frame before it returns, so timing show times visibility.
             // SAFETY: `window` was created above on this thread.
             unsafe { UpdateWindow(window) }
