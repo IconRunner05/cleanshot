@@ -51,3 +51,8 @@ clean, well organised, and written by a human for a human.
 - **`docs/security.md` in step.** A change to what `cleanshot.exe` touches (files, registry,
   clipboard, window messages, hotkeys, DLL loading, network, processes) updates
   `docs/security.md` in the same commit; CHANGES otherwise. (Orchestrator's rule, 2026-11-02.)
+- **A hook is called, or its call is a named task.** When a commit adds a function another
+  crate must call for the feature to show (an editor hook the app wires, such as
+  `follow_window_surface`), `references` on it must find that call in the same commit or
+  stack, or the notes name the follow-up task that adds it (brief id). CHANGES when neither
+  holds. (Orchestrator's rule, 2026-11-06, after D-142 and D-144 folded with no caller.)
