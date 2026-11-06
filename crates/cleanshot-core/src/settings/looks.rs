@@ -8,23 +8,17 @@ use crate::strip::Setting;
 use crate::text::{Alignment, Horizontal, Vertical};
 use crate::tool::Tool;
 
-/// `looks` as the settings file's `[looks]` table: the colour picked for every tool, if one
-/// was, and for each tool only the values that differ from its default (F-59).
+/// `looks` as the settings file's `[looks]` table: for each tool only the values that differ
+/// from its default, its colour among them (F-59, D-156).
 pub(super) fn table(looks: &Looks) -> Table {
     let mut table = Table::new();
-    if let Some(color) = looks.picked_color() {
-        table.insert("color".into(), color.hex().into());
-    }
     for tool in Tool::ALL {
         let (look, default) = (looks.look(tool), Look::default_for(tool));
         let mut values = Table::new();
         for &setting in Setting::for_tool(tool) {
-            let Some(key) = key(setting) else {
-                continue;
-            };
             let current = value(setting, &look);
             if current != value(setting, &default) {
-                values.insert(key.into(), current);
+                values.insert(key(setting).into(), current);
             }
         }
         if !values.is_empty() {
@@ -36,7 +30,8 @@ pub(super) fn table(looks: &Looks) -> Table {
 
 impl Reader<'_> {
     /// The `[looks]` table: each value read on its own, so one that is unusable leaves its
-    /// tool's default for that value alone, and is reported (F-59).
+    /// tool's default for that value alone, and is reported (F-59). A `color` for every tool,
+    /// as files before D-156 hold it, is the colour of each tool whose table names none.
     pub(super) fn looks(&mut self) -> Looks {
         let mut looks = Looks::default();
         let Some(table) = self.read("looks", |value| value.as_table().cloned()) else {
@@ -47,12 +42,12 @@ impl Reader<'_> {
             prefix: "looks".into(),
             problems: Vec::new(),
         };
-        if let Some(color) = reader.read("color", |value| value.as_str().and_then(Color::from_hex))
-        {
-            set(&mut looks, Property::Color(color), Tool::Select);
-        }
+        let every_tool = reader.read("color", |value| value.as_str().and_then(Color::from_hex));
         for tool in Tool::ALL {
             let settings = Setting::for_tool(tool);
+            if let Some(color) = every_tool.filter(|_| settings.contains(&Setting::Color)) {
+                set(&mut looks, Property::Color(color), tool);
+            }
             if settings.is_empty() {
                 continue;
             }
@@ -66,12 +61,9 @@ impl Reader<'_> {
                 problems: Vec::new(),
             };
             for &setting in settings {
-                let Some(key) = key(setting) else {
-                    continue;
-                };
                 let look = looks.look(tool);
                 if let Some(property) =
-                    tool_reader.read(key, |value| property(setting, value, &look))
+                    tool_reader.read(key(setting), |value| property(setting, value, &look))
                 {
                     set(&mut looks, property, tool);
                 }
@@ -108,11 +100,10 @@ fn tool_name(tool: Tool) -> &'static str {
     }
 }
 
-/// The key a setting's value is under in its tool's table; none for the colour, which is one
-/// for every tool (D-112).
-fn key(setting: Setting) -> Option<&'static str> {
-    Some(match setting {
-        Setting::Color => return None,
+/// The key a setting's value is under in its tool's table.
+fn key(setting: Setting) -> &'static str {
+    match setting {
+        Setting::Color => "color",
         Setting::StrokeWidth => "stroke_width",
         Setting::Fill => "fill",
         Setting::Redact => "redaction",
@@ -123,7 +114,7 @@ fn key(setting: Setting) -> Option<&'static str> {
         Setting::Border => "border",
         Setting::BorderColor => "border_color",
         Setting::BorderWidth => "border_width",
-    })
+    }
 }
 
 fn value(setting: Setting, look: &Look) -> Value {
@@ -185,7 +176,7 @@ fn property(setting: Setting, value: &Value, look: &Look) -> Option<Property> {
             .then_some(number)
     };
     match setting {
-        Setting::Color => None,
+        Setting::Color => Some(Property::Color(Color::from_hex(value.as_str()?)?)),
         Setting::StrokeWidth => offered(Property::StrokeWidth(read_number(value)?)),
         Setting::Fill => offered(Property::Fill(match value.as_str()? {
             "outline" => Fill::Hollow,
@@ -312,7 +303,7 @@ pub(super) mod tests {
             keys.extend(
                 settings
                     .iter()
-                    .filter_map(|&setting| key(setting))
+                    .map(|&setting| key(setting))
                     .map(|key| format!("looks.{name}.{key}")),
             );
         }
@@ -400,7 +391,8 @@ pub(super) mod tests {
             vertical: Vertical::Bottom,
         };
         let looks = set_all(&[
-            (Tool::Pen, Property::Color(blue)),
+            (Tool::Pen, Property::Color(black)),
+            (Tool::Rectangle, Property::Color(blue)),
             (Tool::Rectangle, Property::StrokeWidth(8.0)),
             (Tool::Rectangle, Property::Fill(Fill::Solid)),
             (Tool::Rectangle, Property::Shadow(true)),
@@ -441,11 +433,41 @@ pub(super) mod tests {
         assert_eq!(rectangle.style().stroke_width, 8.0);
         assert_eq!(rectangle.style().color, blue);
         assert_eq!(rectangle.border_width(), BorderWidth::Thick);
+        assert_eq!(restarted.look(Tool::Pen).style().color, black);
+        assert_eq!(
+            restarted.look(Tool::Arrow),
+            Look::default_for(Tool::Arrow),
+            "{written}"
+        );
         assert_eq!(restarted.look(Tool::Bubble).alignment(), bottom_right);
         assert_eq!(
             restarted.look(Tool::Redact).redact_strength(),
             RedactStrength::clamped(100)
         );
+    }
+
+    #[test]
+    fn d156_a_colour_for_every_tool_from_an_older_file_seeds_each_tool_without_its_own() {
+        let blue = Color::from_hex("#007AFF").unwrap();
+        let black = Color::from_hex("#000000").unwrap();
+        let (looks, problems) =
+            read("[looks]\ncolor = '#007AFF'\n[looks.pen]\ncolor = '#000000'\n");
+        assert_eq!(problems, []);
+        assert_eq!(looks.look(Tool::Pen).style().color, black);
+        for tool in [Tool::Arrow, Tool::Rectangle, Tool::Highlighter, Tool::Text] {
+            assert_eq!(looks.look(tool).style().color, blue, "{tool:?}");
+        }
+        let written = Settings {
+            looks: looks.clone(),
+            ..Settings::default()
+        }
+        .to_toml();
+        assert!(
+            written.contains("[looks.arrow]\ncolor = \"#007AFF\"")
+                && !written.contains("[looks]\ncolor"),
+            "{written}"
+        );
+        assert_eq!(read(&written).0, looks);
     }
 
     #[test]
