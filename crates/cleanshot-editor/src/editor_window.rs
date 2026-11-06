@@ -13,7 +13,7 @@ use cleanshot_core::{
     action_for_key, delivery_notice, save_as_notice, shape_at, text_reopened_at,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    App, AppContext, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement, IntoElement,
     KeyDownEvent, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions,
     WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
@@ -30,6 +30,42 @@ use crate::toolbar::{Replay, toolbar};
 use crate::tooltip::hover_time;
 use crate::{Error, Log, MasksFor, open_window};
 use text_input::paint_text_box;
+
+/// The looks each new editor starts with, and who is told when an editor's strip changes them.
+struct RememberedLooks {
+    looks: Looks,
+    on_changed: OnLooksChanged,
+}
+
+type OnLooksChanged = Rc<dyn Fn(&Looks, &mut App)>;
+
+impl Global for RememberedLooks {}
+
+/// Starts each editor opened from now on with `looks`, and calls `on_changed` with an editor's
+/// looks each time its property strip changes them, which later editors then start with (F-59).
+/// Replaces what an earlier call gave.
+pub fn remember_looks(cx: &mut App, looks: Looks, on_changed: impl Fn(&Looks, &mut App) + 'static) {
+    cx.set_global(RememberedLooks {
+        looks,
+        on_changed: Rc::new(on_changed),
+    });
+}
+
+fn remembered_looks(cx: &App) -> Looks {
+    cx.try_global::<RememberedLooks>()
+        .map(|remembered| remembered.looks.clone())
+        .unwrap_or_default()
+}
+
+fn looks_changed(looks: &Looks, cx: &mut App) {
+    if !cx.has_global::<RememberedLooks>() {
+        return;
+    }
+    let remembered = cx.global_mut::<RememberedLooks>();
+    remembered.looks = looks.clone();
+    let on_changed = Rc::clone(&remembered.on_changed);
+    on_changed(looks, cx);
+}
 
 type Deliver = Box<dyn Fn(Output, &Document) -> Result<Delivered, DeliveryError>>;
 type SaveTo = Box<dyn Fn(&Path, &Document) -> Result<Delivered, DeliveryError>>;
@@ -127,7 +163,7 @@ impl EditorView {
             drag: None,
             text_box: None,
             menu: None,
-            looks: Looks::default(),
+            looks: remembered_looks(cx),
             previews: Rc::new(Previews::new(masks, Rc::clone(&log))),
             log,
             shift: false,
@@ -504,7 +540,11 @@ impl EditorView {
         let setter = view.clone();
         let on_set = move |property, window: &mut Window, cx: &mut App| {
             update_while_open(&setter, cx, |view, cx| {
+                let before = view.looks.clone();
                 view.set_property(property);
+                if view.looks != before {
+                    looks_changed(&view.looks, cx);
+                }
                 if view.text_box.is_some() {
                     window.focus(&view.focus, cx);
                 }

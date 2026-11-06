@@ -461,6 +461,32 @@ pub struct Color {
     pub a: u8,
 }
 
+impl Color {
+    /// The opaque colour written `#RRGGBB` in hexadecimal digits of either case, as the
+    /// settings file holds it (F-59).
+    #[must_use]
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let digits = text.strip_prefix('#')?;
+        if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
+        Some(Self {
+            r: channel(0)?,
+            g: channel(2)?,
+            b: channel(4)?,
+            a: 255,
+        })
+    }
+
+    /// This colour written `#RRGGBB`, without its alpha, which [`Self::from_hex`] reads back
+    /// opaque.
+    #[must_use]
+    pub fn hex(self) -> String {
+        format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
+    }
+}
+
 /// A point in image pixels, from the top-left corner of the image.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointF {

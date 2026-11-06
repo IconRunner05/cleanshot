@@ -28,7 +28,7 @@ use gpui_windows::WindowsPlatform;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 pub use crate::bench::{BenchReport, bench};
-pub use crate::editor_window::{EditorWindow, Outputs, ask_save_path, open};
+pub use crate::editor_window::{EditorWindow, Outputs, ask_save_path, open, remember_looks};
 use crate::restricted_platform::RestrictedPlatform;
 pub use crate::settings_window::open_settings;
 #[cfg(feature = "drift-test")]

@@ -11,6 +11,9 @@ section exists.
 
 ### Added
 
+- The editor remembers how each tool last drew (colour, width, fill, shadow, border, text
+  size, alignment, redaction and highlight strength), across restarts too, in the settings
+  file. A damaged value there falls back to its own default alone (F-59).
 - Double-clicking a text or speech bubble opens it for typing, whichever tool is picked
   (F-34, F-42).
 - Dragging with the speech bubble tool sets the bubble's width and height, and the text

@@ -22,7 +22,7 @@ pub struct OptionsEntry {
 }
 
 /// What a pick on the Options menu leads to.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Picked {
     /// The settings with the pick applied, to be written like any settings change.
     Changed(Settings),

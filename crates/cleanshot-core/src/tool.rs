@@ -24,6 +24,23 @@ pub enum Tool {
 }
 
 impl Tool {
+    /// Every tool.
+    pub const ALL: [Self; 13] = [
+        Self::Select,
+        Self::Arrow,
+        Self::Line,
+        Self::Rectangle,
+        Self::Ellipse,
+        Self::Pen,
+        Self::Highlighter,
+        Self::Redact,
+        Self::Crop,
+        Self::Text,
+        Self::Spotlight,
+        Self::Step,
+        Self::Bubble,
+    ];
+
     /// The tool that draws shapes like `shape`.
     #[must_use]
     pub fn drawing(shape: &Shape) -> Self {

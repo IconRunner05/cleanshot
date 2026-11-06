@@ -88,6 +88,16 @@ impl Look {
         self.border
     }
 
+    /// The colour of this look's border, used while [`Self::border`] is on (D-131).
+    pub(crate) fn border_color(&self) -> Color {
+        self.border_color
+    }
+
+    /// The width of this look's border, used while [`Self::border`] is on (D-131).
+    pub(crate) fn border_width(&self) -> BorderWidth {
+        self.border_width
+    }
+
     #[must_use]
     pub fn style(&self) -> Style {
         self.style

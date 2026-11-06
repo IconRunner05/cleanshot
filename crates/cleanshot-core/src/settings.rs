@@ -1,19 +1,23 @@
 use toml::{Table, Value};
 
+use crate::looks::Looks;
+
+mod looks;
+
 /// The largest settings file read, in bytes (C-13).
 pub const MAX_SETTINGS_BYTES: usize = 64 * 1024;
 
 /// The longest `save_folder` read, in UTF-8 bytes: written back with every other setting at its
 /// longest and every byte escaped (`\u001F`, 6 bytes), the file stays within
 /// [`MAX_SETTINGS_BYTES`] (C-13).
-const MAX_SAVE_FOLDER_BYTES: usize = (MAX_SETTINGS_BYTES - 1024) / 6;
+const MAX_SAVE_FOLDER_BYTES: usize = (MAX_SETTINGS_BYTES - 2048) / 6;
 
 // F-54: a folder within the limit is also within Windows' 32,767-unit path limit.
 const _: () = assert!(MAX_SAVE_FOLDER_BYTES <= 32_767);
 
 /// Everything `cleanshot.toml` holds (F-54). Each field has the default [`Settings::default`]
 /// gives it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     /// `None` means the default folder, Pictures\Screenshots, which the caller resolves.
     pub save_folder: Option<String>,
@@ -23,6 +27,8 @@ pub struct Settings {
     pub show_pointer: bool,
     pub remember_last_selection: bool,
     pub hotkeys: Hotkeys,
+    /// How each tool draws, as the property strip last set it (F-59).
+    pub looks: Looks,
 }
 
 /// The image format Save writes.
@@ -165,6 +171,7 @@ impl Default for Settings {
             show_pointer: false,
             remember_last_selection: false,
             hotkeys: Hotkeys::default(),
+            looks: Looks::default(),
         }
     }
 }
@@ -229,7 +236,7 @@ impl Settings {
         };
         let mut reader = Reader {
             table: &table,
-            prefix: "",
+            prefix: String::new(),
             problems: Vec::new(),
         };
         let defaults = Self::default();
@@ -271,6 +278,7 @@ impl Settings {
                 .read("remember_last_selection", Value::as_bool)
                 .unwrap_or(defaults.remember_last_selection),
             hotkeys: reader.hotkeys(defaults.hotkeys),
+            looks: reader.looks(),
         };
         (settings, reader.problems)
     }
@@ -305,6 +313,10 @@ impl Settings {
             hotkeys.insert(key.into(), hotkey.to_string().into());
         }
         table.insert("hotkeys".into(), hotkeys.into());
+        let looks = looks::table(&self.looks);
+        if !looks.is_empty() {
+            table.insert("looks".into(), looks.into());
+        }
         table.to_string()
     }
 }
@@ -488,7 +500,7 @@ fn key(name: &str) -> Option<Key> {
 /// Reads typed fields from one table, noting each key present with an unusable value.
 struct Reader<'a> {
     table: &'a Table,
-    prefix: &'static str,
+    prefix: String,
     problems: Vec<SettingsProblem>,
 }
 
@@ -516,7 +528,7 @@ impl Reader<'_> {
         };
         let mut reader = Reader {
             table: &table,
-            prefix: "hotkeys",
+            prefix: "hotkeys".into(),
             problems: Vec::new(),
         };
         let mut read = |key, default| {
@@ -539,6 +551,7 @@ impl Reader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool::Tool;
 
     fn hotkey(text: &str) -> Hotkey {
         Hotkey::parse(text).unwrap()
@@ -690,6 +703,7 @@ mod tests {
                 region: hotkey("Ctrl+Shift+4"),
                 ..Hotkeys::default()
             },
+            looks: Looks::default(),
         };
         let (read_back, problems) = Settings::from_toml(settings.to_toml().as_bytes());
         assert_eq!(problems, []);
@@ -806,6 +820,7 @@ mod tests {
                 window: longest,
                 capture_panel: longest,
             },
+            looks: looks::tests::largest(),
             ..Settings::default()
         };
         let written = largest.to_toml();
@@ -861,7 +876,10 @@ mod tests {
         save_format = \"jpg\"\nafter_capture = \"copy\"\nshow_thumbnail = false\n\
         show_pointer = true\nremember_last_selection = true\n\
         [hotkeys]\nregion = \"Ctrl+Shift+4\"\nlast_region = \"Shift+PrtSc\"\n\
-        full_screen = \"Ctrl+PrtSc\"\nwindow = \"Alt+F24\"\ncapture_panel = \"Win+5\"\n";
+        full_screen = \"Ctrl+PrtSc\"\nwindow = \"Alt+F24\"\ncapture_panel = \"Win+5\"\n\
+        [looks]\ncolor = \"#007AFF\"\n[looks.rectangle]\nstroke_width = 8\nfill = \"filled\"\n\
+        border = true\nborder_width = 6\n[looks.text]\ntext_size = 36.5\nalignment = \"centre\"\n\
+        [looks.bubble]\nalignment = \"bottom-right\"\n[looks.redact]\nstrength = 64\n";
 
     const KEYS: [&str; 12] = [
         "save_folder",
@@ -925,7 +943,10 @@ mod tests {
             match problem {
                 SettingsProblem::TooLarge { .. } | SettingsProblem::Unreadable => {}
                 SettingsProblem::InvalidValue { key } => {
-                    assert!(KEYS.contains(&key.as_str()), "{key} in {context}");
+                    assert!(
+                        KEYS.contains(&key.as_str()) || looks::tests::keys().contains(key),
+                        "{key} in {context}"
+                    );
                     assert!(!seen.contains(key), "{key} twice in {context}");
                     seen.push(key.clone());
                 }
@@ -941,6 +962,10 @@ mod tests {
         assert_eq!(problems, []);
         assert_eq!(settings.save_format, SaveFormat::Jpg);
         assert_eq!(settings.hotkeys.capture_panel, hotkey("Win+5"));
+        assert_eq!(
+            settings.looks.look(Tool::Rectangle).style().stroke_width,
+            8.0
+        );
     }
 
     #[test]

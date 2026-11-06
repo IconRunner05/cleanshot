@@ -36,6 +36,11 @@ impl Looks {
         look.with_color(color)
     }
 
+    /// The colour last picked for any tool, if one was (D-112).
+    pub(crate) fn picked_color(&self) -> Option<Color> {
+        self.color
+    }
+
     /// Sets `property` on `selected` if a shape is selected, otherwise on how `tool` draws its
     /// next shape. The returned command restyles the selection through [`Look::dress`], the
     /// rule new shapes are drawn by, so it is one undo step (F-38); `None` if nothing on the
@@ -144,6 +149,16 @@ impl Looks {
                 Ok(restyled)
             }
         }
+    }
+}
+
+// F-59: equal when every tool draws alike, however each look came to be set.
+impl PartialEq for Looks {
+    fn eq(&self, other: &Self) -> bool {
+        self.color == other.color
+            && Tool::ALL
+                .iter()
+                .all(|&tool| self.look(tool) == other.look(tool))
     }
 }
 
