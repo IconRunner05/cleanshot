@@ -18,8 +18,44 @@ pub const SMALLEST_WINDOW: (f32, f32) = (
     2.0 * BUTTON_WIDTH + 3.0 * BUTTON_GAP,
     BUTTON_HEIGHT + 2.0 * BUTTON_GAP,
 );
-/// How long the thumbnail shows while nothing holds it.
-pub const STAY: Duration = Duration::from_secs(5);
+/// How long the thumbnail shows while nothing holds it, the settings file's `thumbnail_ms`: a
+/// whole number of milliseconds from [`ThumbnailStay::SHORTEST_MS`] to
+/// [`ThumbnailStay::LONGEST_MS`] (F-09, D-165).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThumbnailStay(u32);
+
+impl ThumbnailStay {
+    /// The shortest stay, in milliseconds.
+    pub const SHORTEST_MS: u32 = 1000;
+    /// The longest stay, in milliseconds.
+    pub const LONGEST_MS: u32 = 60_000;
+
+    /// `ms` milliseconds, or None outside the range.
+    #[must_use]
+    pub fn from_ms(ms: u32) -> Option<Self> {
+        (Self::SHORTEST_MS..=Self::LONGEST_MS)
+            .contains(&ms)
+            .then_some(Self(ms))
+    }
+
+    /// The stay as a duration.
+    #[must_use]
+    pub fn duration(self) -> Duration {
+        Duration::from_millis(u64::from(self.0))
+    }
+
+    /// The stay in milliseconds, as `thumbnail_ms` holds it.
+    #[must_use]
+    pub fn ms(self) -> u32 {
+        self.0
+    }
+}
+
+impl Default for ThumbnailStay {
+    fn default() -> Self {
+        Self(5000)
+    }
+}
 /// How long it takes to slide in.
 pub const SLIDE: Duration = Duration::from_millis(120);
 
@@ -170,13 +206,14 @@ mod tests {
     #[test]
     fn f09_the_pointer_on_the_thumbnail_stops_its_five_seconds_running_out() {
         let second = Duration::from_secs(1);
-        assert_eq!(left_after(STAY, second, true), Some(STAY));
+        let stay = ThumbnailStay::default().duration();
+        assert_eq!(left_after(stay, second, true), Some(stay));
         assert_eq!(
-            left_after(STAY, second, false),
+            left_after(stay, second, false),
             Some(Duration::from_secs(4))
         );
         assert_eq!(left_after(second, second, false), None);
-        assert_eq!(left_after(second, STAY, true), Some(second));
+        assert_eq!(left_after(second, stay, true), Some(second));
     }
 
     #[test]

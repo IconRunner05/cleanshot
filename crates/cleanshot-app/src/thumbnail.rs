@@ -56,7 +56,8 @@ pub(super) fn show(
     let count = session.thumbnails_shown.get() + 1;
     session.thumbnails_shown.set(count);
     let (acting, defer, pass_on) = (Rc::downgrade(session), Rc::clone(defer), Rc::clone(pass_on));
-    let shown = Thumbnail::show(&preview, selected, export, move |event| {
+    let stay = session.settings.borrow().thumbnail_stay;
+    let shown = Thumbnail::show(&preview, selected, stay, export, move |event| {
         let (acting, pass_on) = (acting.clone(), Rc::clone(&pass_on));
         // The event arrives inside the thumbnail's window procedure, so it is acted on after.
         defer(

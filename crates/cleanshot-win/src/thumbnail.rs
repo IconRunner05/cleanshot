@@ -1,4 +1,4 @@
-use cleanshot_core::thumbnail_layout::LARGEST_PREVIEW;
+use cleanshot_core::thumbnail_layout::{LARGEST_PREVIEW, ThumbnailStay};
 use cleanshot_core::{RgbaImage, SavingOff};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -61,10 +61,10 @@ pub struct Thumbnail {
 impl Thumbnail {
     /// Shows `preview`, already scaled down, on the monitor holding `monitor`, sliding in over
     /// 120 ms or appearing at once when Windows' Animation effects is off (F-13). It sends
-    /// [`ThumbnailEvent::TimedOut`] once it has shown for five seconds without the pointer on
-    /// it. With `drag`, a press dragged past Windows' drag distance asks it for what to drag
-    /// out (D-94); without it, the thumbnail cannot be dragged. The thread must have OLE
-    /// started, as GPUI's does.
+    /// [`ThumbnailEvent::TimedOut`] once it has shown for `stay` without the pointer on it.
+    /// With `drag`, a press dragged past Windows' drag distance asks it for what to drag out
+    /// (D-94); without it, the thumbnail cannot be dragged. The thread must have OLE started,
+    /// as GPUI's does.
     ///
     /// # Errors
     ///
@@ -74,6 +74,7 @@ impl Thumbnail {
     pub fn show(
         preview: &RgbaImage,
         monitor: RECT,
+        stay: ThumbnailStay,
         export: Export,
         on_event: impl FnMut(ThumbnailEvent) + 'static,
     ) -> Result<Self, Error> {
@@ -81,7 +82,15 @@ impl Thumbnail {
         let work = work_area(monitor).map_err(Error::Monitor)?;
         let scale = crate::capture::dpi_scale(monitor).map_err(Error::Monitor)?;
         let slide = fade::animations_on().map_err(Error::Window)?;
-        let window = window::open_window(preview, work, scale, slide, export, Box::new(on_event))?;
+        let window = window::open_window(
+            preview,
+            work,
+            scale,
+            slide,
+            stay.duration(),
+            export,
+            Box::new(on_event),
+        )?;
         // SAFETY: `window` was created above on this thread; D-96 shows it without activation.
         let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
         let thumbnail = Self { window };
@@ -155,7 +164,7 @@ mod tests {
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
-    use cleanshot_core::thumbnail_layout::{STAY, buttons, window_size};
+    use cleanshot_core::thumbnail_layout::{buttons, window_size};
 
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -201,8 +210,16 @@ mod tests {
     }
 
     fn shown(events: &Rc<RefCell<Vec<String>>>, export: Export) -> Thumbnail {
+        staying(events, ThumbnailStay::default(), export)
+    }
+
+    fn staying(
+        events: &Rc<RefCell<Vec<String>>>,
+        stay: ThumbnailStay,
+        export: Export,
+    ) -> Thumbnail {
         let sink = Rc::clone(events);
-        Thumbnail::show(&preview(), RECT::default(), export, move |event| {
+        Thumbnail::show(&preview(), RECT::default(), stay, export, move |event| {
             sink.borrow_mut().push(format!("{event:?}"));
         })
         .expect("the thumbnail opens")
@@ -278,7 +295,10 @@ mod tests {
         let seen = Rc::clone(&events);
         let drag: Box<dyn Fn() -> Option<Dragged>> = Box::new(move || {
             // Stands in for DoDragDrop's modal loop, which dispatches this thread's timers.
-            pump_until(STAY + Duration::from_secs(1), || !seen.borrow().is_empty());
+            pump_until(
+                ThumbnailStay::default().duration() + Duration::from_secs(1),
+                || !seen.borrow().is_empty(),
+            );
             None
         });
         let thumbnail = shown(&events, Export::Allowed { drag });
@@ -319,6 +339,7 @@ mod tests {
         let thumbnail = Thumbnail::show(
             &preview(),
             RECT::default(),
+            ThumbnailStay::default(),
             Export::Allowed { drag },
             move |_| {
                 let Freed(_) = &guard;
@@ -392,21 +413,23 @@ mod tests {
     }
 
     #[test]
-    fn f09_the_thumbnail_times_out_after_five_seconds_with_the_pointer_off_it() {
+    fn d165_the_thumbnail_times_out_after_its_stay_with_the_pointer_off_it() {
         let events = Rc::new(RefCell::new(Vec::new()));
+        let stay = ThumbnailStay::from_ms(1500).expect("within the range");
         let start = Instant::now();
-        let thumbnail = shown(&events, no_drag());
-        pump_until(Duration::from_secs(4), || !events.borrow().is_empty());
+        let thumbnail = staying(&events, stay, no_drag());
+        pump_until(Duration::from_secs(1), || !events.borrow().is_empty());
         assert!(
             events.borrow().is_empty(),
-            "{:?} before 4 s",
+            "{:?} before 1 s",
             events.borrow()
         );
         pump_until(Duration::from_secs(3), || !events.borrow().is_empty());
         assert_eq!(*events.borrow(), ["TimedOut"]);
         let took = start.elapsed();
+        let stay = stay.duration();
         assert!(
-            took >= STAY && took < STAY + Duration::from_millis(500),
+            took >= stay && took < stay + Duration::from_millis(500),
             "{took:?}"
         );
         drop(thumbnail);

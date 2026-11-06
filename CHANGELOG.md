@@ -60,6 +60,9 @@ section exists.
   name and its shortcut, such as "Copy (Enter)", or why it is off (D-117).
 - Narrator says the shortcut of each button on the capture toolbar and the capture panel
   that has one, such as Enter for Copy and E for Edit (D-117).
+- How long the thumbnail stays in the corner after a capture can be set in the settings
+  file as `thumbnail_ms`, from 1000 to 60000 milliseconds. It stays 5 seconds by default,
+  as before, and the pointer on it still holds it (F-09, D-165).
 
 ### Changed
 
