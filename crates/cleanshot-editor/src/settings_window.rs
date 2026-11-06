@@ -92,6 +92,24 @@ pub fn open_settings(
     Ok(win32)
 }
 
+type Opener = Rc<dyn Fn(&mut App)>;
+
+struct SettingsOpener(Opener);
+
+impl Global for SettingsOpener {}
+
+/// Lets the editor open the settings window with `open`, from its "..." menu and Ctrl+comma
+/// (D-144). Until this is called, the editor offers no settings.
+pub fn follow_settings_opener(cx: &mut App, open: impl Fn(&mut App) + 'static) {
+    cx.set_global(SettingsOpener(Rc::new(open)));
+}
+
+/// How to open the settings window, once the app has said (D-144).
+pub(crate) fn settings_opener(cx: &App) -> Option<Opener> {
+    cx.try_global::<SettingsOpener>()
+        .map(|SettingsOpener(open)| Rc::clone(open))
+}
+
 struct SettingsView {
     /// The settings file's own values, read afresh for each render and each change, so a
     /// change made elsewhere (the Options menu, F-12) is shown and never written over; what

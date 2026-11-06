@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Div, FocusHandle, InteractiveElement, KeyDownEvent, ParentElement, Rgba, Role, Stateful,
-    StatefulInteractiveElement, Styled, Toggled, Window, div, px,
+    App, Div, FocusHandle, InteractiveElement, KeyDownEvent, ParentElement, Rgba, Role,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Toggled, Window, div, px,
 };
 
 use crate::theme::{ACCENT, ON_ACCENT, Theme};
@@ -10,7 +10,7 @@ use crate::toolbar::{icon_of, panel};
 /// One row of a popup menu: its icon, name and shortcut (D-115, D-143).
 pub(crate) struct MenuRow {
     pub icon: Option<&'static str>,
-    pub name: &'static str,
+    pub name: SharedString,
     pub keys: &'static str,
     pub state: RowState,
 }
@@ -83,12 +83,12 @@ impl MenuFocus {
                     ..theme.text
                 };
                 div()
-                    .id(row.name)
+                    .id(row.name.clone())
                     .role(match row.state {
                         RowState::Dimmed | RowState::Enabled => Role::MenuItem,
                         RowState::Choice { .. } => Role::MenuItemRadio,
                     })
-                    .aria_label(row.name)
+                    .aria_label(row.name.clone())
                     .aria_keyshortcuts(row.keys)
                     .when_some(
                         match row.state {
@@ -134,7 +134,7 @@ impl MenuFocus {
                                     },
                                 )
                             }))
-                            .child(row.name),
+                            .child(row.name.clone()),
                     )
                     .child(row.keys)
             });

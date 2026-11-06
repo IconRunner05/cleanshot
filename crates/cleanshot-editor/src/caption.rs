@@ -16,9 +16,10 @@ const CLOSE_HOVER: Rgba = Rgba {
 
 /// The window's own caption row, in place of a title bar (D-141): `controls` from the left,
 /// clipped if the window is too narrow for them, then empty space that moves the window, then
-/// the caption buttons.
+/// `actions`, then the caption buttons.
 pub(crate) fn caption_row(
     controls: impl IntoElement,
+    actions: impl IntoElement,
     window: &Window,
     theme: Theme,
 ) -> impl IntoElement {
@@ -37,6 +38,7 @@ pub(crate) fn caption_row(
                 .child(controls),
         )
         .child(drag_space())
+        .child(actions)
         .child(caption_buttons(window, theme))
 }
 

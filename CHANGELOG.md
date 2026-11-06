@@ -72,6 +72,9 @@ section exists.
 - The editor's tools are grouped into six buttons: Select, Shapes, Text, Attention, Redact
   and Crop. A group's button shows the tool you last used from it, and opens a menu of
   its tools; every tool key works as before (D-143).
+- The editor's Undo, Redo, Save and Save As buttons move into a "..." menu beside Copy,
+  which is now a pill button. The menu also holds Fit to window, Actual size (Ctrl+1) and
+  Settings (Ctrl+comma), and shows each shortcut (D-144).
 - After a graphics driver update or GPU reset, the next capture makes a new graphics device
   and copies the screen as usual, instead of falling back to a slower copy (D-151).
 - A capture across two or more monitors waits for the screen once, not once per monitor,

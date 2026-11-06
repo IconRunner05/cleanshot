@@ -5,7 +5,7 @@ use cleanshot_core::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AssetSource, BoxShadow, Div, ElementId, FocusHandle, Global, InteractiveElement,
+    Anchor, App, AssetSource, BoxShadow, Div, ElementId, FocusHandle, Global, InteractiveElement,
     IntoElement, KeyDownEvent, ParentElement, Rgba, Role, SharedString, Stateful,
     StatefulInteractiveElement, Styled, Toggled, Window, anchored, deferred, div, hsla, point, px,
     svg,
@@ -18,7 +18,8 @@ use crate::tooltip::{tooltip_text, with_tooltip};
 /// The Lucide icons the editor draws, embedded in the exe under their Lucide names.
 pub(crate) struct Icons;
 
-const ICONS: [(&str, &[u8]); 19] = [
+const ICONS: [(&str, &[u8]); 16] = [
+    ("ellipsis", include_bytes!("../icons/ellipsis.svg")),
     ("chevron-down", include_bytes!("../icons/chevron-down.svg")),
     (
         "mouse-pointer-2",
@@ -45,11 +46,7 @@ const ICONS: [(&str, &[u8]); 19] = [
     ),
     ("focus", include_bytes!("../icons/focus.svg")),
     ("crop", include_bytes!("../icons/crop.svg")),
-    ("undo-2", include_bytes!("../icons/undo-2.svg")),
-    ("redo-2", include_bytes!("../icons/redo-2.svg")),
     ("copy", include_bytes!("../icons/copy.svg")),
-    ("save", include_bytes!("../icons/save.svg")),
-    ("folder-down", include_bytes!("../icons/folder-down.svg")),
 ];
 
 impl AssetSource for Icons {
@@ -119,36 +116,61 @@ pub(crate) fn show_tool(tool: Tool, cx: &mut App) {
     cx.default_global::<Shown>().0.pick(tool);
 }
 
-/// The group buttons' keyboard places, and the menu open on one of them (D-143).
-pub(crate) struct ToolMenus {
-    buttons: [FocusHandle; 6],
-    open: Option<(ToolGroup, MenuFocus)>,
+/// A menu the caption row's buttons open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolbarMenu {
+    /// A tool group's tools (D-143).
+    Tools(ToolGroup),
+    /// The "..." menu (D-144).
+    More,
 }
 
-impl ToolMenus {
+/// The menu buttons' keyboard places, and the menu open on one of them (D-143, D-144).
+pub(crate) struct ToolbarMenus {
+    groups: [FocusHandle; 6],
+    more: FocusHandle,
+    open: Option<(ToolbarMenu, MenuFocus)>,
+}
+
+impl ToolbarMenus {
     pub fn new(cx: &mut App) -> Self {
         Self {
-            buttons: ToolGroup::ALL.map(|_| cx.focus_handle()),
+            groups: ToolGroup::ALL.map(|_| cx.focus_handle()),
+            more: cx.focus_handle(),
             open: None,
         }
     }
 
-    /// Opens `group`'s menu, the keyboard on `current` if it is one of the group's tools.
-    pub fn open(&mut self, group: ToolGroup, current: Tool, window: &mut Window, cx: &mut App) {
-        let focus = MenuFocus::open(&group_rows(group, current), window, cx);
-        self.open = Some((group, focus));
+    /// Opens `menu` with `rows`, the keyboard on the checked row or else the first that can be
+    /// picked.
+    pub fn open(&mut self, menu: ToolbarMenu, rows: &[MenuRow], window: &mut Window, cx: &mut App) {
+        self.open = Some((menu, MenuFocus::open(rows, window, cx)));
     }
 
     /// Closes the open menu, if there is one, the keyboard back on its button.
     pub fn close(&mut self, window: &mut Window, cx: &mut App) {
-        if let Some((group, _)) = self.open.take() {
-            window.focus(&self.buttons[group as usize], cx);
+        if let Some((menu, _)) = self.open.take() {
+            window.focus(self.button(menu), cx);
         }
+    }
+
+    fn button(&self, menu: ToolbarMenu) -> &FocusHandle {
+        match menu {
+            ToolbarMenu::Tools(group) => &self.groups[group as usize],
+            ToolbarMenu::More => &self.more,
+        }
+    }
+
+    fn open_on(&self, menu: ToolbarMenu) -> Option<&MenuFocus> {
+        self.open
+            .as_ref()
+            .filter(|(open, _)| *open == menu)
+            .map(|(_, focus)| focus)
     }
 }
 
 /// A group's menu: each of its tools with its icon, name and key, `current` checked.
-fn group_rows(group: ToolGroup, current: Tool) -> Vec<MenuRow> {
+pub(crate) fn group_rows(group: ToolGroup, current: Tool) -> Vec<MenuRow> {
     group
         .tools()
         .iter()
@@ -156,7 +178,7 @@ fn group_rows(group: ToolGroup, current: Tool) -> Vec<MenuRow> {
             let (icon, keys) = icon_and_key(tool);
             MenuRow {
                 icon: Some(icon),
-                name: tool_name(tool),
+                name: tool_name(tool).into(),
                 keys,
                 state: RowState::Choice {
                     checked: tool == current,
@@ -185,30 +207,90 @@ fn tool_name(tool: Tool) -> &'static str {
     }
 }
 
-/// Undo or redo on `history`, as the toolbar button and the key do it.
+/// Undo or redo on `history`, as the menu row and the key do it.
 pub(crate) type Replay = fn(&mut History) -> Result<bool, CommandError>;
 
-/// What [`Replay`] would change next, or `None` when there is no step to make.
-type NextChange = fn(&History) -> Option<Change>;
+/// When a "..." menu row can be picked.
+#[derive(Clone, Copy)]
+enum Availability {
+    Always,
+    /// While there is a step to make; the row names it (D-116).
+    Step(fn(&History) -> Option<Change>),
+    /// Once the app has said how to open the settings window.
+    Settings,
+}
 
-/// The undo and redo buttons (D-116): icon, verb, shortcut, what the step would change, and
-/// the step itself.
-const REPLAYS: [(&str, &str, &str, NextChange, Replay); 2] = [
-    ("undo-2", "Undo", "Ctrl+Z", History::to_undo, History::undo),
-    ("redo-2", "Redo", "Ctrl+Y", History::to_redo, History::redo),
+/// The "..." menu's rows (D-144): name, shortcut, the action the shortcut also takes, and
+/// when the row can be picked.
+const MORE: [(&str, &str, KeyAction, Availability); 7] = [
+    (
+        "Save",
+        "Ctrl+S",
+        KeyAction::Deliver(Output::Save),
+        Availability::Always,
+    ),
+    (
+        "Save As",
+        "Ctrl+Shift+S",
+        KeyAction::SaveAs,
+        Availability::Always,
+    ),
+    (
+        "Undo",
+        "Ctrl+Z",
+        KeyAction::Undo,
+        Availability::Step(History::to_undo),
+    ),
+    (
+        "Redo",
+        "Ctrl+Y",
+        KeyAction::Redo,
+        Availability::Step(History::to_redo),
+    ),
+    (
+        "Fit to window",
+        "Ctrl+0",
+        KeyAction::FitView,
+        Availability::Always,
+    ),
+    (
+        "Actual size",
+        "Ctrl+1",
+        KeyAction::ActualSize,
+        Availability::Always,
+    ),
+    (
+        "Settings",
+        "Ctrl+,",
+        KeyAction::OpenSettings,
+        Availability::Settings,
+    ),
 ];
 
-/// The buttons that copy or save the edited screenshot (D-133): icon, name, shortcut, and the
-/// action the shortcut also takes.
-const OUTPUTS: [(&str, &str, &str, KeyAction); 3] = [
-    ("copy", "Copy", "Ctrl+C", KeyAction::Deliver(Output::Copy)),
-    ("save", "Save", "Ctrl+S", KeyAction::Deliver(Output::Save)),
-    ("folder-down", "Save As", "Ctrl+Shift+S", KeyAction::SaveAs),
-];
-
-/// Why the button for `verb` is off (D-117), as in "Nothing to undo".
-fn nothing_to(verb: &str) -> SharedString {
-    format!("Nothing to {}", verb.to_lowercase()).into()
+/// The "..." menu for `history`: Undo and Redo name their step ("Undo arrow", D-116) and
+/// are dimmed with no step to make; Settings is dimmed unless `can_open_settings`.
+pub(crate) fn more_rows(history: &History, can_open_settings: bool) -> Vec<MenuRow> {
+    MORE.iter()
+        .map(|&(name, keys, _, availability)| {
+            let (name, can_pick) = match availability {
+                Availability::Always => (name.into(), true),
+                Availability::Step(next) => next(history).map_or((name.into(), false), |change| {
+                    (step_name(name, change).into(), true)
+                }),
+                Availability::Settings => (name.into(), can_open_settings),
+            };
+            MenuRow {
+                icon: None,
+                name,
+                keys,
+                state: if can_pick {
+                    RowState::Enabled
+                } else {
+                    RowState::Dimmed
+                },
+            }
+        })
+        .collect()
 }
 
 /// The step's name: its verb and what it would change, as in "Undo arrow" (D-116).
@@ -222,82 +304,21 @@ fn step_name(verb: &str, change: Change) -> String {
     format!("{verb} {changed}")
 }
 
-/// What the toolbar's buttons ask of the editor.
-pub(crate) struct ToolbarActions<Pick, Menu, Play, Out> {
-    /// Called with the tool clicked, or picked from a group's menu.
-    pub pick: Pick,
-    /// Called with the group whose menu to open, or `None` to close the open one.
-    pub menu: Menu,
-    /// Called with the step clicked.
-    pub replay: Play,
-    /// Called with the clicked output's action.
-    pub output: Out,
-}
-
 /// The tool groups (CHARTER 4: 28 px buttons with 7 px corners), each showing the tool
-/// `shown` gives it, `menus`' menu open under its button, then Undo and Redo for `history`,
-/// then Copy, Save and Save As.
-pub(crate) fn toolbar<Pick, Menu, Play, Out>(
+/// `shown` gives it, `menus`' menu open under its button. `on_pick` is called with the tool
+/// clicked or picked from a menu, `on_menu` with the menu to open, or `None` to close it.
+pub(crate) fn toolbar<Pick, Menu>(
     current: Tool,
     shown: ShownTools,
-    menus: &ToolMenus,
-    history: &History,
+    menus: &ToolbarMenus,
     theme: Theme,
-    actions: ToolbarActions<Pick, Menu, Play, Out>,
-) -> impl IntoElement + use<Pick, Menu, Play, Out>
+    on_pick: Pick,
+    on_menu: Menu,
+) -> impl IntoElement + use<Pick, Menu>
 where
     Pick: Fn(Tool, &mut Window, &mut App) + Clone + 'static,
-    Menu: Fn(Option<ToolGroup>, &mut Window, &mut App) + Clone + 'static,
-    Play: Fn(Replay, &mut Window, &mut App) + Clone + 'static,
-    Out: Fn(KeyAction, &mut Window, &mut App) + Clone + 'static,
+    Menu: Fn(Option<ToolbarMenu>, &mut Window, &mut App) + Clone + 'static,
 {
-    let ToolbarActions {
-        pick,
-        menu,
-        replay: on_replay,
-        output: on_output,
-    } = actions;
-    let replays = REPLAYS.map(|(icon, verb, keys, next, replay)| {
-        let step = next(history).map(|change| step_name(verb, change));
-        let button = button(verb)
-            .role(Role::Button)
-            .aria_label(step.clone().unwrap_or_else(|| verb.to_owned()))
-            .aria_keyshortcuts(keys);
-        let Some(step) = step else {
-            return button
-                .map(|element| with_tooltip(element, nothing_to(verb), theme))
-                .child(icon_of(
-                    icon,
-                    Rgba {
-                        a: 0.4,
-                        ..theme.text
-                    },
-                ));
-        };
-        let on_replay = on_replay.clone();
-        button
-            .focusable()
-            .tab_stop(true)
-            .focus_visible(|button| button.border_2().border_color(ACCENT))
-            .hover(move |button| button.bg(theme.hover))
-            .map(|element| with_tooltip(element, tooltip_text(&step, Some(keys)), theme))
-            .on_click(move |_, window, cx| on_replay(replay, window, cx))
-            .child(icon_of(icon, theme.text))
-    });
-    let outputs = OUTPUTS.map(|(icon, name, keys, action)| {
-        let on_output = on_output.clone();
-        button(name)
-            .role(Role::Button)
-            .aria_label(name)
-            .aria_keyshortcuts(keys)
-            .focusable()
-            .tab_stop(true)
-            .focus_visible(|button| button.border_2().border_color(ACCENT))
-            .hover(move |button| button.bg(theme.hover))
-            .map(|element| with_tooltip(element, tooltip_text(name, Some(keys)), theme))
-            .on_click(move |_, window, cx| on_output(action, window, cx))
-            .child(icon_of(icon, theme.text))
-    });
     let buttons = ToolGroup::ALL.map(|group| {
         group_button(
             group,
@@ -305,8 +326,8 @@ where
             shown.shown(group),
             menus,
             theme,
-            pick.clone(),
-            menu.clone(),
+            on_pick.clone(),
+            on_menu.clone(),
         )
     });
     div()
@@ -318,10 +339,92 @@ where
         .aria_label("Tools")
         .gap(px(4.0))
         .children(buttons)
-        .child(divider(theme))
-        .children(replays)
-        .child(divider(theme))
-        .children(outputs)
+}
+
+/// Copy, the one primary button, as a pill, then "..." with `more` under it while `menus`
+/// has it open (D-144). `on_action` is called with Copy's action or the row picked from the
+/// menu, `on_menu` with the menu to open, or `None` to close it.
+pub(crate) fn actions<Act, Menu>(
+    menus: &ToolbarMenus,
+    more: &[MenuRow],
+    theme: Theme,
+    on_action: Act,
+    on_menu: Menu,
+) -> impl IntoElement + use<Act, Menu>
+where
+    Act: Fn(KeyAction, &mut Window, &mut App) + Clone + 'static,
+    Menu: Fn(Option<ToolbarMenu>, &mut Window, &mut App) + Clone + 'static,
+{
+    let on_copy = on_action.clone();
+    let copy = div()
+        .id("Copy")
+        .role(Role::Button)
+        .aria_label("Copy")
+        .aria_keyshortcuts("Ctrl+C")
+        .focusable()
+        .tab_stop(true)
+        .map(|element| with_tooltip(element, tooltip_text("Copy", Some("Ctrl+C")), theme))
+        .h(px(28.0))
+        .px(px(14.0))
+        .gap(px(6.0))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .bg(ACCENT)
+        .text_color(ON_ACCENT)
+        .text_size(px(13.0))
+        .focus_visible(|button| button.border_2().border_color(ON_ACCENT))
+        .hover(|button| button.opacity(0.9))
+        .on_click(move |_, window, cx| on_copy(KeyAction::Deliver(Output::Copy), window, cx))
+        .child(icon_of("copy", ON_ACCENT))
+        .child("Copy");
+    let focus = menus.open_on(ToolbarMenu::More);
+    let open = focus.is_some();
+    let on_click = on_menu.clone();
+    let on_key = on_menu.clone();
+    let button = button("More")
+        .track_focus(&menus.more)
+        .tab_stop(true)
+        .role(Role::Button)
+        .aria_label("More")
+        .aria_expanded(open)
+        .map(|element| with_tooltip(element, tooltip_text("More", None), theme))
+        .focus_visible(|button| button.border_2().border_color(ACCENT))
+        .hover(move |button| button.bg(theme.hover))
+        .on_click(move |_, window, cx| on_click((!open).then_some(ToolbarMenu::More), window, cx))
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if event.keystroke.key == "down" && event.keystroke.modifiers.alt {
+                on_key(Some(ToolbarMenu::More), window, cx);
+                cx.stop_propagation();
+            }
+        })
+        .child(icon_of("ellipsis", theme.text));
+    let menu = focus.map(|focus| {
+        let menu = focus.element(
+            "more-menu",
+            "More",
+            more,
+            theme,
+            move |picked: Option<usize>, window: &mut Window, cx: &mut App| match picked {
+                Some(index) => on_action(MORE[index].2, window, cx),
+                None => on_menu(None, window, cx),
+            },
+        );
+        div().absolute().top(px(32.0)).right_0().child(deferred(
+            anchored()
+                .anchor(Anchor::TopRight)
+                .snap_to_window()
+                .child(menu),
+        ))
+    });
+    div()
+        .flex()
+        .items_center()
+        .flex_none()
+        .gap(px(8.0))
+        .pr(px(8.0))
+        .child(copy)
+        .child(div().relative().child(button).children(menu))
 }
 
 /// `group`'s button, showing `tool`, with its menu under it while `menus` has it open
@@ -331,22 +434,18 @@ fn group_button(
     group: ToolGroup,
     current: Tool,
     tool: Tool,
-    menus: &ToolMenus,
+    menus: &ToolbarMenus,
     theme: Theme,
     on_pick: impl Fn(Tool, &mut Window, &mut App) + Clone + 'static,
-    on_menu: impl Fn(Option<ToolGroup>, &mut Window, &mut App) + Clone + 'static,
+    on_menu: impl Fn(Option<ToolbarMenu>, &mut Window, &mut App) + Clone + 'static,
 ) -> Div {
     let (icon, key) = icon_and_key(tool);
     let name = tool_name(tool);
     let picked = ToolGroup::of(current) == group;
-    let focus = menus
-        .open
-        .as_ref()
-        .filter(|(open, _)| *open == group)
-        .map(|(_, focus)| focus);
+    let focus = menus.open_on(ToolbarMenu::Tools(group));
     let color = if picked { ON_ACCENT } else { theme.text };
     let button = button(ElementId::Name(group_name(group).into()))
-        .track_focus(&menus.buttons[group as usize])
+        .track_focus(&menus.groups[group as usize])
         .tab_stop(true)
         .role(Role::RadioButton)
         .aria_label(name)
@@ -377,10 +476,12 @@ fn group_button(
             "{}. Alt+Down opens the other tools",
             group_name(group)
         ))
-        .on_click(move |_, window, cx| on_click((!open).then_some(group), window, cx))
+        .on_click(move |_, window, cx| {
+            on_click((!open).then_some(ToolbarMenu::Tools(group)), window, cx);
+        })
         .on_key_down(move |event: &KeyDownEvent, window, cx| {
             if event.keystroke.key == "down" && event.keystroke.modifiers.alt {
-                on_key(Some(group), window, cx);
+                on_key(Some(ToolbarMenu::Tools(group)), window, cx);
                 cx.stop_propagation();
             }
         })
@@ -421,7 +522,7 @@ fn button(id: impl Into<ElementId>) -> Stateful<Div> {
         .rounded(px(7.0))
 }
 
-fn divider(theme: Theme) -> Div {
+pub(crate) fn divider(theme: Theme) -> Div {
     div().w(px(1.0)).h(px(20.0)).mx(px(2.0)).bg(theme.hairline)
 }
 
@@ -475,14 +576,17 @@ mod tests {
             let key = key.chars().next().unwrap();
             assert_eq!(Tool::for_key(key), Some(tool), "{}", tool_name(tool));
         }
-        assert!(Icons.load("icons/chevron-down.svg").unwrap().is_some());
+        for icon in ["chevron-down", "ellipsis", "copy"] {
+            assert!(
+                Icons.load(&format!("icons/{icon}.svg")).unwrap().is_some(),
+                "{icon}"
+            );
+        }
         assert_eq!(Icons.load("icons/not-an-icon.svg").unwrap(), None);
     }
 
     #[test]
-    fn d116_undo_and_redo_name_the_step_and_their_shortcuts_make_it() {
-        use cleanshot_core::{Activity, KeyAction, Modifiers, action_for_key};
-
+    fn d116_an_undo_or_redo_is_named_for_what_it_changes() {
         assert_eq!(step_name("Undo", Change::Shape(Tool::Arrow)), "Undo arrow");
         assert_eq!(
             step_name("Redo", Change::Shape(Tool::Bubble)),
@@ -491,50 +595,61 @@ mod tests {
         assert_eq!(step_name("Undo", Change::Crop), "Undo crop");
         assert_eq!(step_name("Redo", Change::Frame), "Redo image frame");
         assert_eq!(step_name("Undo", Change::Dim), "Undo spotlight dim");
-        let ctrl = Modifiers {
-            ctrl: true,
-            alt: false,
-            shift: false,
-            win: false,
-        };
-        let actions = [KeyAction::Undo, KeyAction::Redo];
-        for ((icon, verb, keys, ..), action) in REPLAYS.into_iter().zip(actions) {
-            assert!(Icons.load(&format!("icons/{icon}.svg")).unwrap().is_some());
-            let key = keys.strip_prefix("Ctrl+").unwrap().to_lowercase();
-            assert_eq!(
-                action_for_key(&key, ctrl, Activity::Idle),
-                Some(action),
-                "{verb}"
-            );
-        }
     }
 
     #[test]
-    fn d133_copy_save_and_save_as_buttons_do_what_their_shortcuts_do() {
+    fn d144_each_more_menu_row_does_what_the_shortcut_it_shows_does() {
         use cleanshot_core::{Activity, Modifiers, action_for_key};
 
-        for (icon, name, keys, action) in OUTPUTS {
-            assert!(Icons.load(&format!("icons/{icon}.svg")).unwrap().is_some());
-            let shift = keys.contains("Shift+");
+        for (name, keys, action, _) in MORE {
             let key = keys.rsplit('+').next().unwrap().to_lowercase();
             let modifiers = Modifiers {
-                ctrl: true,
+                ctrl: keys.starts_with("Ctrl+"),
                 alt: false,
-                shift,
+                shift: keys.contains("Shift+"),
                 win: false,
             };
             assert_eq!(
                 action_for_key(&key, modifiers, Activity::Idle),
                 Some(action),
-                "{name}"
+                "{name}: {keys}"
             );
         }
     }
 
     #[test]
-    fn d117_undo_and_redo_say_why_they_are_off() {
-        let off = REPLAYS.map(|(_, verb, ..)| nothing_to(verb));
-        assert_eq!(off, ["Nothing to undo", "Nothing to redo"]);
+    fn d144_undo_redo_and_settings_rows_are_dimmed_until_they_can_act() {
+        use std::sync::Arc;
+
+        use cleanshot_core::{Command, Document, RectF, RgbaImage};
+
+        let image = RgbaImage::new(8, 8, vec![0; 8 * 8 * 4]).unwrap();
+        let mut history = History::new(Document::new(Arc::new(image)));
+        let states = |rows: Vec<MenuRow>| -> Vec<(String, RowState)> {
+            rows.into_iter()
+                .map(|row| (row.name.to_string(), row.state))
+                .collect()
+        };
+        let fresh = states(more_rows(&history, false));
+        assert_eq!(fresh[2], ("Undo".to_owned(), RowState::Dimmed));
+        assert_eq!(fresh[3], ("Redo".to_owned(), RowState::Dimmed));
+        assert_eq!(fresh[6], ("Settings".to_owned(), RowState::Dimmed));
+        assert!(
+            [0, 1, 4, 5]
+                .iter()
+                .all(|&row| fresh[row].1 == RowState::Enabled)
+        );
+        let crop = RectF {
+            x: 1.0,
+            y: 1.0,
+            width: 4.0,
+            height: 4.0,
+        };
+        history.apply(Command::SetCrop(Some(crop))).unwrap();
+        let edited = states(more_rows(&history, true));
+        assert_eq!(edited[2], ("Undo crop".to_owned(), RowState::Enabled));
+        assert_eq!(edited[3], ("Redo".to_owned(), RowState::Dimmed));
+        assert_eq!(edited[6], ("Settings".to_owned(), RowState::Enabled));
     }
 
     #[test]

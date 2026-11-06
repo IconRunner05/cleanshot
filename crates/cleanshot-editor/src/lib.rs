@@ -32,7 +32,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 pub use crate::bench::{BenchReport, bench};
 pub use crate::editor_window::{EditorWindow, Outputs, ask_save_path, open, remember_looks};
 use crate::restricted_platform::RestrictedPlatform;
-pub use crate::settings_window::open_settings;
+pub use crate::settings_window::{follow_settings_opener, open_settings};
 #[cfg(feature = "drift-test")]
 pub use crate::text::em_widths;
 pub use crate::theme::{WindowSurface, follow_window_surface};
