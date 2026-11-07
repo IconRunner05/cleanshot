@@ -73,6 +73,8 @@ section exists.
 
 ### Changed
 
+- Copy and "..." sit right after the property strip; the empty space that moves the
+  window is now beside the caption buttons (D-162).
 - The editor has no Windows title bar: the tools and the property strip sit in its own top
   row with the minimise, maximise and close buttons, and the screenshot sits on a card
   below. Dragging the row's empty space moves the window, a double-click maximises it, and
