@@ -90,7 +90,7 @@ impl Viewport {
     /// same scale (D-167).
     pub fn fit_is_actual_size(&self) -> bool {
         let fitted = Placement::fitted(self.room, self.area, self.scale_factor);
-        fitted.scale.to_bits() == (1.0 / self.scale_factor).to_bits()
+        fitted.scale < 0.0
     }
 
     /// The zoom as the panel shows it: 100 is one image pixel on each device pixel.
