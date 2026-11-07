@@ -605,13 +605,9 @@ pub(crate) fn expandable<E: StatefulInteractiveElement>(
     open: bool,
     set_open: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> E {
-    let expand = Rc::new(set_open);
-    let collapse = Rc::clone(&expand);
+    let collapse = Rc::new(set_open);
     button
         .aria_expanded(open)
-        .on_a11y_action(AccessibleAction::Expand, move |_, window, cx| {
-            expand(true, window, cx);
-        })
         .on_a11y_action(AccessibleAction::Collapse, move |_, window, cx| {
             collapse(false, window, cx);
         })
