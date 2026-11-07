@@ -11,7 +11,9 @@ use gpui::{
 use crate::placement::CAPTION_ROW;
 use crate::strip::StripGroup;
 use crate::theme::{ACCENT, Theme};
-use crate::toolbar::{DIVIDER_WIDTH, actions_width, divider, icon_of, panel, toolbar_width};
+use crate::toolbar::{
+    DIVIDER_WIDTH, actions_width, divider, expandable, icon_of, panel, toolbar_width,
+};
 use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// CHARTER 4: Windows 11's close-button red, under the pointer.
@@ -263,13 +265,21 @@ fn more_properties(
 ) -> impl IntoElement + use<> {
     let shown = *open.read(cx);
     let toggle = open.clone();
+    let expand = open.clone();
     let button = div()
         .id(MORE_PROPERTIES)
         .focusable()
         .tab_stop(true)
         .role(Role::Button)
         .aria_label(MORE_PROPERTIES)
-        .aria_expanded(shown)
+        .map(|button| {
+            expandable(button, shown, move |value, _, cx| {
+                expand.update(cx, |open, cx| {
+                    *open = value;
+                    cx.notify();
+                });
+            })
+        })
         .map(|button| with_tooltip(button, tooltip_text(MORE_PROPERTIES, None), theme))
         .focus_visible(|button| button.border_2().border_color(ACCENT))
         .size(MORE_PROPERTIES_SIZE)

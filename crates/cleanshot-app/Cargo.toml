@@ -45,6 +45,10 @@ harness = false
 name = "caption_fit"
 harness = false
 
+[[test]]
+name = "expand_collapse"
+harness = false
+
 [dependencies]
 cleanshot-core.workspace = true
 cleanshot-render.workspace = true

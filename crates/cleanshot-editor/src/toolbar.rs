@@ -1,14 +1,15 @@
 use std::borrow::Cow;
+use std::rc::Rc;
 
 use cleanshot_core::{
     Change, CommandError, History, KeyAction, Output, ShownTools, Tool, ToolGroup,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AssetSource, BoxShadow, Div, ElementId, FocusHandle, Global, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, Pixels, Rgba, Role, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, TextStyle, Toggled, Window, anchored, deferred, div, hsla,
-    point, px, svg,
+    AccessibleAction, Anchor, App, AssetSource, BoxShadow, Div, ElementId, FocusHandle, Global,
+    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Rgba, Role, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, TextStyle, Toggled, Window, anchored, deferred,
+    div, hsla, point, px, svg,
 };
 
 use crate::menu::{MenuFocus, MenuRow, RowState};
@@ -428,12 +429,17 @@ where
     let open = focus.is_some();
     let on_click = on_menu.clone();
     let on_key = on_menu.clone();
+    let on_expand = on_menu.clone();
     let button = button("More")
         .track_focus(&menus.more)
         .tab_stop(true)
         .role(Role::Button)
         .aria_label("More")
-        .aria_expanded(open)
+        .map(|button| {
+            expandable(button, open, move |value, window, cx| {
+                on_expand(value.then_some(ToolbarMenu::More), window, cx);
+            })
+        })
         .map(|element| with_tooltip(element, tooltip_text("More", None), theme))
         .focus_visible(|button| button.border_2().border_color(ACCENT))
         .hover(move |button| button.bg(theme.hover))
@@ -513,10 +519,15 @@ fn group_button(
     let open = focus.is_some();
     let on_key = on_menu.clone();
     let on_click = on_menu.clone();
+    let on_expand = on_menu.clone();
     let button = button
         .w(MENU_BUTTON_WIDTH)
         .gap(px(1.0))
-        .aria_expanded(open)
+        .map(|button| {
+            expandable(button, open, move |value, window, cx| {
+                on_expand(value.then_some(ToolbarMenu::Tools(group)), window, cx);
+            })
+        })
         .aria_description(format!(
             "{}. Alt+Down opens the other tools",
             group_name(group)
@@ -584,6 +595,26 @@ pub(crate) fn icon_of(icon: &str, color: Rgba) -> impl IntoElement {
         .path(format!("icons/{icon}.svg"))
         .size(ICON)
         .text_color(color)
+}
+
+/// `button`, which opens a menu or a popup, as a screen reader works it (D-168): UI
+/// Automation reads `open` as its expanded state, and its Expand and Collapse call `set_open`
+/// with true and false, as a click opens and closes it.
+pub(crate) fn expandable<E: StatefulInteractiveElement>(
+    button: E,
+    open: bool,
+    set_open: impl Fn(bool, &mut Window, &mut App) + 'static,
+) -> E {
+    let expand = Rc::new(set_open);
+    let collapse = Rc::clone(&expand);
+    button
+        .aria_expanded(open)
+        .on_a11y_action(AccessibleAction::Expand, move |_, window, cx| {
+            expand(true, window, cx);
+        })
+        .on_a11y_action(AccessibleAction::Collapse, move |_, window, cx| {
+            collapse(false, window, cx);
+        })
 }
 
 /// A floating panel (CHARTER 4): dark material, hairline border, soft shadow, 12 px corners,

@@ -12,7 +12,7 @@ use gpui::{
 use crate::canvas::rgba;
 use crate::color_picker::ColorField;
 use crate::theme::{ACCENT, Theme};
-use crate::toolbar::panel;
+use crate::toolbar::{expandable, panel};
 use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// The property strip under the toolbar (CHARTER 4, D-55): a group for each setting `tool`
@@ -229,6 +229,7 @@ impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for Al
             });
         };
         let opener = open.clone();
+        let expand = open.clone();
         let button = strip_button(
             format!("{}: open", setting.name()),
             Role::Button,
@@ -236,7 +237,11 @@ impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for Al
             shown,
             theme,
         )
-        .aria_expanded(shown)
+        .map(|button| {
+            expandable(button, shown, move |value, _, cx| {
+                set_open(&expand, value, cx);
+            })
+        })
         .on_click(move |_, _, cx| set_open(&opener, true, cx))
         .child(alignment_glyph(look.alignment(), theme));
         let grid = shown.then(|| {

@@ -138,6 +138,9 @@ section exists.
 
 ### Fixed
 
+- A screen reader can open and close the editor's menus and popups (Colour, Border
+  colour, alignment, More properties, "..." and the tool groups). Their expand and
+  collapse did nothing before, and they offer no Invoke (D-168).
 - The colour picker's hue bar moves on a press or a drag. Its press area sat 12 px below
   the bar, so presses on the bar itself did nothing. The bar and the shade square are
   sliders a screen reader names, worked by the arrow keys (D-154).

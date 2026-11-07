@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::canvas::rgba;
 use crate::theme::{ACCENT, Fill, Theme, filled};
-use crate::toolbar::panel;
+use crate::toolbar::{expandable, panel};
 use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// How many picked colours the Recent row keeps.
@@ -160,6 +160,7 @@ where
         let open = *popup.read(cx);
         let shown = self.value.shown();
         let toggle = popup.clone();
+        let expand = popup.clone();
         let button = div()
             .id(ElementId::Name(format!("{name}: button").into()))
             .focusable()
@@ -167,7 +168,14 @@ where
             .role(Role::Button)
             .aria_label(name)
             .aria_value(describe(shown))
-            .aria_expanded(open.is_some())
+            .map(|button| {
+                expandable(button, open.is_some(), move |value, _, cx| {
+                    expand.update(cx, |popup, cx| {
+                        *popup = value.then_some(Popup::Palette);
+                        cx.notify();
+                    });
+                })
+            })
             .map(|element| with_tooltip(element, tooltip_text(name, None), self.theme))
             .focus_visible(|button| button.border_2().border_color(ACCENT))
             .h(px(28.0))
