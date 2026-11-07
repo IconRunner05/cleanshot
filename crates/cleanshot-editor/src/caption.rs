@@ -248,8 +248,8 @@ pub(crate) fn caption_row(
                 .pl(ROW_START)
                 .child(controls),
         )
-        .child(div().flex_none().pl(ACTIONS_START).child(actions))
         .child(drag_space())
+        .child(div().flex_none().pl(ACTIONS_START).child(actions))
         .child(caption_buttons(window, theme))
 }
 
