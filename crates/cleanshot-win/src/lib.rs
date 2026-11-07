@@ -168,6 +168,9 @@ pub enum Error {
     #[error("UI Automation could not read this process's windows")]
     Accessibility(#[source] windows::core::Error),
     #[cfg(feature = "ui-automation-test")]
+    #[error("the control has no UI Automation pattern {0:?}")]
+    PatternMissing(windows::Win32::UI::Accessibility::UIA_PATTERN_ID),
+    #[cfg(feature = "ui-automation-test")]
     #[error("Windows would not ask the window to close")]
     CloseNotPosted(#[source] windows::core::Error),
     #[cfg(feature = "ui-automation-test")]

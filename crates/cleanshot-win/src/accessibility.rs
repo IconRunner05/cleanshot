@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{Point, Rect};
-use windows::Win32::Foundation::{E_INVALIDARG, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{E_INVALIDARG, HWND, LPARAM, POINT, S_OK, WPARAM};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
@@ -13,11 +13,13 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationElement6,
-    IUIAutomationInvokePattern, IUIAutomationTogglePattern, TreeScope_Subtree,
-    UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId, UIA_GroupControlTypeId,
-    UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_IsExpandCollapsePatternAvailablePropertyId,
-    UIA_IsValuePatternAvailablePropertyId, UIA_RadioButtonControlTypeId, UIA_SliderControlTypeId,
-    UIA_TogglePatternId, UIA_ToolBarControlTypeId, UIA_ValueValuePropertyId,
+    IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern, IUIAutomationTogglePattern,
+    TreeScope_Subtree, UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId,
+    UIA_ExpandCollapsePatternId, UIA_GroupControlTypeId, UIA_ImageControlTypeId,
+    UIA_InvokePatternId, UIA_IsExpandCollapsePatternAvailablePropertyId,
+    UIA_IsValuePatternAvailablePropertyId, UIA_PATTERN_ID, UIA_RadioButtonControlTypeId,
+    UIA_SliderControlTypeId, UIA_TogglePatternId, UIA_ToolBarControlTypeId,
+    UIA_ValueValuePropertyId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
@@ -186,15 +188,13 @@ pub fn controls_in_own_windows() -> Result<Vec<Element>, Error> {
 ///
 /// # Errors
 ///
+/// [`Error::PatternMissing`] if the button has no Invoke pattern;
 /// [`Error::Accessibility`] if COM, UI Automation or the button refuses a call.
 pub fn invoke_in_own_windows(name: &str) -> Result<bool, Error> {
     act_on_own_control(UIA_ButtonControlTypeId, name, |element| {
-        // SAFETY: the element is live, and the pattern asked for is the interface cast to.
-        unsafe {
-            element
-                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)?
-                .Invoke()
-        }
+        let invoke = pattern::<IUIAutomationInvokePattern>(element, UIA_InvokePatternId)?;
+        // SAFETY: a call on a live pattern of a live element.
+        unsafe { invoke.Invoke() }.map_err(Error::Accessibility)
     })
 }
 
@@ -204,14 +204,49 @@ pub fn invoke_in_own_windows(name: &str) -> Result<bool, Error> {
 ///
 /// # Errors
 ///
+/// [`Error::PatternMissing`] if the check box has no Toggle pattern;
 /// [`Error::Accessibility`] if COM, UI Automation or the check box refuses a call.
 pub fn toggle_in_own_windows(name: &str) -> Result<bool, Error> {
     act_on_own_control(UIA_CheckBoxControlTypeId, name, |element| {
-        // SAFETY: the element is live, and the pattern asked for is the interface cast to.
+        let toggle = pattern::<IUIAutomationTogglePattern>(element, UIA_TogglePatternId)?;
+        // SAFETY: a call on a live pattern of a live element.
+        unsafe { toggle.Toggle() }.map_err(Error::Accessibility)
+    })
+}
+
+/// Opens (`expanded`) or closes the first button named `name` under this process's top-level
+/// windows through its `ExpandCollapse` pattern, as a screen reader's expand and collapse
+/// commands do. Returns whether one was found. Call it from a thread that owns no window, as
+/// for [`wait_for_container`].
+///
+/// # Errors
+///
+/// [`Error::PatternMissing`] if the button has no `ExpandCollapse` pattern;
+/// [`Error::Accessibility`] if COM, UI Automation or the button refuses a call.
+pub fn expand_in_own_windows(name: &str, expanded: bool) -> Result<bool, Error> {
+    act_on_own_control(UIA_ButtonControlTypeId, name, |element| {
+        let expand_collapse =
+            pattern::<IUIAutomationExpandCollapsePattern>(element, UIA_ExpandCollapsePatternId)?;
+        // SAFETY: a call on a live pattern of a live element.
         unsafe {
-            element
-                .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)?
-                .Toggle()
+            if expanded {
+                expand_collapse.Expand()
+            } else {
+                expand_collapse.Collapse()
+            }
+        }
+        .map_err(Error::Accessibility)
+    })
+}
+
+fn pattern<T: Interface>(element: &IUIAutomationElement, id: UIA_PATTERN_ID) -> Result<T, Error> {
+    // SAFETY: the element is live, and the pattern asked for is the interface cast to.
+    unsafe { element.GetCurrentPatternAs::<T>(id) }.map_err(|error| {
+        // windows-rs gives a pattern the element lacks, a null, as an error carrying S_OK.
+        if error.code() == S_OK {
+            Error::PatternMissing(id)
+        } else {
+            Error::Accessibility(error)
         }
     })
 }
@@ -380,16 +415,16 @@ fn press(button: MOUSE_EVENT_FLAGS) -> Result<(), Error> {
 fn act_on_own_control(
     kind: UIA_CONTROLTYPE_ID,
     name: &str,
-    act: impl FnOnce(&IUIAutomationElement) -> windows::core::Result<()>,
+    act: impl FnOnce(&IUIAutomationElement) -> Result<(), Error>,
 ) -> Result<bool, Error> {
     // SAFETY: COM is initialised for this thread and released below once the call ends.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
         .map_err(Error::Accessibility)?;
     let acted = find_own_control(kind, name)
+        .map_err(Error::Accessibility)
         .and_then(|found| found.map(|element| act(&element)).transpose())
-        .map(|acted| acted.is_some())
-        .map_err(Error::Accessibility);
+        .map(|acted| acted.is_some());
     // SAFETY: balances the successful CoInitializeEx above, after every COM object is dropped.
     unsafe { CoUninitialize() };
     acted
