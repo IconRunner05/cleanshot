@@ -3,15 +3,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Bubble, Color, Command, Document, Fill, Frame, Label, PointF, RectF, RgbaImage, Shape, ShapeId,
+    Bubble, Color, Command, Document, Fill, Label, PointF, RectF, RgbaImage, Shape, ShapeId,
     SpotlightDim, Style, areas_outside, arrow_head, box_handles, dimmed_areas, handles,
     step_numbers, text_on,
 };
 use gpui::{
-    App, BorderStyle, Bounds, BoxShadow, Canvas, ContentMask, Corners, DispatchPhase, Hitbox,
-    HitboxBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
-    Point, RenderImage, Rgba, ScrollDelta, ScrollEvent, Window, canvas, fill, hsla, point, px,
-    quad, size, transparent_black,
+    App, BorderStyle, Bounds, Canvas, ContentMask, DispatchPhase, Hitbox, HitboxBehavior,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point,
+    RenderImage, Rgba, ScrollDelta, ScrollEvent, Window, canvas, fill, point, px, quad, size,
+    transparent_black,
 };
 use smallvec::smallvec;
 
@@ -109,11 +109,7 @@ fn shown_shapes<'a>(
         Some(Command::Replace { id, shape, style }) => (Some((*id, shape, style)), None),
         Some(Command::Add { shape, style }) => (None, Some((shape, style))),
         Some(
-            Command::Remove(_)
-            | Command::Restack { .. }
-            | Command::SetCrop(_)
-            | Command::SetFrame(_)
-            | Command::SetDim(_),
+            Command::Remove(_) | Command::Restack { .. } | Command::SetCrop(_) | Command::SetDim(_),
         )
         | None => (None, None),
     };
@@ -149,7 +145,6 @@ pub(crate) fn document_canvas(
             });
             let fit = Fit::new(bounds, image, shown, placement, scale_factor);
             let shown_bounds = fit.bounds(shown);
-            paint_frame(document.frame(), shown_bounds, fit.scale, window);
             // D-127: nothing a crop leaves out is drawn.
             let mask = ContentMask {
                 bounds: shown_bounds,
@@ -329,40 +324,6 @@ fn listen_for_pointer(
         };
         on_zoom(wheeled, window, cx);
     });
-}
-
-/// F-44: the frame the export draws around the image, at the image's scale, so the canvas shows
-/// how the export will look. It frames the part of the image shown (D-127).
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "the frame's sizes are a few pixels, exact in f32"
-)]
-fn paint_frame(frame: Frame, image: Bounds<Pixels>, scale: f32, window: &mut Window) {
-    let border = if frame.border { scale } else { 0.0 };
-    let block = image.dilate(px(border));
-    if frame.shadow {
-        window.paint_drop_shadows(
-            block,
-            Corners::default(),
-            &[BoxShadow {
-                color: hsla(0.0, 0.0, 0.0, Frame::SHADOW_ALPHA),
-                offset: point(px(0.0), px(Frame::SHADOW_OFFSET as f32 * scale)),
-                blur_radius: px(Frame::SHADOW_BLUR as f32 * scale),
-                spread_radius: px(0.0),
-                inset: false,
-            }],
-        );
-    }
-    if frame.border {
-        window.paint_quad(quad(
-            block,
-            px(0.0),
-            transparent_black(),
-            px(border),
-            hsla(0.0, 0.0, 0.0, f32::from(Frame::BORDER_ALPHA) / 255.0),
-            BorderStyle::Solid,
-        ));
-    }
 }
 
 fn paint_outline(bounds: Bounds<Pixels>, window: &mut Window) {

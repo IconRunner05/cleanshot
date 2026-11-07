@@ -1,6 +1,6 @@
 use cleanshot_core::{
-    Alignment, ColorValue, Command, Document, Fill, Frame, Horizontal, KeyAction, Look, Property,
-    Setting, SpotlightDim, Tool, TypedValue, Vertical, Warning,
+    Alignment, ColorValue, Command, Document, Fill, Horizontal, KeyAction, Look, Property, Setting,
+    SpotlightDim, Tool, TypedValue, Vertical, Warning,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -17,8 +17,8 @@ use crate::tooltip::{tooltip_text, with_tooltip};
 
 /// The property strip under the toolbar (CHARTER 4, D-55): a group for each setting `tool`
 /// shows in `look`, with `look`'s values checked, then the document's spotlight dim for the
-/// Spotlight tool (D-123), then the shape's shadow and border where the tool has them, or else
-/// the image's frame toggles (F-44, D-131). `on_set` is called with the choice picked,
+/// Spotlight tool (D-123), then the shape's shadow and border where the tool has them (D-131).
+/// `on_set` is called with the choice picked,
 /// `on_document` with the document change, by click, Enter or Space, and `on_sample` when the
 /// colour picker's "From image" asks for a colour from the screenshot (D-147).
 pub(crate) fn property_strip(
@@ -30,7 +30,6 @@ pub(crate) fn property_strip(
     on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
     on_sample: impl Fn(ColorValue, &mut Window, &mut App) + Clone + 'static,
 ) -> Stateful<Div> {
-    let frame = document.frame();
     let dim = (tool == Tool::Spotlight).then(|| document.dim());
     let (shape, own): (Vec<Setting>, Vec<Setting>) = Setting::shown_for(tool, &look)
         .into_iter()
@@ -46,9 +45,7 @@ pub(crate) fn property_strip(
         )
     });
     let after = !own.is_empty() || dim.is_some();
-    let last = if shape.is_empty() {
-        image_frame_group(frame, after, theme, on_document.clone())
-    } else {
+    let last = (!shape.is_empty()).then(|| {
         group(SHAPE, Role::Group, after, theme)
             .child(group_label(SHAPE, theme))
             .children(shape.iter().map(|&setting| {
@@ -61,11 +58,11 @@ pub(crate) fn property_strip(
                     on_sample.clone(),
                 )
             }))
-    };
+    });
     strip_row()
         .children(groups)
         .children(dim.map(|dim| dim_group(dim, !own.is_empty(), theme, on_document)))
-        .child(last)
+        .children(last)
 }
 
 /// The Crop tool's strip: Apply, then Cancel, each calling `on_action` with its action (D-159).
@@ -118,7 +115,7 @@ fn strip_row() -> Stateful<Div> {
         .gap(px(8.0))
 }
 
-/// Whether `setting` sits in the Shape group, which takes the image frame's place (D-131).
+/// Whether `setting` sits in the Shape group (D-131).
 fn in_shape_group(setting: Setting) -> bool {
     match setting {
         Setting::Shadow | Setting::Border | Setting::BorderColor | Setting::BorderWidth => true,
@@ -204,48 +201,6 @@ fn setting_group(
                 .children(warning)
         }
     }
-}
-
-/// The image frame's Border and Shadow, shown when the strip has no shape to act on (F-44).
-fn image_frame_group(
-    frame: Frame,
-    after: bool,
-    theme: Theme,
-    on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
-) -> Stateful<Div> {
-    let toggles = [
-        (
-            "Border",
-            frame.border,
-            Frame {
-                border: !frame.border,
-                ..frame
-            },
-        ),
-        (
-            "Shadow",
-            frame.shadow,
-            Frame {
-                shadow: !frame.shadow,
-                ..frame
-            },
-        ),
-    ]
-    .map(|(name, checked, toggled)| {
-        let on_document = on_document.clone();
-        strip_button(
-            format!("{IMAGE_FRAME}: {name}"),
-            Role::CheckBox,
-            name,
-            checked,
-            theme,
-        )
-        .on_click(move |_, window, cx| on_document(Command::SetFrame(toggled), window, cx))
-        .child(div().text_xs().text_color(theme.text).child(name))
-    });
-    group(IMAGE_FRAME, Role::Group, after, theme)
-        .child(group_label(IMAGE_FRAME, theme))
-        .children(toggles)
 }
 
 /// A group's name, shown at its start.
@@ -492,10 +447,6 @@ fn alignment_glyph(alignment: Alignment, theme: Theme) -> Div {
     };
     frame.children(lines)
 }
-
-/// What the strip calls the border and shadow round the whole image, apart from a shape's own
-/// shadow (F-44, D-114).
-const IMAGE_FRAME: &str = "Image frame";
 
 /// The spotlight dim's three steps, with `dim` checked (F-43, D-123).
 fn dim_group(

@@ -127,6 +127,11 @@ section exists.
 - Esc in the editor goes back to the Select tool and clears the selection, from any tool
   (F-30). With Select already picked and nothing selected it does nothing.
 
+### Removed
+
+- The Image frame group (a border and drop shadow round the whole exported image) is
+  gone; each shape's own Shadow and Border stay (D-166).
+
 ### Fixed
 
 - Zoomed out, the image sat on a dark grey card the size of the window. The card now

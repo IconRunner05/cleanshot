@@ -6,7 +6,6 @@
 mod border;
 mod encode;
 mod flatten;
-mod frame;
 mod gamma;
 mod highlight;
 mod patch;

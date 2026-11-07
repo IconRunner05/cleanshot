@@ -9,7 +9,7 @@ use gpui::{
 
 use super::{EditorView, Held, update_while_open};
 use crate::canvas::rgba;
-use crate::placement::{CARD_INSET, canvas_size, fitted_placement, framed, shown_area};
+use crate::placement::{CARD_INSET, canvas_size, fitted_placement, shown_area};
 use crate::theme::Theme;
 use crate::zoom_panel::{OnPanelInput, PanelInput, Viewport, scrollbars, zoom_panel};
 
@@ -29,13 +29,11 @@ impl EditorView {
         }
     }
 
-    /// The part of the canvas the image's card backs: where the image and its export frame
-    /// are, cut to the canvas (D-158).
+    /// The part of the canvas the image's card backs: where the image is, cut to the canvas
+    /// (D-158).
     pub(super) fn backing(&self, window: &Window) -> Bounds<Pixels> {
         let viewport = self.viewport(window);
-        viewport
-            .placement
-            .covers(viewport.room, framed(viewport.area, self.document.frame()))
+        viewport.placement.covers(viewport.room, viewport.area)
     }
 
     /// The zoom panel and scrollbars over the image card, none while the image is fitted

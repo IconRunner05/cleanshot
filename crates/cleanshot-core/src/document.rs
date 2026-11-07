@@ -12,19 +12,17 @@ pub struct Document {
     pub(crate) base: Arc<RgbaImage>,
     pub(crate) shapes: Vec<ShapeEntry>,
     pub(crate) crop: Option<RectF>,
-    pub(crate) frame: Frame,
     pub(crate) dim: SpotlightDim,
 }
 
 impl Document {
-    /// A document showing `base` with no shapes, no crop and no frame.
+    /// A document showing `base` with no shapes and no crop.
     #[must_use]
     pub fn new(base: Arc<RgbaImage>) -> Self {
         Self {
             base,
             shapes: Vec::new(),
             crop: None,
-            frame: Frame::default(),
             dim: SpotlightDim::Medium,
         }
     }
@@ -79,12 +77,6 @@ impl Document {
             width: self.base.width() as f32,
             height: self.base.height() as f32,
         }
-    }
-
-    /// The border and shadow an export draws around the image (F-44).
-    #[must_use]
-    pub fn frame(&self) -> Frame {
-        self.frame
     }
 
     /// How dark the image is outside every spotlight (F-43, D-123).
@@ -201,55 +193,6 @@ fn cell(left: f64, top: f64, right: f64, bottom: f64) -> RectF {
         width: (right - left) as f32,
         height: (bottom - top) as f32,
     }
-}
-
-/// Whole-image effects an export draws around the image, outside every capture pixel (F-44).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Frame {
-    pub border: bool,
-    pub shadow: bool,
-}
-
-// D-80: CHARTER 4's "0 8 24, 25% black" shadow, blur radius two deviations; a 20% black border.
-impl Frame {
-    /// The border's opacity: black at 20%, one image pixel wide.
-    pub const BORDER_ALPHA: u8 = 51;
-    /// How far, in image pixels, the shadow falls below the image.
-    pub const SHADOW_OFFSET: u32 = 8;
-    /// The shadow's blur radius in image pixels: twice its standard deviation, and how far
-    /// past the offset image the export reaches.
-    pub const SHADOW_BLUR: u32 = 24;
-    /// The shadow's opacity where it is fully covered: black at 25%.
-    pub const SHADOW_ALPHA: f32 = 0.25;
-
-    /// The room, in image pixels, this frame adds on each side of the image an export draws.
-    #[must_use]
-    pub const fn margins(self) -> FrameMargins {
-        let border = if self.border { 1 } else { 0 };
-        if !self.shadow {
-            return FrameMargins {
-                left: border,
-                top: border,
-                right: border,
-                bottom: border,
-            };
-        }
-        FrameMargins {
-            left: border + Self::SHADOW_BLUR,
-            top: border + Self::SHADOW_BLUR - Self::SHADOW_OFFSET,
-            right: border + Self::SHADOW_BLUR,
-            bottom: border + Self::SHADOW_BLUR + Self::SHADOW_OFFSET,
-        }
-    }
-}
-
-/// The room a [`Frame`] adds on each side of the image, in image pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FrameMargins {
-    pub left: u32,
-    pub top: u32,
-    pub right: u32,
-    pub bottom: u32,
 }
 
 /// Names one shape for the life of its [`crate::History`]; never reused.
@@ -439,7 +382,6 @@ impl BorderWidth {
     }
 }
 
-// D-114: a shape's shadow is smaller than the image frame's (D-80).
 impl Style {
     /// How far, in image pixels, a shape's shadow falls below it.
     pub const SHADOW_OFFSET: u32 = 3;

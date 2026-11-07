@@ -15,8 +15,6 @@ use cleanshot_win::accessibility::{ControlKind, wait_for_container};
 /// another is picked.
 const TOOLS: [&str; 6] = ["Select", "Arrow", "Text", "Highlighter", "Redact", "Crop"];
 
-const FRAME_TOGGLES: [&str; 2] = ["Border", "Shadow"];
-
 const WALKS: [(&str, &str, ControlKind, &[&str]); 2] = [
     (
         "f58_d143_the_editor_toolbar_names_each_tool_group_to_ui_automation",
@@ -25,10 +23,10 @@ const WALKS: [(&str, &str, ControlKind, &[&str]); 2] = [
         &TOOLS,
     ),
     (
-        "f58_the_property_strip_names_its_frame_toggles_as_check_boxes",
+        "d166_the_select_tools_property_strip_has_no_image_frame_check_boxes",
         "Properties",
         ControlKind::CheckBox,
-        &FRAME_TOGGLES,
+        &[],
     ),
 ];
 
