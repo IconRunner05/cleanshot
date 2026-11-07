@@ -30,6 +30,7 @@ const STRIP_GAP: Pixels = px(8.0);
 const SEPARATOR: Pixels = px(8.0 + 1.0);
 const MORE_PROPERTIES_SIZE: Pixels = px(28.0);
 const DRAG_SPACE_LEAST: Pixels = px(40.0);
+const ACTIONS_START: Pixels = px(16.0);
 const CAPTION_BUTTON: Pixels = px(46.0);
 const MORE_PROPERTIES: &str = "More properties";
 
@@ -51,6 +52,7 @@ pub(crate) fn min_width(cx: &App) -> Pixels {
         + TOOLS_GAP * 2.0
         + DIVIDER_WIDTH
         + MORE_PROPERTIES_SIZE
+        + ACTIONS_START
         + DRAG_SPACE_LEAST
         + actions_width(cx)
         + CAPTION_BUTTON * 3.0
@@ -63,7 +65,7 @@ struct StripFit {
     scale: f32,
     /// The strip's left edge.
     left: Option<Pixels>,
-    /// What the row needs right of the strip: the drag space's least, `actions` and the caption
+    /// What the row needs right of the strip: `actions`, the drag space's least and the caption
     /// buttons.
     right: Option<Pixels>,
     /// Each group's width as last laid out, without its separator.
@@ -204,8 +206,15 @@ impl RenderOnce for CaptionRow {
             .child(strip);
         caption_row(controls, actions, window, theme).on_children_prepainted(
             move |bounds, window, cx| {
-                let actions = bounds.get(2).expect("the row's third child is the actions");
-                let right = window.viewport_size().width - actions.origin.x + DRAG_SPACE_LEAST;
+                let actions = bounds
+                    .get(1)
+                    .expect("the row's second child is the actions");
+                let buttons = bounds
+                    .get(3)
+                    .expect("the row's fourth child is the caption buttons");
+                let right = actions.size.width
+                    + DRAG_SPACE_LEAST
+                    + (window.viewport_size().width - buttons.origin.x);
                 remeasure(&fit, cx, move |fit| {
                     let changed = fit.right != Some(right);
                     fit.right = Some(right);
@@ -217,8 +226,8 @@ impl RenderOnce for CaptionRow {
 }
 
 /// The window's own caption row, in place of a title bar (D-141): `controls` from the left,
-/// clipped if the window is too narrow for them, then empty space that moves the window, then
-/// `actions`, then the caption buttons.
+/// clipped if the window is too narrow for them, then `actions` (D-162), then empty space that
+/// moves the window, then the caption buttons.
 pub(crate) fn caption_row(
     controls: impl IntoElement,
     actions: impl IntoElement,
@@ -239,8 +248,8 @@ pub(crate) fn caption_row(
                 .pl(ROW_START)
                 .child(controls),
         )
+        .child(div().flex_none().pl(ACTIONS_START).child(actions))
         .child(drag_space())
-        .child(actions)
         .child(caption_buttons(window, theme))
 }
 

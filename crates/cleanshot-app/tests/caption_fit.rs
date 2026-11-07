@@ -1,26 +1,26 @@
 //! D-161: at the editor's smallest width nothing in the caption row is clipped or overlaps,
-//! and the property strip's groups that do not fit open from "More properties". Run as for
-//! `accessibility`: GPUI owns the window's thread, and the checks run on a second thread that
-//! ends the process with the verdict.
+//! with Copy right after the property strip (D-162), and the property strip's groups that do
+//! not fit open from "More properties". Run as for `accessibility`: GPUI owns the window's
+//! thread, and the checks run on a second thread that ends the process with the verdict.
 
-mod editor_toolbar;
+mod on_screen;
 
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use cleanshot_core::{DeliveryError, RgbaImage};
-use cleanshot_win::accessibility::{ControlKind, Element, controls_in_own_windows, drag, point_in};
-use editor_toolbar::pick_tool;
+use cleanshot_win::accessibility::{ControlKind, Element};
+use on_screen::{PATIENCE, click, pick_tool, poll};
 
 const TEST: &str = "d161_nothing_in_the_caption_row_is_clipped_at_the_smallest_width";
 const MORE_PROPERTIES: &str = "More properties";
 const ARROW: &str = "Arrow";
-// A debug build on a cold runner can take seconds to lay out a frame; no budget is judged here.
-const PATIENCE: Duration = Duration::from_secs(10);
-const POLL: Duration = Duration::from_millis(50);
+const DRAG_SPACE_LEAST: f64 = 40.0;
+const ROW_BUTTONS_LEAST: usize = 5;
+const CAPTION_BUTTON: f64 = 46.0;
 
 fn main() {
     let (first_frame, drawn) = mpsc::channel();
@@ -82,9 +82,7 @@ fn check_row() -> Result<(), String> {
     })?;
     let more =
         named(&row, ControlKind::Button, MORE_PROPERTIES).expect("settled found the chevron");
-    let middle = point_in(more.bounds, 0.5, 0.5);
-    drag(middle, middle)
-        .map_err(|error| format!("the click on {MORE_PROPERTIES} failed: {error}"))?;
+    click(more)?;
     settled(|controls| {
         named(controls, ControlKind::Group, MORE_PROPERTIES)
             .is_none()
@@ -96,23 +94,18 @@ fn check_row() -> Result<(), String> {
 /// The caption row's controls, once `wrong` finds nothing wrong with every control seen, which
 /// it must within `PATIENCE`: the strip is fitted on the frame after it is measured.
 fn settled(wrong: impl Fn(&[Element]) -> Option<String>) -> Result<Vec<Element>, String> {
-    let deadline = Instant::now() + PATIENCE;
-    loop {
-        let controls = controls_in_own_windows().map_err(|error| error.to_string())?;
-        let Some(problem) = wrong(&controls) else {
-            return Ok(controls);
-        };
-        if Instant::now() >= deadline {
+    poll(|controls| match wrong(controls) {
+        None => Ok(controls.to_vec()),
+        Some(problem) => {
             let every: Vec<String> = controls
                 .iter()
                 .map(|control| {
                     format!("{:?} {:?} {:?}", control.kind, control.name, control.bounds)
                 })
                 .collect();
-            return Err(format!("{problem}; every control: {every:#?}"));
+            Err(format!("{problem}; every control: {every:#?}"))
         }
-        thread::sleep(POLL);
-    }
+    })
 }
 
 /// Whether every button in the caption row lies inside the window, clear of every other, and
@@ -127,6 +120,16 @@ fn fits(controls: &[Element]) -> Result<(), String> {
             strip.bounds, copy.bounds
         ));
     }
+    // D-162: half the drag space at least lies between "..." and Minimize, then Maximize.
+    let more = named(controls, ControlKind::Button, "More").ok_or("no More button")?;
+    let close_width = f64::from(close.bounds.right - close.bounds.left);
+    let least = close_width * (2.0 + DRAG_SPACE_LEAST / 2.0 / CAPTION_BUTTON);
+    if f64::from(close.bounds.left - more.bounds.right) < least {
+        return Err(format!(
+            "the drag space is not between More {:?} and the caption buttons, Close {:?}",
+            more.bounds, close.bounds
+        ));
+    }
     let in_row = |control: &Element| {
         control.bounds.top >= close.bounds.top && control.bounds.bottom <= close.bounds.bottom
     };
@@ -139,6 +142,13 @@ fn fits(controls: &[Element]) -> Result<(), String> {
             ) && in_row(control)
         })
         .collect();
+    if buttons.len() < ROW_BUTTONS_LEAST {
+        return Err(format!(
+            "the caption row beside Close {:?} holds {} buttons, not Copy, More and the caption buttons",
+            close.bounds,
+            buttons.len()
+        ));
+    }
     for (index, button) in buttons.iter().enumerate() {
         if button.bounds.right > close.bounds.right {
             return Err(format!(
@@ -159,8 +169,13 @@ fn fits(controls: &[Element]) -> Result<(), String> {
     Ok(())
 }
 
+/// The first control of `kind` named `name` that takes room on screen: UI Automation also
+/// lists a zero-size Minimize, Maximize and Close before the caption row's own.
 fn named<'a>(controls: &'a [Element], kind: ControlKind, name: &str) -> Option<&'a Element> {
-    controls
-        .iter()
-        .find(|control| control.kind == kind && control.name == name)
+    controls.iter().find(|control| {
+        control.kind == kind
+            && control.name == name
+            && control.bounds.left < control.bounds.right
+            && control.bounds.top < control.bounds.bottom
+    })
 }

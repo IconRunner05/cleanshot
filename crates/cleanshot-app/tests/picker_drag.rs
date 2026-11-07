@@ -3,25 +3,22 @@
 //! Run as for `accessibility`: GPUI owns the window's thread, and the drags run on a second
 //! thread that ends the process with the verdict.
 
-mod editor_toolbar;
+mod on_screen;
 
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use cleanshot_core::{DeliveryError, RgbaImage};
-use cleanshot_win::accessibility::{ControlKind, Element, controls_in_own_windows, drag, point_in};
-use editor_toolbar::pick_tool;
+use cleanshot_win::accessibility::{ControlKind, Element, drag, point_in};
+use on_screen::{PATIENCE, click, pick_tool, poll};
 
 const TEST: &str = "d154_the_hue_bar_and_the_shade_square_follow_a_drag";
 const COLOUR: &str = "Colour";
 const HUE: &str = "Hue";
 const SHADE: &str = "Saturation and brightness";
-// A debug build on a cold runner can take seconds to apply a press; no budget is judged here.
-const PATIENCE: Duration = Duration::from_secs(10);
-const POLL: Duration = Duration::from_millis(50);
 
 fn main() {
     let (first_frame, drawn) = mpsc::channel();
@@ -116,11 +113,6 @@ fn drag_both() -> Result<(), String> {
     Ok(())
 }
 
-fn click(control: &Element) -> Result<(), String> {
-    let middle = point_in(control.bounds, 0.5, 0.5);
-    drag(middle, middle).map_err(|error| format!("the click on {} failed: {error}", control.name))
-}
-
 fn shown(kind: ControlKind, name: &str) -> Result<Element, String> {
     first_within(kind, name, |_| true).map_err(|seen| format!("no {kind:?} named {name}: {seen}"))
 }
@@ -136,27 +128,22 @@ fn first_within(
     name: &str,
     holds: impl Fn(&Element) -> bool,
 ) -> Result<Element, String> {
-    let deadline = Instant::now() + PATIENCE;
-    loop {
-        let controls = controls_in_own_windows().map_err(|error| error.to_string())?;
+    poll(|controls| {
         let found = controls
             .iter()
             .find(|control| control.kind == kind && control.name == name);
         if let Some(control) = found.filter(|control| holds(control)) {
             return Ok(control.clone());
         }
-        if Instant::now() >= deadline {
-            let every: Vec<String> = controls
-                .iter()
-                .map(|control| {
-                    format!(
-                        "{:?} {:?} {:?} {:?}",
-                        control.kind, control.name, control.value, control.bounds
-                    )
-                })
-                .collect();
-            return Err(format!("last seen {found:?}; every control: {every:#?}"));
-        }
-        thread::sleep(POLL);
-    }
+        let every: Vec<String> = controls
+            .iter()
+            .map(|control| {
+                format!(
+                    "{:?} {:?} {:?} {:?}",
+                    control.kind, control.name, control.value, control.bounds
+                )
+            })
+            .collect();
+        Err(format!("last seen {found:?}; every control: {every:#?}"))
+    })
 }
