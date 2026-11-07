@@ -136,7 +136,7 @@ impl Placement {
             }
             let first = px(-start * self.scale);
             let last = room - shown + first;
-            (corner + by).clamp(last.min(corner), first.max(corner))
+            (corner + by).clamp((last - first).min(corner + by), first.max(corner + by))
         };
         Self {
             corner: point(
