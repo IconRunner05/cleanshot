@@ -11,6 +11,8 @@ section exists.
 
 ### Added
 
+- Settings sets how long the thumbnail stays after Copy or Save, from 1 to 60 seconds,
+  with - and + (D-157).
 - The editor remembers how each tool last drew (colour, width, fill, shadow, border, text
   size, alignment, redaction and highlight strength), across restarts too, in the settings
   file. A damaged value there falls back to its own default alone (F-59).

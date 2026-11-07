@@ -22,8 +22,8 @@ use cleanshot_core::{
 };
 use cleanshot_editor::{App, AsyncApp};
 use cleanshot_win::accessibility::{
-    ControlKind, HitArea, hit_test, offered_to_window_pick, toggle_in_own_windows,
-    wait_for_container,
+    ControlKind, HitArea, hit_test, invoke_in_own_windows, offered_to_window_pick,
+    toggle_in_own_windows, wait_for_container,
 };
 use cleanshot_win::bring_to_front;
 use cleanshot_win::settings_file::{read_settings, write_settings};
@@ -289,6 +289,18 @@ fn walk(
             })
         },
     )?;
+
+    // D-157: + makes the thumbnail stay a second longer than the default 5.
+    match invoke_in_own_windows("Longer thumbnail stay") {
+        Ok(true) => {}
+        Ok(false) => return Err("no button named Longer thumbnail stay".to_owned()),
+        Err(error) => return Err(format!("Longer thumbnail stay refused: {error}")),
+    }
+    wait_until("the file to keep the thumbnail 6 seconds", || {
+        read_settings(file, MAX_SETTINGS_BYTES).map(|text| {
+            text.is_some_and(|text| Settings::from_toml(&text).0.thumbnail_stay.ms() == 6000)
+        })
+    })?;
 
     press(START_WITH_WINDOWS)?;
     wait_until("the Run value to start this exe", || {

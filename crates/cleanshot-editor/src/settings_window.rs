@@ -2,6 +2,7 @@ use std::num::NonZeroIsize;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use cleanshot_core::thumbnail_layout::ThumbnailStay;
 use cleanshot_core::{
     AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, OptionsItem, Policy,
     SET_BY_ORGANISATION, SaveFormat, Saving, Settings, SettingsNotice, SettingsProblem,
@@ -291,6 +292,7 @@ impl Render for SettingsView {
                 |settings, choice| settings.after_capture = choice,
             ))
             .child(show_thumbnail_row(settings.show_thumbnail, theme, cx))
+            .child(thumbnail_stay_row(settings.thumbnail_stay, theme, cx))
             .child(self.start_with_windows_row(theme, cx));
         let saving = self.saving_section(&settings, theme, cx);
         let hotkeys = section("Hotkeys", theme).children(
@@ -497,6 +499,45 @@ fn show_thumbnail_row(on: bool, theme: Theme, cx: &mut Context<SettingsView>) ->
         }))
         .child("Show a thumbnail after Copy or Save"),
     )
+}
+
+/// D-157: how long the thumbnail stays, a second shorter or longer per press of - or +.
+fn thumbnail_stay_row(
+    stay: ThumbnailStay,
+    theme: Theme,
+    cx: &mut Context<SettingsView>,
+) -> impl IntoElement {
+    let step = |name: &str, text: &str, seconds: i32| {
+        button(name, name, text, false, theme)
+            .w(px(28.0))
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.edit(|settings| {
+                    settings.thumbnail_stay = settings.thumbnail_stay.stepped(seconds);
+                });
+                cx.notify();
+            }))
+    };
+    let ms = stay.ms();
+    let shown = if ms.is_multiple_of(1000) {
+        format!("{} s", ms / 1000)
+    } else {
+        format!("{:.1} s", f64::from(ms) / 1000.0)
+    };
+    row()
+        .child(label("Thumbnail stays", theme))
+        .child(step("Shorter thumbnail stay", "-", -1))
+        .child(
+            div()
+                .id("Thumbnail stays")
+                .role(Role::Label)
+                .aria_label(format!("Thumbnail stays {shown}"))
+                .w(px(48.0))
+                .text_center()
+                .text_color(theme.text)
+                .text_size(px(13.0))
+                .child(shown),
+        )
+        .child(step("Longer thumbnail stay", "+", 1))
 }
 
 /// A titled panel of CHARTER 4's material (F-55).

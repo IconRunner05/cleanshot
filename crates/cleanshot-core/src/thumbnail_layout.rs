@@ -49,6 +49,19 @@ impl ThumbnailStay {
     pub fn ms(self) -> u32 {
         self.0
     }
+
+    /// The stay `seconds` whole seconds longer, or shorter when negative, from the nearest
+    /// whole second, kept within the range: one press of the settings window's - or + (D-157).
+    #[must_use]
+    pub fn stepped(self, seconds: i32) -> Self {
+        let whole = (self.0 + 500) / 1000;
+        Self(
+            whole
+                .saturating_add_signed(seconds)
+                .saturating_mul(1000)
+                .clamp(Self::SHORTEST_MS, Self::LONGEST_MS),
+        )
+    }
 }
 
 impl Default for ThumbnailStay {
@@ -172,6 +185,18 @@ fn pixels(dips: f32, scale: f32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn d157_a_press_steps_the_stay_a_whole_second_and_never_out_of_its_range() {
+        let stay = |ms| ThumbnailStay::from_ms(ms).unwrap();
+        assert_eq!(ThumbnailStay::default().stepped(1).ms(), 6000);
+        assert_eq!(ThumbnailStay::default().stepped(-1).ms(), 4000);
+        assert_eq!(stay(12_345).stepped(1).ms(), 13_000);
+        assert_eq!(stay(12_600).stepped(-1).ms(), 12_000);
+        assert_eq!(stay(1000).stepped(-1).ms(), ThumbnailStay::SHORTEST_MS);
+        assert_eq!(stay(60_000).stepped(1).ms(), ThumbnailStay::LONGEST_MS);
+        assert_eq!(stay(59_800).stepped(1).ms(), ThumbnailStay::LONGEST_MS);
+    }
 
     const WORK: Rect = Rect {
         left: 0,
