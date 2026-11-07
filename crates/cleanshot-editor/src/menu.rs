@@ -50,7 +50,8 @@ impl RowState {
         }
     }
 
-    fn ink(self, theme: Theme) -> Rgba {
+    /// The row's text colour in `theme`.
+    pub(crate) fn ink(self, theme: Theme) -> Rgba {
         match self {
             Self::Dimmed => Rgba {
                 a: 0.4,

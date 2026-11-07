@@ -421,6 +421,7 @@ impl EditorView {
         &self,
         view: &WeakEntity<Self>,
         theme: Theme,
+        window: &Window,
         cx: &App,
     ) -> (impl IntoElement + use<>, impl IntoElement + use<>) {
         let picker = view.clone();
@@ -442,7 +443,11 @@ impl EditorView {
                 view.close_text_box(window);
                 let rows = match menu {
                     ToolbarMenu::Tools(group) => group_rows(group, view.tool),
-                    ToolbarMenu::More => more_rows(&view.history, settings_opener(cx).is_some()),
+                    ToolbarMenu::More => more_rows(
+                        &view.history,
+                        settings_opener(cx).is_some(),
+                        view.viewport(window).fit_is_actual_size(),
+                    ),
                 };
                 view.toolbar_menus.open(menu, &rows, window, cx);
                 cx.notify();
@@ -467,7 +472,11 @@ impl EditorView {
         );
         let actions = actions(
             &self.toolbar_menus,
-            &more_rows(&self.history, settings_opener(cx).is_some()),
+            &more_rows(
+                &self.history,
+                settings_opener(cx).is_some(),
+                self.viewport(window).fit_is_actual_size(),
+            ),
             theme,
             on_action,
             on_menu,
@@ -555,7 +564,7 @@ impl Render for EditorView {
         let theme = Theme::for_appearance(window.appearance(), self.surface, hover_time(cx));
         let view = cx.entity().downgrade();
         let restacker = view.clone();
-        let (toolbar, actions) = self.caption_controls(&view, theme, cx);
+        let (toolbar, actions) = self.caption_controls(&view, theme, window, cx);
         let strip = self.strip(&view, theme);
         let input = view.clone();
         let on_pointer: OnPointer = Rc::new(move |pointer, window, cx| {

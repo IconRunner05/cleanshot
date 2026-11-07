@@ -218,6 +218,8 @@ enum Availability {
     Step(fn(&History) -> Option<Change>),
     /// Once the app has said how to open the settings window.
     Settings,
+    /// While fitting would zoom to other than actual size (D-167).
+    Fit,
 }
 
 /// The "..." menu's rows (D-144): name, shortcut, the action the shortcut also takes, and
@@ -251,7 +253,7 @@ const MORE: [(&str, &str, KeyAction, Availability); 7] = [
         "Fit to window",
         "Ctrl+0",
         KeyAction::FitView,
-        Availability::Always,
+        Availability::Fit,
     ),
     (
         "Actual size",
@@ -268,8 +270,13 @@ const MORE: [(&str, &str, KeyAction, Availability); 7] = [
 ];
 
 /// The "..." menu for `history`: Undo and Redo name their step ("Undo arrow", D-116) and
-/// are dimmed with no step to make; Settings is dimmed unless `can_open_settings`.
-pub(crate) fn more_rows(history: &History, can_open_settings: bool) -> Vec<MenuRow> {
+/// are dimmed with no step to make; Settings is dimmed unless `can_open_settings`; Fit to
+/// window is dimmed while `fit_is_actual_size` (D-167).
+pub(crate) fn more_rows(
+    history: &History,
+    can_open_settings: bool,
+    fit_is_actual_size: bool,
+) -> Vec<MenuRow> {
     MORE.iter()
         .map(|&(name, keys, _, availability)| {
             let (name, can_pick) = match availability {
@@ -278,6 +285,7 @@ pub(crate) fn more_rows(history: &History, can_open_settings: bool) -> Vec<MenuR
                     (step_name(name, change).into(), true)
                 }),
                 Availability::Settings => (name.into(), can_open_settings),
+                Availability::Fit => (name.into(), !fit_is_actual_size),
             };
             MenuRow {
                 icon: None,
@@ -674,7 +682,7 @@ mod tests {
                 .map(|row| (row.name.to_string(), row.state))
                 .collect()
         };
-        let fresh = states(more_rows(&history, false));
+        let fresh = states(more_rows(&history, false, false));
         assert_eq!(fresh[2], ("Undo".to_owned(), RowState::Dimmed));
         assert_eq!(fresh[3], ("Redo".to_owned(), RowState::Dimmed));
         assert_eq!(fresh[6], ("Settings".to_owned(), RowState::Dimmed));
@@ -690,10 +698,26 @@ mod tests {
             height: 4.0,
         };
         history.apply(Command::SetCrop(Some(crop))).unwrap();
-        let edited = states(more_rows(&history, true));
+        let edited = states(more_rows(&history, true, false));
         assert_eq!(edited[2], ("Undo crop".to_owned(), RowState::Enabled));
         assert_eq!(edited[3], ("Redo".to_owned(), RowState::Dimmed));
         assert_eq!(edited[6], ("Settings".to_owned(), RowState::Enabled));
+    }
+
+    #[test]
+    fn d167_fit_to_window_is_dimmed_while_it_would_show_actual_size() {
+        use std::sync::Arc;
+
+        use cleanshot_core::{Document, RgbaImage};
+
+        let image = RgbaImage::new(8, 8, vec![0; 8 * 8 * 4]).unwrap();
+        let history = History::new(Document::new(Arc::new(image)));
+        let fit = |fit_is_actual_size| {
+            let rows = more_rows(&history, true, fit_is_actual_size);
+            (rows[4].name.to_string(), rows[4].state)
+        };
+        assert_eq!(fit(true), ("Fit to window".to_owned(), RowState::Dimmed));
+        assert_eq!(fit(false), ("Fit to window".to_owned(), RowState::Enabled));
     }
 
     #[test]
