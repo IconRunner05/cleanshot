@@ -16,25 +16,25 @@ use cleanshot_core::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Axis, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement,
-    IntoElement, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions, WeakEntity, Window,
-    WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
+    AnyElement, App, AppContext, Axis, Bounds, Context, Entity, FocusHandle, Global,
+    InteractiveElement, IntoElement, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage,
+    Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions,
+    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
 
 use self::card::image_card;
 use crate::canvas::{OnPointer, Overlay, Pointer, Previews, document_canvas, render_image};
-use crate::caption::caption_row;
-use crate::placement::{MIN_WINDOW, Placement, opening_size};
+use crate::caption::{CaptionRow, min_width};
+use crate::placement::{MIN_HEIGHT, Placement, opening_size};
 use crate::settings_window::settings_opener;
 use crate::shape_menu::ShapeMenu;
-use crate::strip::{crop_strip, property_strip};
+use crate::strip::{StripGroup, crop_strip, property_strip};
 use crate::text::{line_width, register_inter};
 use crate::text_box::TextBox;
 use crate::theme::{Theme, WindowSurface, window_surface};
 use crate::toolbar::{
-    Replay, ToolbarMenu, ToolbarMenus, actions, divider, group_rows, more_rows, show_tool,
-    shown_tools, toolbar,
+    Replay, ToolbarMenu, ToolbarMenus, actions, group_rows, more_rows, show_tool, shown_tools,
+    toolbar,
 };
 use crate::tooltip::hover_time;
 use crate::{Error, Log, MasksFor, open_window};
@@ -475,9 +475,9 @@ impl EditorView {
         (tools, actions)
     }
 
-    /// The property strip for what the next strip change would restyle, the spotlight dim while
-    /// a spotlight is picked, and the frame toggles; or the Crop tool's Apply and Cancel.
-    fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
+    /// The property strip for what the next strip change would restyle and the spotlight dim
+    /// while a spotlight is picked; or the Crop tool's Apply and Cancel.
+    fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> Vec<(StripGroup, AnyElement)> {
         if self.cropping.is_some() {
             let actor = view.clone();
             return crop_strip(theme, move |action, window: &mut Window, cx: &mut App| {
@@ -589,13 +589,6 @@ impl Render for EditorView {
         );
         let zoom = self.zoom_controls(window, theme, cx);
         let backing = self.backing(window);
-        let tools = div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .child(toolbar)
-            .child(divider(theme))
-            .child(strip);
         div()
             .id("editor")
             .role(Role::Application)
@@ -612,7 +605,12 @@ impl Render for EditorView {
                     view.space_held = false;
                 }
             }))
-            .child(caption_row(tools, actions, window, theme))
+            .child(CaptionRow {
+                toolbar: toolbar.into_any_element(),
+                strip,
+                actions: actions.into_any_element(),
+                theme,
+            })
             .child(image_card(
                 div()
                     .size_full()
@@ -825,7 +823,8 @@ fn window_options(
         display.visible_bounds().size
     });
     let scale = monitor.map_or(1.0, |monitor| monitor.scale);
-    let window_size = opening_size(image, scale, work_area);
+    let smallest = size(min_width(cx), MIN_HEIGHT);
+    let window_size = opening_size(image, scale, work_area, smallest);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             display_id,
@@ -839,7 +838,7 @@ fn window_options(
             appears_transparent: true,
             ..TitlebarOptions::default()
         }),
-        window_min_size: Some(MIN_WINDOW),
+        window_min_size: Some(smallest),
         window_background: surface.background(),
         ..WindowOptions::default()
     }

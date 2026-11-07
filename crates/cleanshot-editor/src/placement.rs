@@ -9,11 +9,8 @@ const MAX_SCALE: f32 = 32.0;
 pub(crate) const CAPTION_ROW: Pixels = px(48.0);
 /// The window showing round the image's card on its left, right and bottom (D-141).
 pub(crate) const CARD_INSET: Pixels = px(12.0);
-/// The smallest the editor window can be made.
-pub(crate) const MIN_WINDOW: Size<Pixels> = Size {
-    width: px(480.0),
-    height: px(320.0),
-};
+/// The least height the editor window can be made; its least width is the caption row's.
+pub(crate) const MIN_HEIGHT: Pixels = px(320.0);
 
 /// The canvas inside the image's card in an editor window whose client area is `client`.
 pub(crate) fn canvas_size(client: Size<Pixels>) -> Size<Pixels> {
@@ -25,12 +22,17 @@ pub(crate) fn canvas_size(client: Size<Pixels>) -> Size<Pixels> {
 
 /// D-110: the client size the editor opens at for `image` on a monitor of `scale` physical
 /// pixels per DIP with a `work_area` in DIPs: the image at 100%, one image pixel per device
-/// pixel, filling its card, shrunk to fit the work area.
+/// pixel, filling its card, shrunk to fit the work area, and never smaller than `smallest`.
 #[expect(
     clippy::cast_precision_loss,
     reason = "image sides are far below 2^24, where f32 stops being exact"
 )]
-pub(crate) fn opening_size(image: &RgbaImage, scale: f32, work_area: Size<Pixels>) -> Size<Pixels> {
+pub(crate) fn opening_size(
+    image: &RgbaImage,
+    scale: f32,
+    work_area: Size<Pixels>,
+    smallest: Size<Pixels>,
+) -> Size<Pixels> {
     let chrome = size(CARD_INSET * 2.0, CAPTION_ROW + CARD_INSET);
     let (width, height) = (image.width() as f32 / scale, image.height() as f32 / scale);
     let shrink = (f32::from(work_area.width - chrome.width) / width)
@@ -40,7 +42,7 @@ pub(crate) fn opening_size(image: &RgbaImage, scale: f32, work_area: Size<Pixels
         px(width * shrink) + chrome.width,
         px(height * shrink) + chrome.height,
     )
-    .max(&MIN_WINDOW)
+    .max(&smallest)
     .min(&work_area)
 }
 
@@ -352,9 +354,10 @@ mod tests {
     #[test]
     fn d110_the_editor_opens_round_the_capture_at_100_percent_where_it_fits_and_fitted_where_not() {
         let work_area = size(px(1280.0), px(680.0));
+        let smallest = size(px(584.0), MIN_HEIGHT);
         for (width, height, scale) in [(600, 300, 1.0), (900, 600, 1.5), (300, 200, 2.0)] {
             let image = image(width, height);
-            let canvas = canvas_size(opening_size(&image, scale, work_area));
+            let canvas = canvas_size(opening_size(&image, scale, work_area, smallest));
             let fit = Fit::new(
                 Bounds::new(point(px(0.0), px(0.0)), canvas),
                 &image,
@@ -372,17 +375,17 @@ mod tests {
             );
         }
         assert_eq!(
-            opening_size(&image(600, 300), 1.0, work_area),
+            opening_size(&image(600, 300), 1.0, work_area, smallest),
             size(px(624.0), px(360.0)),
             "D-141: the image fills its card, 12 px inside the window and below the 48 px row"
         );
         assert_eq!(
-            opening_size(&image(100, 50), 1.0, work_area),
-            MIN_WINDOW,
+            opening_size(&image(100, 50), 1.0, work_area, smallest),
+            smallest,
             "never smaller than the toolbar needs"
         );
         let large = image(3000, 2000);
-        let window = opening_size(&large, 1.0, work_area);
+        let window = opening_size(&large, 1.0, work_area, smallest);
         assert_eq!(window.height, work_area.height);
         assert!(window.width <= work_area.width);
         let fitted = Placement::fitted(canvas_size(window), all_of(&large), 1.0);

@@ -66,7 +66,7 @@ pub use settings::{
 pub use settings_change::{Applied, SettingsNotice, SettingsSaveError, settings_notice};
 pub use startup::{StartupEntryError, run_command, starts};
 pub use step::{STEP_DIAMETER, Step};
-pub use strip::{ColorValue, Setting, TypedValue, Warning};
+pub use strip::{ColorValue, Setting, TypedValue, Warning, groups_that_fit};
 pub use text::{
     Alignment, BoxSize, DEFAULT_TEXT_SIZE, GlyphMask, GlyphMaskError, Horizontal, INTER,
     INTER_ASCENT, INTER_DESCENT, INTER_UNITS_PER_EM, LINE_HEIGHT, Label, TextBlock, TextBlockError,

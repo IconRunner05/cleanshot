@@ -134,6 +134,9 @@ section exists.
 
 ### Fixed
 
+- A narrow editor window no longer cuts off the caption row: the property strip's groups
+  that do not fit open from a chevron, and the window keeps the width the rest needs
+  (D-161).
 - Zoomed out, the image sat on a dark grey card the size of the window. The card now
   shrinks to the image, and the window's frosted glass shows round it (D-158).
 - The current tool in a tool menu turned grey under the pointer. It now stays blue, and

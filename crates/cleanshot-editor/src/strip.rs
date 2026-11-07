@@ -4,9 +4,9 @@ use cleanshot_core::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Div, ElementId, Entity, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
-    RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled, Toggled, Window, anchored,
-    deferred, div, point, px,
+    AnyElement, App, Div, ElementId, Entity, InteractiveElement, IntoElement, KeyDownEvent,
+    ParentElement, RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled, Toggled, Window,
+    anchored, deferred, div, point, px,
 };
 
 use crate::canvas::rgba;
@@ -18,9 +18,9 @@ use crate::tooltip::{tooltip_text, with_tooltip};
 /// The property strip under the toolbar (CHARTER 4, D-55): a group for each setting `tool`
 /// shows in `look`, with `look`'s values checked, then the document's spotlight dim for the
 /// Spotlight tool (D-123), then the shape's shadow and border where the tool has them (D-131).
-/// `on_set` is called with the choice picked,
-/// `on_document` with the document change, by click, Enter or Space, and `on_sample` when the
-/// colour picker's "From image" asks for a colour from the screenshot (D-147).
+/// `on_set` is called with the choice picked, `on_document` with the document change, by
+/// click, Enter or Space, and `on_sample` when the colour picker's "From image" asks for a
+/// colour from the screenshot (D-147). The caption row lays the groups out (D-161).
 pub(crate) fn property_strip(
     tool: Tool,
     look: Look,
@@ -29,47 +29,47 @@ pub(crate) fn property_strip(
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
     on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
     on_sample: impl Fn(ColorValue, &mut Window, &mut App) + Clone + 'static,
-) -> Stateful<Div> {
+) -> Vec<(StripGroup, AnyElement)> {
     let dim = (tool == Tool::Spotlight).then(|| document.dim());
     let (shape, own): (Vec<Setting>, Vec<Setting>) = Setting::shown_for(tool, &look)
         .into_iter()
         .partition(|&setting| in_shape_group(setting));
-    let groups = own.iter().enumerate().map(|(index, &setting)| {
-        setting_group(
-            setting,
-            index > 0,
-            look,
-            theme,
-            on_set.clone(),
-            on_sample.clone(),
-        )
-    });
-    let after = !own.is_empty() || dim.is_some();
-    let last = (!shape.is_empty()).then(|| {
-        group(SHAPE, Role::Group, after, theme)
+    let mut groups: Vec<(StripGroup, AnyElement)> = own
+        .iter()
+        .map(|&setting| {
+            let group = setting_group(setting, look, theme, on_set.clone(), on_sample.clone());
+            (StripGroup::Setting(setting), group.into_any_element())
+        })
+        .collect();
+    if let Some(dim) = dim {
+        let group = dim_group(dim, theme, on_document);
+        groups.push((StripGroup::Dim, group.into_any_element()));
+    }
+    if !shape.is_empty() {
+        let group = group(SHAPE, Role::Group, theme)
             .child(group_label(SHAPE, theme))
             .children(shape.iter().map(|&setting| {
-                setting_group(
-                    setting,
-                    false,
-                    look,
-                    theme,
-                    on_set.clone(),
-                    on_sample.clone(),
-                )
-            }))
-    });
-    strip_row()
-        .children(groups)
-        .children(dim.map(|dim| dim_group(dim, !own.is_empty(), theme, on_document)))
-        .children(last)
+                setting_group(setting, look, theme, on_set.clone(), on_sample.clone())
+            }));
+        groups.push((StripGroup::Shape, group.into_any_element()));
+    }
+    groups
+}
+
+/// A group of the property strip, as the caption row tells them apart to fit them (D-161).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum StripGroup {
+    Setting(Setting),
+    Dim,
+    Shape,
+    Crop,
 }
 
 /// The Crop tool's strip: Apply, then Cancel, each calling `on_action` with its action (D-159).
 pub(crate) fn crop_strip(
     theme: Theme,
     on_action: impl Fn(KeyAction, &mut Window, &mut App) + Clone + 'static,
-) -> Stateful<Div> {
+) -> Vec<(StripGroup, AnyElement)> {
     let buttons = [
         (KeyAction::ApplyCrop, "Apply", "Enter"),
         (KeyAction::CancelCrop, "Cancel", "Esc"),
@@ -94,26 +94,13 @@ pub(crate) fn crop_strip(
             .on_click(move |_, window, cx| on_action(action, window, cx))
             .child(div().text_xs().text_color(theme.text).child(name))
     });
-    strip_row().child(
-        group(CROP, Role::Group, false, theme)
-            .child(group_label(CROP, theme))
-            .children(buttons),
-    )
+    let crop = group(CROP, Role::Group, theme)
+        .child(group_label(CROP, theme))
+        .children(buttons);
+    vec![(StripGroup::Crop, crop.into_any_element())]
 }
 
 const CROP: &str = "Crop";
-
-/// The strip's row, named for UI Automation.
-fn strip_row() -> Stateful<Div> {
-    div()
-        .flex()
-        .items_center()
-        .flex_none()
-        .id("property-strip")
-        .role(Role::Toolbar)
-        .aria_label("Properties")
-        .gap(px(8.0))
-}
 
 /// Whether `setting` sits in the Shape group (D-131).
 fn in_shape_group(setting: Setting) -> bool {
@@ -131,13 +118,12 @@ fn in_shape_group(setting: Setting) -> bool {
     }
 }
 
-/// The buttons that set `setting`, `after` another group: a check box for an on-or-off one,
+/// The buttons that set `setting`: a check box for an on-or-off one,
 /// which names itself, or a group named for the setting holding the alignment picker or its
 /// choices, with the box to type a value where it takes one. Each is named once, so a screen
 /// reader says it once.
 fn setting_group(
     setting: Setting,
-    after: bool,
     look: Look,
     theme: Theme,
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
@@ -153,15 +139,16 @@ fn setting_group(
     match setting {
         Setting::Shadow => check(look.shadow(), Property::Shadow(!look.shadow())),
         Setting::Border => check(look.border(), Property::Border(!look.border())),
-        Setting::Alignment | Setting::HorizontalAlignment => group(name, Role::Group, after, theme)
-            .child(AlignmentPicker {
+        Setting::Alignment | Setting::HorizontalAlignment => {
+            group(name, Role::Group, theme).child(AlignmentPicker {
                 setting,
                 look,
                 theme,
                 on_set,
-            }),
+            })
+        }
         Setting::Color | Setting::BorderColor => {
-            group(name, Role::Group, after, theme).child(ColorField {
+            group(name, Role::Group, theme).child(ColorField {
                 setting,
                 value: setting
                     .colored(&look)
@@ -195,7 +182,7 @@ fn setting_group(
                 theme,
                 on_set: on_set.clone(),
             });
-            group(name, Role::RadioGroup, after, theme)
+            group(name, Role::RadioGroup, theme)
                 .children(choices)
                 .children(typed)
                 .children(warning)
@@ -451,7 +438,6 @@ fn alignment_glyph(alignment: Alignment, theme: Theme) -> Div {
 /// The spotlight dim's three steps, with `dim` checked (F-43, D-123).
 fn dim_group(
     dim: SpotlightDim,
-    after: bool,
     theme: Theme,
     on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
 ) -> Stateful<Div> {
@@ -472,13 +458,13 @@ fn dim_group(
         .on_click(move |_, window, cx| on_document(Command::SetDim(choice), window, cx))
         .child(div().text_xs().text_color(theme.text).child(name))
     });
-    group(SPOTLIGHT_DIM, Role::RadioGroup, after, theme).children(choices)
+    group(SPOTLIGHT_DIM, Role::RadioGroup, theme).children(choices)
 }
 
 const SPOTLIGHT_DIM: &str = "Dim";
 
-/// A labelled row of buttons, `after` another: then set off from it by a hairline.
-fn group(name: &'static str, role: Role, after: bool, theme: Theme) -> Stateful<Div> {
+/// A labelled row of buttons.
+fn group(name: &'static str, role: Role, theme: Theme) -> Stateful<Div> {
     div()
         .id(name)
         .role(role)
@@ -487,9 +473,6 @@ fn group(name: &'static str, role: Role, after: bool, theme: Theme) -> Stateful<
         .flex()
         .items_center()
         .gap(px(2.0))
-        .when(after, |group| {
-            group.pl(px(8.0)).border_l_1().border_color(theme.hairline)
-        })
 }
 
 /// A button in the strip, shown pressed while `checked`, reachable by Tab.
