@@ -161,10 +161,11 @@ impl Cropping {
         (self.draft != document.crop()).then_some(Command::SetCrop(self.draft))
     }
 
-    /// Whether a double-click at `at` applies the crop: one inside the area it keeps.
+    /// Whether a double-click at `at` on `document` applies the crop: one inside the area
+    /// the draft keeps.
     #[must_use]
-    pub fn applied_by_double_click(document: &Document, at: PointF) -> bool {
-        inside(document.kept_area(), at)
+    pub fn applied_by_double_click(self, document: &Document, at: PointF) -> bool {
+        inside(self.shown(document).kept_area(), at)
     }
 }
 
@@ -430,9 +431,16 @@ mod tests {
         assert_eq!(history.to_undo(), Some(Change::Shape(Tool::Rectangle)));
         let unchanged = Cropping::start(Tool::Arrow, history.document());
         assert_eq!(unchanged.applied(history.document()), None);
-        let kept = |x, y| Cropping::applied_by_double_click(history.document(), PointF { x, y });
-        assert!(kept(99.0, 49.0));
-        assert!(!kept(101.0, 5.0));
+        let kept = |cropping: Cropping, x, y| {
+            cropping.applied_by_double_click(history.document(), PointF { x, y })
+        };
+        assert!(kept(unchanged, 99.0, 49.0));
+        assert!(!kept(unchanged, 101.0, 5.0));
+        assert!(kept(cropping, 25.0, 5.0), "inside the draft");
+        assert!(
+            !kept(cropping, 5.0, 5.0),
+            "inside the image, outside the draft"
+        );
     }
 
     fn history() -> History {
