@@ -6,7 +6,7 @@ use crate::text::{Alignment, DEFAULT_TEXT_SIZE, Horizontal, Vertical};
 use crate::tool::Tool;
 
 /// A setting on the property strip, without a value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Setting {
     Color,
     StrokeWidth,
@@ -466,9 +466,41 @@ const HORIZONTAL_ALIGNMENT_CHOICES: [(Property, &str); 3] = [
     (aligned(Horizontal::Right, Vertical::Top), "Right"),
 ];
 
+/// How many of the strip's groups, `widths` in order, are shown in `room`, `gap` apart; the
+/// rest go behind a button `more` wide after them. All of them when they fit without it
+/// (D-161).
+#[must_use]
+pub fn groups_that_fit(widths: &[f32], room: f32, gap: f32, more: f32) -> usize {
+    let mut used = -gap;
+    let ends: Vec<f32> = widths
+        .iter()
+        .map(|width| {
+            used += gap + width;
+            used
+        })
+        .collect();
+    if ends.last().is_none_or(|&all| all <= room) {
+        return widths.len();
+    }
+    ends.iter()
+        .take_while(|&&end| end + gap + more <= room)
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn d161_the_strip_shows_the_groups_that_fit_before_its_more_button_and_all_when_all_fit() {
+        let widths = [100.0, 60.0, 80.0];
+        assert_eq!(groups_that_fit(&widths, 256.0, 8.0, 28.0), 3);
+        assert_eq!(groups_that_fit(&widths, 255.0, 8.0, 28.0), 2);
+        assert_eq!(groups_that_fit(&widths, 204.0, 8.0, 28.0), 2);
+        assert_eq!(groups_that_fit(&widths, 203.0, 8.0, 28.0), 1);
+        assert_eq!(groups_that_fit(&widths, 135.0, 8.0, 28.0), 0);
+        assert_eq!(groups_that_fit(&[], 0.0, 8.0, 28.0), 0);
+    }
 
     #[test]
     fn d130_a_typed_strength_or_text_size_is_clamped_into_its_range_and_shown_once_set() {

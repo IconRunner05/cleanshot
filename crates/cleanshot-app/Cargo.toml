@@ -37,6 +37,10 @@ harness = false
 name = "closing"
 harness = false
 
+[[test]]
+name = "caption_fit"
+harness = false
+
 [dependencies]
 cleanshot-core.workspace = true
 cleanshot-render.workspace = true

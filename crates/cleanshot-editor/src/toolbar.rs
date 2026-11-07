@@ -6,9 +6,9 @@ use cleanshot_core::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, App, AssetSource, BoxShadow, Div, ElementId, FocusHandle, Global, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, Rgba, Role, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Toggled, Window, anchored, deferred, div, hsla, point, px,
-    svg,
+    IntoElement, KeyDownEvent, ParentElement, Pixels, Rgba, Role, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, TextStyle, Toggled, Window, anchored, deferred, div, hsla,
+    point, px, svg,
 };
 
 use crate::menu::{MenuFocus, MenuRow, RowState};
@@ -336,8 +336,49 @@ where
         .id("toolbar")
         .role(Role::Toolbar)
         .aria_label("Tools")
-        .gap(px(4.0))
+        .gap(TOOL_GAP)
         .children(buttons)
+}
+
+/// The caption row's sizes, which the window's smallest width adds up (D-161).
+const BUTTON: Pixels = px(28.0);
+const MENU_BUTTON_WIDTH: Pixels = px(38.0);
+const TOOL_GAP: Pixels = px(4.0);
+const ICON: Pixels = px(16.0);
+const COPY: &str = "Copy";
+const COPY_TEXT: Pixels = px(13.0);
+const COPY_PADDING: Pixels = px(14.0);
+const COPY_GAP: Pixels = px(6.0);
+const ACTIONS_GAP: Pixels = px(8.0);
+const ACTIONS_END: Pixels = px(8.0);
+
+/// The toolbar's width: its buttons and the gaps between them (D-161).
+pub(crate) fn toolbar_width() -> Pixels {
+    ToolGroup::ALL
+        .map(|group| {
+            if group.tools().len() == 1 {
+                BUTTON
+            } else {
+                MENU_BUTTON_WIDTH
+            }
+        })
+        .into_iter()
+        .fold(-TOOL_GAP, |width, button| width + TOOL_GAP + button)
+}
+
+/// The width of Copy and "...", Copy's word measured in the font it is drawn in (D-161).
+pub(crate) fn actions_width(cx: &App) -> Pixels {
+    let text = cx.text_system();
+    let font = text.resolve_font(&TextStyle::default().font());
+    let word = COPY
+        .chars()
+        .map(|letter| {
+            text.advance(font, COPY_TEXT, letter)
+                .expect("the system font has Copy's letters")
+                .width
+        })
+        .fold(px(0.0), |word, letter| word + letter);
+    COPY_PADDING * 2.0 + ICON + COPY_GAP + word + ACTIONS_GAP + BUTTON + ACTIONS_END
 }
 
 /// Copy, the one primary button, as a pill, then "..." with `more` under it while `menus`
@@ -363,18 +404,18 @@ where
         .focusable()
         .tab_stop(true)
         .map(|element| with_tooltip(element, tooltip_text("Copy", Some("Ctrl+C")), theme))
-        .h(px(28.0))
-        .px(px(14.0))
-        .gap(px(6.0))
+        .h(BUTTON)
+        .px(COPY_PADDING)
+        .gap(COPY_GAP)
         .flex()
         .items_center()
         .rounded_full()
-        .text_size(px(13.0))
+        .text_size(COPY_TEXT)
         .map(|button| filled(button, Fill::Accent))
         .hover(|button| button.opacity(0.9))
         .on_click(move |_, window, cx| on_copy(KeyAction::Deliver(Output::Copy), window, cx))
         .child(icon_of("copy", ON_ACCENT))
-        .child("Copy");
+        .child(COPY);
     let focus = menus.open_on(ToolbarMenu::More);
     let open = focus.is_some();
     let on_click = on_menu.clone();
@@ -418,8 +459,8 @@ where
         .flex()
         .items_center()
         .flex_none()
-        .gap(px(8.0))
-        .pr(px(8.0))
+        .gap(ACTIONS_GAP)
+        .pr(ACTIONS_END)
         .child(copy)
         .child(div().relative().child(button).children(menu))
 }
@@ -465,7 +506,7 @@ fn group_button(
     let on_key = on_menu.clone();
     let on_click = on_menu.clone();
     let button = button
-        .w(px(38.0))
+        .w(MENU_BUTTON_WIDTH)
         .gap(px(1.0))
         .aria_expanded(open)
         .aria_description(format!(
@@ -511,7 +552,7 @@ fn group_button(
 fn button(id: impl Into<ElementId>) -> Stateful<Div> {
     div()
         .id(id)
-        .size(px(28.0))
+        .size(BUTTON)
         .flex()
         .items_center()
         .justify_center()
@@ -519,13 +560,21 @@ fn button(id: impl Into<ElementId>) -> Stateful<Div> {
 }
 
 pub(crate) fn divider(theme: Theme) -> Div {
-    div().w(px(1.0)).h(px(20.0)).mx(px(2.0)).bg(theme.hairline)
+    div()
+        .w(px(1.0))
+        .h(px(20.0))
+        .mx(DIVIDER_MARGIN)
+        .bg(theme.hairline)
 }
+
+const DIVIDER_MARGIN: Pixels = px(2.0);
+/// The divider's line and the margin each side of it.
+pub(crate) const DIVIDER_WIDTH: Pixels = px(1.0 + 2.0 * 2.0);
 
 pub(crate) fn icon_of(icon: &str, color: Rgba) -> impl IntoElement {
     svg()
         .path(format!("icons/{icon}.svg"))
-        .size(px(16.0))
+        .size(ICON)
         .text_color(color)
 }
 
