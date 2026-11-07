@@ -479,7 +479,7 @@ pub fn groups_that_fit(widths: &[f32], room: f32, gap: f32, more: f32) -> usize 
             used
         })
         .collect();
-    if ends.last().is_none_or(|&all| all <= room) {
+    if ends.last().is_none_or(|&all| all <= room) || room > 0.0 {
         return widths.len();
     }
     ends.iter()
