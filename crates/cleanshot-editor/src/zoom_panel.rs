@@ -347,21 +347,18 @@ pub(crate) fn scrollbars(viewport: Viewport, on_input: &OnPanelInput) -> Vec<Div
     };
     let bar = |axis: Axis| {
         let on_input = Rc::clone(on_input);
-        div()
-            .absolute()
-            .rounded(px(3.0))
-            .bg(hsla(0.0, 0.0, 0.0, 0.3))
-            .child(
-                canvas(
-                    |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
-                    move |_, hitbox, window, _| listen_on_bar(axis, hitbox, &on_input, window),
-                )
-                .size_full(),
+        div().rounded(px(3.0)).bg(hsla(0.0, 0.0, 0.0, 0.3)).child(
+            canvas(
+                |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                move |_, hitbox, window, _| listen_on_bar(axis, hitbox, &on_input, window),
             )
+            .size_full(),
+        )
     };
     let vertical =
         thumb(seen.y - area.y, seen.height, area.height, room.height).map(|(top, height)| {
             bar(Axis::Vertical)
+                .absolute()
                 .right(SCROLLBAR_INSET)
                 .top(top)
                 .w(SCROLLBAR)
@@ -370,6 +367,7 @@ pub(crate) fn scrollbars(viewport: Viewport, on_input: &OnPanelInput) -> Vec<Div
     let horizontal =
         thumb(seen.x - area.x, seen.width, area.width, room.width).map(|(left, width)| {
             bar(Axis::Horizontal)
+                .absolute()
                 .bottom(SCROLLBAR_INSET)
                 .left(left)
                 .h(SCROLLBAR)
