@@ -1,7 +1,7 @@
 //! D-161: at the editor's smallest width nothing in the caption row is clipped or overlaps,
-//! and the property strip's groups that do not fit open from "More properties". Run as for
-//! `accessibility`: GPUI owns the window's thread, and the checks run on a second thread that
-//! ends the process with the verdict.
+//! with Copy right after the property strip (D-162), and the property strip's groups that do
+//! not fit open from "More properties". Run as for `accessibility`: GPUI owns the window's
+//! thread, and the checks run on a second thread that ends the process with the verdict.
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -129,6 +129,13 @@ fn fits(controls: &[Element]) -> Result<(), String> {
         return Err(format!(
             "the strip {:?} runs under Copy {:?}",
             strip.bounds, copy.bounds
+        ));
+    }
+    // D-162: Copy follows the strip; the drag space, at least 40 px, comes after it.
+    if copy.bounds.left - strip.bounds.right >= 40 {
+        return Err(format!(
+            "Copy {:?} is not right after the strip {:?}",
+            copy.bounds, strip.bounds
         ));
     }
     let in_row = |control: &Element| {
