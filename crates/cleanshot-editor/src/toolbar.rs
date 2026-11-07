@@ -298,7 +298,6 @@ fn step_name(verb: &str, change: Change) -> String {
     let changed = match change {
         Change::Shape(tool) => tool_name(tool).to_lowercase(),
         Change::Crop => "crop".to_owned(),
-        Change::Frame => "image frame".to_owned(),
         Change::Dim => "spotlight dim".to_owned(),
     };
     format!("{verb} {changed}")
@@ -590,7 +589,6 @@ mod tests {
             "Redo speech bubble"
         );
         assert_eq!(step_name("Undo", Change::Crop), "Undo crop");
-        assert_eq!(step_name("Redo", Change::Frame), "Redo image frame");
         assert_eq!(step_name("Undo", Change::Dim), "Undo spotlight dim");
     }
 

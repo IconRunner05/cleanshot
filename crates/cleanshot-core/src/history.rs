@@ -1,8 +1,6 @@
 use std::mem;
 
-use crate::document::{
-    Document, Frame, PointF, RectF, Shape, ShapeEntry, ShapeId, SpotlightDim, Style,
-};
+use crate::document::{Document, PointF, RectF, Shape, ShapeEntry, ShapeId, SpotlightDim, Style};
 use crate::selection::inside;
 use crate::tool::Tool;
 
@@ -29,7 +27,6 @@ pub enum Command {
     },
     /// `None` exports the whole image (F-37).
     SetCrop(Option<RectF>),
-    SetFrame(Frame),
     SetDim(SpotlightDim),
 }
 
@@ -79,12 +76,11 @@ pub struct History {
 }
 
 /// What an edit changed, so the editor can name the step to undo or redo (D-116): a shape,
-/// by the tool that draws it, the crop, the image frame or the spotlight dim.
+/// by the tool that draws it, the crop or the spotlight dim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
     Shape(Tool),
     Crop,
-    Frame,
     Dim,
 }
 
@@ -96,7 +92,6 @@ enum Edit {
     Replace(ShapeEntry),
     Restack { id: ShapeId, index: usize },
     SetCrop(Option<RectF>),
-    SetFrame(Frame),
     SetDim(SpotlightDim),
 }
 
@@ -146,7 +141,6 @@ impl Cropping {
             | Command::Remove(_)
             | Command::Replace { .. }
             | Command::Restack { .. }
-            | Command::SetFrame(_)
             | Command::SetDim(_) => Ok(Some(command)),
         }
     }
@@ -234,7 +228,6 @@ impl History {
                 (change, Edit::Restack { id, index })
             }
             Command::SetCrop(crop) => (Change::Crop, Edit::SetCrop(crop)),
-            Command::SetFrame(frame) => (Change::Frame, Edit::SetFrame(frame)),
             Command::SetDim(dim) => (Change::Dim, Edit::SetDim(dim)),
         };
         let inverse = edit.apply(&mut self.document)?;
@@ -321,7 +314,6 @@ impl Edit {
                 }
                 Ok(Edit::SetCrop(mem::replace(&mut document.crop, crop)))
             }
-            Edit::SetFrame(frame) => Ok(Edit::SetFrame(mem::replace(&mut document.frame, frame))),
             Edit::SetDim(dim) => Ok(Edit::SetDim(mem::replace(&mut document.dim, dim))),
         }
     }
@@ -599,15 +591,10 @@ mod tests {
             (history.to_undo(), history.to_redo()),
             (rectangle, Some(Change::Crop))
         );
-        history
-            .apply(Command::SetFrame(Frame {
-                border: true,
-                shadow: false,
-            }))
-            .unwrap();
+        history.apply(Command::SetDim(SpotlightDim::Dark)).unwrap();
         assert_eq!(
             (history.to_undo(), history.to_redo()),
-            (Some(Change::Frame), None)
+            (Some(Change::Dim), None)
         );
         history.apply(Command::Remove(id)).unwrap();
         assert!(history.undo().unwrap());
@@ -763,22 +750,6 @@ mod tests {
         assert!(!history.document().contains(id));
         assert_eq!(history.redo(), Ok(true));
         assert!(history.document().contains(id));
-    }
-
-    #[test]
-    fn f44_a_new_document_has_no_frame_and_setting_one_is_an_edit_to_undo() {
-        let mut history = history();
-        assert_eq!(history.document().frame(), Frame::default());
-        let framed = Frame {
-            border: true,
-            shadow: true,
-        };
-        history.apply(Command::SetFrame(framed)).unwrap();
-        assert_eq!(history.document().frame(), framed);
-        assert_eq!(history.undo(), Ok(true));
-        assert_eq!(history.document().frame(), Frame::default());
-        assert_eq!(history.redo(), Ok(true));
-        assert_eq!(history.document().frame(), framed);
     }
 
     #[test]

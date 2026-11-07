@@ -10,7 +10,6 @@ use tiny_skia::{
 };
 
 use crate::border::draw_border;
-use crate::frame::framed;
 use crate::gamma::coverage_table;
 use crate::redact::redact;
 use crate::shadow::cast_shadow;
@@ -93,7 +92,6 @@ pub fn flatten(document: &Document, masks: &TextMasks) -> Result<Flattened, Erro
             .and_then(|bounds| pixmap.clone_rect(bounds))
             .ok_or(Error::CropOutsideImage(crop))?;
     }
-    let pixmap = framed(pixmap, document.frame())?;
     RgbaImage::new(pixmap.width(), pixmap.height(), straight(&pixmap))
         .map(Flattened)
         .map_err(Error::Output)
@@ -576,33 +574,6 @@ mod tests {
         assert_eq!((flat.width(), flat.height()), (2, 2));
         assert_eq!(pixel(&flat, 0, 0), pixel(&numbered(), 1, 1));
         assert_eq!(pixel(&flat, 1, 1), pixel(&numbered(), 2, 2));
-    }
-
-    #[test]
-    fn f44_the_frame_goes_around_the_cropped_image() {
-        let mut history = history(numbered());
-        let crop = RectF {
-            x: 1.0,
-            y: 1.0,
-            width: 2.0,
-            height: 2.0,
-        };
-        history.apply(Command::SetCrop(Some(crop))).unwrap();
-        history
-            .apply(Command::SetFrame(cleanshot_core::Frame {
-                border: true,
-                shadow: false,
-            }))
-            .unwrap();
-
-        let flat = flatten(history.document(), &TextMasks::default())
-            .unwrap()
-            .image()
-            .clone();
-        assert_eq!((flat.width(), flat.height()), (4, 4));
-        assert_eq!(pixel(&flat, 0, 0), [0, 0, 0, 51]);
-        assert_eq!(pixel(&flat, 1, 1), pixel(&numbered(), 1, 1));
-        assert_eq!(pixel(&flat, 2, 2), pixel(&numbered(), 2, 2));
     }
 
     #[test]

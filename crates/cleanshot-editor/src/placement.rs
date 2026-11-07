@@ -1,4 +1,4 @@
-use cleanshot_core::{Document, Frame, PointF, RectF, RgbaImage};
+use cleanshot_core::{Document, PointF, RectF, RgbaImage};
 use gpui::{Bounds, Pixels, Point, Size, point, px, size};
 
 /// Zoom stops between these scales, in screen pixels per image pixel (D-46).
@@ -156,24 +156,8 @@ impl Placement {
     }
 }
 
-/// `area`, in image pixels, with the room `frame` adds round it in an export (F-44), so a
-/// fitted image leaves its frame in view.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "a frame's margins are a few dozen pixels, exact in f32"
-)]
-pub(crate) fn framed(area: RectF, frame: Frame) -> RectF {
-    let margins = frame.margins();
-    RectF {
-        x: area.x - margins.left as f32,
-        y: area.y - margins.top as f32,
-        width: area.width + (margins.left + margins.right) as f32,
-        height: area.height + (margins.top + margins.bottom) as f32,
-    }
-}
-
 /// Where `document`'s image sits on a canvas of `room` until it is zoomed or panned: fitted
-/// to what the canvas shows, with its export frame (D-41, D-113, D-141).
+/// to what the canvas shows (D-41, D-113, D-141).
 pub(crate) fn fitted_placement(
     document: &Document,
     changing_crop: bool,
@@ -181,7 +165,7 @@ pub(crate) fn fitted_placement(
     scale_factor: f32,
 ) -> Placement {
     let shown = shown_area(document, changing_crop);
-    Placement::fitted(room, framed(shown, document.frame()), scale_factor)
+    Placement::fitted(room, shown, scale_factor)
 }
 
 /// The part of `document`'s image the canvas shows: what its crop keeps, or the whole image
@@ -406,41 +390,13 @@ mod tests {
     }
 
     #[test]
-    fn d141_a_fitted_image_fills_its_card_and_leaves_its_export_frame_in_view() {
+    fn d141_a_fitted_image_fills_its_card() {
         let image = image(1000, 600);
         let canvas = Bounds::new(point(px(0.0), px(0.0)), CANVAS);
         let area = all_of(&image);
-        let fitted = |frame| {
-            let placement = Placement::fitted(CANVAS, framed(area, frame), 1.0);
-            Fit::new(canvas, &image, area, placement, 1.0)
-        };
-        assert_eq!(fitted(Frame::default()).image_bounds, canvas);
-        let frame = Frame {
-            border: true,
-            shadow: true,
-        };
-        let fit = fitted(frame);
-        let margins = frame.margins();
-        let room = |side: u32| px(f32::from(u16::try_from(side).unwrap()) * fit.scale);
-        let image = fit.image_bounds;
-        let reach = Bounds::from_corners(
-            point(
-                image.left() - room(margins.left),
-                image.top() - room(margins.top),
-            ),
-            point(
-                image.right() + room(margins.right),
-                image.bottom() + room(margins.bottom),
-            ),
-        );
-        let device_pixel = px(0.5);
-        assert!(
-            reach.left() >= -device_pixel
-                && reach.top() >= -device_pixel
-                && reach.right() <= canvas.right() + device_pixel
-                && reach.bottom() <= canvas.bottom() + device_pixel,
-            "the frame reaches {reach:?} on a {canvas:?} card"
-        );
+        let placement = Placement::fitted(CANVAS, area, 1.0);
+        let fit = Fit::new(canvas, &image, area, placement, 1.0);
+        assert_eq!(fit.image_bounds, canvas);
     }
 
     #[test]
