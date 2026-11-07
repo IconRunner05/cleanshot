@@ -73,6 +73,8 @@ section exists.
 
 ### Changed
 
+- When the capture already fits the window at actual size, Fit is dimmed with the tooltip
+  "Already fits", and Actual size returns to the fitted view (D-167).
 - The editor has no Windows title bar: the tools and the property strip sit in its own top
   row with the minimise, maximise and close buttons, and the screenshot sits on a card
   below. Dragging the row's empty space moves the window, a double-click maximises it, and

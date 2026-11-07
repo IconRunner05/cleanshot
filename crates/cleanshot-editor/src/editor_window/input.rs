@@ -211,11 +211,12 @@ impl EditorView {
             KeyAction::ActualSize => {
                 let viewport = self.viewport(window);
                 let centre = point(viewport.room.width / 2.0, viewport.room.height / 2.0);
-                self.placement = Some(
+                // D-167: actual size that is also the fit is the fitted view, panel and all.
+                self.placement = (!viewport.fit_is_actual_size()).then(|| {
                     viewport
                         .placement
-                        .actual_size(centre, viewport.scale_factor),
-                );
+                        .actual_size(centre, viewport.scale_factor)
+                });
             }
             KeyAction::OpenSettings => {
                 if let Some(open) = settings_opener(cx) {

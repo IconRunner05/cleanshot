@@ -12,6 +12,7 @@ use gpui::{
 };
 
 use crate::Log;
+use crate::menu::RowState;
 use crate::placement::Placement;
 use crate::theme::{ACCENT, Theme};
 use crate::toolbar::panel;
@@ -83,6 +84,13 @@ impl Viewport {
                 -moved.y * (self.area.height * scale / f32::from(self.room.height)),
             ),
         }
+    }
+
+    /// Whether fitting would show the area at actual size, so Fit and Actual size zoom to the
+    /// same scale (D-167).
+    pub fn fit_is_actual_size(&self) -> bool {
+        let fitted = Placement::fitted(self.room, self.area, self.scale_factor);
+        fitted.scale.to_bits() == (1.0 / self.scale_factor).to_bits()
     }
 
     /// The zoom as the panel shows it: 100 is one image pixel on each device pixel.
@@ -187,18 +195,31 @@ pub(crate) fn zoom_panel(
                     "Zoom in".into(),
                     PanelInput::ZoomBy(ZOOM_STEP),
                 ))
-                .child(
-                    zoom(
-                        "fit",
-                        "Fit".to_owned(),
-                        "Fit to window".into(),
-                        tooltip_text("Fit to window", Some("Ctrl+0")),
-                        PanelInput::Fit,
-                    )
-                    .px(px(10.0))
-                    .bg(theme.hover),
-                ),
+                .child(fit_button(viewport, theme, on_input)),
         )
+}
+
+/// Fit, or while fitting would only show the image at actual size, Fit dimmed with a tooltip
+/// saying why (D-167).
+fn fit_button(viewport: Viewport, theme: Theme, on_input: &OnPanelInput) -> Stateful<Div> {
+    let fits = viewport.fit_is_actual_size();
+    let tip = if fits {
+        "Already fits".into()
+    } else {
+        tooltip_text("Fit to window", Some("Ctrl+0"))
+    };
+    let on_input = Rc::clone(on_input);
+    panel_button("fit", "Fit to window".into(), tip, theme)
+        .child("Fit")
+        .px(px(10.0))
+        .bg(theme.hover)
+        .map(|button| {
+            if fits {
+                button.text_color(RowState::Dimmed.ink(theme))
+            } else {
+                button.on_click(move |_, window, cx| on_input(PanelInput::Fit, window, cx))
+            }
+        })
 }
 
 fn panel_button(
@@ -404,6 +425,30 @@ mod tests {
             width: 4000.0,
             height: 3000.0,
         }
+    }
+
+    #[test]
+    fn d167_fit_is_actual_size_only_while_the_area_fits_at_one_image_pixel_per_device_pixel() {
+        let viewport = |width, height, scale_factor| Viewport {
+            area: RectF {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height,
+            },
+            placement: Placement {
+                corner: point(px(0.0), px(0.0)),
+                scale: 2.0,
+            },
+            room: ROOM,
+            scale_factor,
+        };
+        assert!(viewport(800.0, 600.0, 1.0).fit_is_actual_size());
+        assert!(viewport(320.0, 240.0, 1.0).fit_is_actual_size());
+        assert!(!viewport(801.0, 600.0, 1.0).fit_is_actual_size());
+        assert!(viewport(1100.0, 800.0, 1.5).fit_is_actual_size());
+        assert!(!viewport(1300.0, 900.0, 1.5).fit_is_actual_size());
+        assert!(!viewport(4000.0, 3000.0, 1.0).fit_is_actual_size());
     }
 
     fn zoomed_in() -> Viewport {
