@@ -1,0 +1,23 @@
+id: absolute-box-has-an-inset
+language: rust
+severity: error
+message: D-154 an absolute box with no inset sits after its in-flow siblings, not at a corner of its parent; give it top, left, right, bottom or inset in the same chain.
+rule:
+  pattern: $BOX.absolute()
+  not:
+    any:
+      - inside:
+          stopBy:
+            kind: arguments
+          kind: call_expression
+          has:
+            field: function
+            kind: field_expression
+            has:
+              field: field
+              regex: ^(top|left|right|bottom|inset)
+      - has:
+          stopBy:
+            kind: arguments
+          kind: field_identifier
+          regex: ^(top|left|right|bottom|inset)

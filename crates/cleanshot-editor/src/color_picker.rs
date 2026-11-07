@@ -392,12 +392,12 @@ impl Field {
             .rounded(px(8.0))
             .overflow_hidden()
             .bg(rgba(pure_hue))
-            .child(div().absolute().size_full().bg(linear_gradient(
+            .child(div().absolute().inset_0().bg(linear_gradient(
                 90.0,
                 linear_color_stop(white(), 0.0),
                 linear_color_stop(white().opacity(0.0), 1.0),
             )))
-            .child(div().absolute().size_full().bg(linear_gradient(
+            .child(div().absolute().inset_0().bg(linear_gradient(
                 180.0,
                 linear_color_stop(black().opacity(0.0), 0.0),
                 linear_color_stop(black(), 1.0),
