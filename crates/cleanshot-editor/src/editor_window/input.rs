@@ -1,6 +1,6 @@
 use cleanshot_core::{
-    Activity, BoxPress, Command, Cropping, Drag, History, KeyAction, Modifiers, PointF, Press,
-    Start, TextKey, Tool, action_for_key, shape_at, text_reopened_at,
+    Activity, BoxPress, Command, Drag, History, KeyAction, Modifiers, PointF, Press, Start,
+    TextKey, Tool, action_for_key, shape_at, text_reopened_at,
 };
 use gpui::{Context, KeyDownEvent, Window, point};
 
@@ -109,8 +109,9 @@ impl EditorView {
         // D-159: Enter after a press on the canvas is the canvas's, not a toolbar button's.
         window.focus(&self.focus, cx);
         if double_click
-            && self.cropping.is_some()
-            && Cropping::applied_by_double_click(&self.document, at)
+            && self
+                .cropping
+                .is_some_and(|cropping| cropping.applied_by_double_click(&self.document, at))
         {
             self.drag = None;
             self.act(KeyAction::ApplyCrop, window, cx);
