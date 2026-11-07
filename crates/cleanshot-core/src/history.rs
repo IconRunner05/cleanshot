@@ -140,7 +140,7 @@ impl Cropping {
             }
             Command::SetCrop(crop) => {
                 self.draft = crop;
-                Ok(None)
+                Ok(Some(Command::SetCrop(crop)))
             }
             Command::Add { .. }
             | Command::Remove(_)
