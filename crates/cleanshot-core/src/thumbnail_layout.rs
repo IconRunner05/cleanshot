@@ -54,13 +54,7 @@ impl ThumbnailStay {
     /// whole second, kept within the range: one press of the settings window's - or + (D-157).
     #[must_use]
     pub fn stepped(self, seconds: i32) -> Self {
-        let whole = (self.0 + 500) / 1000;
-        Self(
-            whole
-                .saturating_add_signed(seconds)
-                .saturating_mul(1000)
-                .clamp(Self::SHORTEST_MS, Self::LONGEST_MS),
-        )
+        Self(self.0.saturating_add_signed(seconds.min(0)).max(self.0))
     }
 }
 
