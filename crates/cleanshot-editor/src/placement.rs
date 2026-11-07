@@ -126,6 +126,27 @@ impl Placement {
         )
     }
 
+    /// Moved by `by` on the canvas along each axis on which `area`, in image pixels, runs
+    /// past a canvas of `room`, never further past an edge than it already is (F-39, D-160).
+    pub fn scrolled(self, by: Point<Pixels>, room: Size<Pixels>, area: RectF) -> Self {
+        let along = |corner: Pixels, by: Pixels, start: f32, length: f32, room: Pixels| {
+            let shown = px(length * self.scale);
+            if shown <= room {
+                return corner;
+            }
+            let first = px(-start * self.scale);
+            let last = room - shown + first;
+            (corner + by).clamp(last.min(corner), first.max(corner))
+        };
+        Self {
+            corner: point(
+                along(self.corner.x, by.x, area.x, area.width, room.width),
+                along(self.corner.y, by.y, area.y, area.height, room.height),
+            ),
+            ..self
+        }
+    }
+
     /// Moved by `offset` on the canvas (F-39).
     pub fn panned(self, offset: Point<Pixels>) -> Self {
         Self {
@@ -494,6 +515,37 @@ mod tests {
             fit.image_point(canvas.bottom_right()),
             PointF { x: 300.0, y: 150.0 }
         );
+    }
+
+    #[test]
+    fn d160_the_wheel_pans_only_where_the_image_runs_past_the_canvas_and_stops_at_its_edges() {
+        let room = size(px(800.0), px(400.0));
+        let area = RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 1600.0,
+            height: 300.0,
+        };
+        let zoomed = Placement {
+            corner: point(px(-400.0), px(50.0)),
+            scale: 1.0,
+        };
+        let scrolled = |by: (f32, f32)| {
+            zoomed
+                .scrolled(point(px(by.0), px(by.1)), room, area)
+                .corner
+        };
+        assert_eq!(scrolled((-100.0, -60.0)), point(px(-500.0), px(50.0)));
+        assert_eq!(scrolled((-1000.0, 0.0)), point(px(-800.0), px(50.0)));
+        assert_eq!(scrolled((1000.0, 0.0)), point(px(0.0), px(50.0)));
+        let past_the_edge = Placement {
+            corner: point(px(100.0), px(50.0)),
+            scale: 1.0,
+        };
+        let back = past_the_edge.scrolled(point(px(30.0), px(0.0)), room, area);
+        assert_eq!(back.corner, past_the_edge.corner);
+        let inward = past_the_edge.scrolled(point(px(-30.0), px(0.0)), room, area);
+        assert_eq!(inward.corner, point(px(70.0), px(50.0)));
     }
 
     #[test]

@@ -11,6 +11,8 @@ section exists.
 
 ### Added
 
+- When zoomed in, the wheel pans the image (Shift+wheel or the tilt wheel across), and the
+  scrollbars can be dragged (D-160).
 - The Crop tool has Apply and Cancel on the property strip: Enter or a double-click inside
   the crop applies it, Esc puts back the crop you started with, with nothing
   added to undo (D-159).

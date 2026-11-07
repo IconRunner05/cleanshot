@@ -4,9 +4,9 @@ use std::sync::Arc;
 use cleanshot_core::{PointF, RectF};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, BorderStyle, Bounds, Canvas, ContentMask, DispatchPhase, Div, Hitbox, HitboxBehavior,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, RenderImage, Role, SharedString, Size, Stateful,
+    App, Axis, BorderStyle, Bounds, Canvas, ContentMask, DispatchPhase, Div, Hitbox,
+    HitboxBehavior, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Point, RenderImage, Role, SharedString, Size, Stateful,
     StatefulInteractiveElement, Styled, Window, canvas, div, fill, hsla, point, px, quad, size,
     transparent_black,
 };
@@ -40,6 +40,13 @@ pub(crate) enum PanelInput {
     Grab(PointF),
     /// The pointer moved over this image point with its button down.
     Drag(PointF),
+    /// A press on the scrollbar along `axis`, at `at` in the window (D-160).
+    GrabBar {
+        axis: Axis,
+        at: Point<Pixels>,
+    },
+    /// The pointer moved to this window point with its button down.
+    DragBar(Point<Pixels>),
     Release,
 }
 
@@ -60,6 +67,22 @@ impl Viewport {
     /// The part of the area in view, in image pixels.
     pub fn in_view(&self) -> RectF {
         self.placement.shows(self.room, self.area)
+    }
+
+    /// The canvas offset that pans the view as far as a scrollbar's thumb `moved` along
+    /// `axis`, so the thumb stays under the pointer (D-160).
+    pub fn bar_pan(&self, axis: Axis, moved: Point<Pixels>) -> Point<Pixels> {
+        let scale = self.placement.scale;
+        match axis {
+            Axis::Horizontal => point(
+                -moved.x * (self.area.width * scale / f32::from(self.room.width)),
+                px(0.0),
+            ),
+            Axis::Vertical => point(
+                px(0.0),
+                -moved.y * (self.area.height * scale / f32::from(self.room.height)),
+            ),
+        }
     }
 
     /// The zoom as the panel shows it: 100 is one image pixel on each device pixel.
@@ -294,29 +317,73 @@ fn listen_on_minimap(
 }
 
 /// Thin bars on the card's right and bottom edges marking the part of the image in view, one
-/// for each direction the image runs past the canvas (D-145).
-pub(crate) fn scrollbars(viewport: Viewport) -> Vec<Div> {
+/// for each direction the image runs past the canvas (D-145); a drag on one pans that way
+/// (D-160).
+pub(crate) fn scrollbars(viewport: Viewport, on_input: &OnPanelInput) -> Vec<Div> {
     let (area, seen, room) = (viewport.area, viewport.in_view(), viewport.room);
     let thumb = |start: f32, seen: f32, whole: f32, length: Pixels| {
         (seen < whole).then(|| (length * (start / whole), length * (seen / whole)))
     };
-    let bar = || {
+    let bar = |axis: Axis| {
+        let on_input = Rc::clone(on_input);
         div()
             .absolute()
             .rounded(px(3.0))
             .bg(hsla(0.0, 0.0, 0.0, 0.3))
+            .child(
+                canvas(
+                    |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                    move |_, hitbox, window, _| listen_on_bar(axis, hitbox, &on_input, window),
+                )
+                .size_full(),
+            )
     };
-    let vertical = thumb(seen.y - area.y, seen.height, area.height, room.height)
-        .map(|(top, height)| bar().right(SCROLLBAR_INSET).top(top).w(SCROLLBAR).h(height));
+    let vertical =
+        thumb(seen.y - area.y, seen.height, area.height, room.height).map(|(top, height)| {
+            bar(Axis::Vertical)
+                .right(SCROLLBAR_INSET)
+                .top(top)
+                .w(SCROLLBAR)
+                .h(height)
+        });
     let horizontal =
         thumb(seen.x - area.x, seen.width, area.width, room.width).map(|(left, width)| {
-            bar()
+            bar(Axis::Horizontal)
                 .bottom(SCROLLBAR_INSET)
                 .left(left)
                 .h(SCROLLBAR)
                 .w(width)
         });
     vertical.into_iter().chain(horizontal).collect()
+}
+
+fn listen_on_bar(axis: Axis, hitbox: Hitbox, on_input: &OnPanelInput, window: &mut Window) {
+    let on_press = Rc::clone(on_input);
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble
+            && event.button == MouseButton::Left
+            && hitbox.is_hovered(window)
+        {
+            let grab = PanelInput::GrabBar {
+                axis,
+                at: event.position,
+            };
+            on_press(grab, window, cx);
+            cx.stop_propagation();
+        }
+    });
+    let on_move = Rc::clone(on_input);
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) {
+            on_move(PanelInput::DragBar(event.position), window, cx);
+        }
+    });
+    let on_release = Rc::clone(on_input);
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+            on_release(PanelInput::Release, window, cx);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -390,9 +457,33 @@ mod tests {
         assert_eq!((outside.x, outside.y), (0.0, 3000.0));
     }
 
+    fn bars(viewport: Viewport) -> Vec<Div> {
+        let ignored: OnPanelInput = Rc::new(|_, _, _| {});
+        scrollbars(viewport, &ignored)
+    }
+
+    #[test]
+    fn d160_a_scrollbar_drag_pans_so_the_thumb_stays_under_the_pointer() {
+        let viewport = zoomed_in();
+        let thumb_left = |viewport: &Viewport| {
+            let seen = viewport.in_view();
+            f32::from(ROOM.width) * (seen.x - viewport.area.x) / viewport.area.width
+        };
+        let before = thumb_left(&viewport);
+        let by = viewport.bar_pan(Axis::Horizontal, point(px(80.0), px(35.0)));
+        assert_eq!(by.y, px(0.0));
+        let dragged = Viewport {
+            placement: viewport.placement.scrolled(by, ROOM, viewport.area),
+            ..viewport
+        };
+        assert!((thumb_left(&dragged) - before - 80.0).abs() < 0.01);
+        let down = viewport.bar_pan(Axis::Vertical, point(px(9.0), px(-60.0)));
+        assert_eq!((down.x, down.y), (px(0.0), px(300.0)));
+    }
+
     #[test]
     fn d145_scrollbars_show_only_where_the_image_runs_past_the_canvas() {
-        assert_eq!(scrollbars(zoomed_in()).len(), 2);
+        assert_eq!(bars(zoomed_in()).len(), 2);
         let wide = Viewport {
             placement: Placement {
                 corner: point(px(-100.0), px(0.0)),
@@ -400,6 +491,6 @@ mod tests {
             },
             ..zoomed_in()
         };
-        assert_eq!(scrollbars(wide).len(), 1);
+        assert_eq!(bars(wide).len(), 1);
     }
 }

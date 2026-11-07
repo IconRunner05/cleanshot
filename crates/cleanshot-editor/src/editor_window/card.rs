@@ -7,7 +7,7 @@ use gpui::{
     Rgba, Role, StatefulInteractiveElement, Styled, Window, div, hsla, point, px,
 };
 
-use super::{EditorView, update_while_open};
+use super::{EditorView, Held, update_while_open};
 use crate::canvas::rgba;
 use crate::placement::{CARD_INSET, canvas_size, fitted_placement, framed, shown_area};
 use crate::theme::Theme;
@@ -56,7 +56,7 @@ impl EditorView {
                 view.zoom_input(input, window, cx);
             });
         });
-        scrollbars(viewport)
+        scrollbars(viewport, &on_input)
             .into_iter()
             .map(IntoElement::into_any_element)
             .chain([zoom_panel(
@@ -86,20 +86,38 @@ impl EditorView {
             PanelInput::ActualSize => self.act(KeyAction::ActualSize, window, cx),
             PanelInput::Fit => self.act(KeyAction::FitView, window, cx),
             PanelInput::Grab(at) => {
-                self.minimap_held = true;
+                self.held = Some(Held::Minimap);
                 self.placement = Some(viewport.placement.centred_on(at, viewport.room));
             }
             PanelInput::Drag(at) => {
-                if !self.minimap_held {
+                if self.held != Some(Held::Minimap) {
                     return;
                 }
                 self.placement = Some(viewport.placement.centred_on(at, viewport.room));
             }
+            PanelInput::GrabBar { axis, at } => {
+                self.held = Some(Held::Bar {
+                    axis,
+                    from: at,
+                    placement: viewport.placement,
+                });
+            }
+            PanelInput::DragBar(to) => {
+                let Some(Held::Bar {
+                    axis,
+                    from,
+                    placement,
+                }) = self.held
+                else {
+                    return;
+                };
+                let by = viewport.bar_pan(axis, to - from);
+                self.placement = Some(placement.scrolled(by, viewport.room, viewport.area));
+            }
             PanelInput::Release => {
-                if !self.minimap_held {
+                if self.held.take().is_none() {
                     return;
                 }
-                self.minimap_held = false;
             }
         }
         cx.notify();

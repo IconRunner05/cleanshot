@@ -64,6 +64,12 @@ pub(crate) enum Pointer {
         reach: f32,
         position: Point<Pixels>,
     },
+    /// The wheel over the canvas without Ctrl: move `placement` by `by`, down or, with Shift
+    /// or the tilt wheel, across (F-39, D-160).
+    Scroll {
+        by: Point<Pixels>,
+        placement: Placement,
+    },
     /// Ctrl+wheel over the canvas: scale `placement` by `factor` about `around` (F-39).
     Zoom {
         factor: f32,
@@ -302,21 +308,26 @@ fn listen_for_pointer(
     });
     let on_zoom = Rc::clone(on_pointer);
     window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
-        if phase == DispatchPhase::Bubble
-            && event.modifiers.control
-            && zoom_hitbox.is_hovered(window)
-        {
-            let lines = match event.delta {
-                ScrollDelta::Lines(lines) => lines.y,
-                ScrollDelta::Pixels(pixels) => f32::from(pixels.y) / PIXELS_PER_WHEEL_LINE,
-            };
-            let zoom = Pointer::Zoom {
-                factor: ZOOM_PER_WHEEL_LINE.powf(lines),
+        if phase != DispatchPhase::Bubble || !zoom_hitbox.is_hovered(window) {
+            return;
+        }
+        let by = match event.delta {
+            ScrollDelta::Lines(lines) => point(
+                px(lines.x * PIXELS_PER_WHEEL_LINE),
+                px(lines.y * PIXELS_PER_WHEEL_LINE),
+            ),
+            ScrollDelta::Pixels(pixels) => pixels,
+        };
+        let wheeled = if event.modifiers.control {
+            Pointer::Zoom {
+                factor: ZOOM_PER_WHEEL_LINE.powf(f32::from(by.y) / PIXELS_PER_WHEEL_LINE),
                 around: event.position - canvas_origin,
                 placement,
-            };
-            on_zoom(zoom, window, cx);
-        }
+            }
+        } else {
+            Pointer::Scroll { by, placement }
+        };
+        on_zoom(wheeled, window, cx);
     });
 }
 

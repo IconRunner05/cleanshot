@@ -16,8 +16,8 @@ use cleanshot_core::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement, IntoElement,
-    KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role, SharedString,
+    App, AppContext, Axis, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement,
+    IntoElement, KeyUpEvent, ParentElement, Pixels, Point, Render, RenderImage, Role, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions, WeakEntity, Window,
     WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
@@ -104,6 +104,18 @@ impl Outputs {
     }
 }
 
+/// What a press held on the zoom controls moves (D-145, D-160).
+#[derive(Clone, Copy, PartialEq)]
+enum Held {
+    Minimap,
+    /// A scrollbar's thumb, pressed at `from` in the window with the image at `placement`.
+    Bar {
+        axis: Axis,
+        from: Point<Pixels>,
+        placement: Placement,
+    },
+}
+
 /// A Space-drag in progress: where it started and where the image was then.
 #[derive(Clone, Copy)]
 struct Pan {
@@ -138,8 +150,9 @@ struct EditorView {
     placement: Option<Placement>,
     /// The capture's average colour, which glows round the image card (D-146).
     glow: Color,
-    /// While a press on the minimap is held, its drags pan the view (D-145).
-    minimap_held: bool,
+    /// While a press on the minimap or a scrollbar is held, its drags pan the view (D-145,
+    /// D-160).
+    held: Option<Held>,
     /// After the picker's "From image", the colour setting the next press on the screenshot
     /// sets (D-147).
     sampling: Option<ColorValue>,
@@ -196,7 +209,7 @@ impl EditorView {
             log,
             shift: false,
             placement: None,
-            minimap_held: false,
+            held: None,
             sampling: None,
             space_held: false,
             pan: None,

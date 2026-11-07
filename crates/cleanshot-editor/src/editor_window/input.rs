@@ -73,6 +73,13 @@ impl EditorView {
                 around,
                 placement,
             } => self.placement = Some(placement.zoomed(factor, around)),
+            Pointer::Scroll { by, placement } => {
+                let viewport = self.viewport(window);
+                let scrolled = placement.scrolled(by, viewport.room, viewport.area);
+                if scrolled != placement {
+                    self.placement = Some(scrolled);
+                }
+            }
             Pointer::Menu {
                 at,
                 reach,
