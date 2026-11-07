@@ -11,6 +11,9 @@ section exists.
 
 ### Added
 
+- The Crop tool has Apply and Cancel on the property strip: Enter or a double-click inside
+  the crop applies it, Esc puts back the crop you started with, with nothing
+  added to undo (D-159).
 - Settings sets how long the thumbnail stays after Copy or Save, from 1 to 60 seconds,
   with - and + (D-157).
 - The editor remembers how each tool last drew (colour, width, fill, shadow, border, text

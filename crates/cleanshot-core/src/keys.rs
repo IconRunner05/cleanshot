@@ -31,6 +31,12 @@ pub enum KeyAction {
     Text(TextKey),
     /// Ctrl+W: the window closes as its caption's close button closes it (D-136).
     CloseWindow,
+    /// Enter with the Crop tool, or its strip's Apply: keep the crop and go back to the tool
+    /// picked before Crop (F-37, D-159).
+    ApplyCrop,
+    /// Esc with the Crop tool, or its strip's Cancel: put back the crop the tool found and go
+    /// back to the tool picked before Crop (F-37, D-159).
+    CancelCrop,
 }
 
 /// What a key does to the text box being typed into. Characters do not come through here: the
@@ -75,6 +81,8 @@ pub enum Activity {
     Composing,
     /// The Save As dialog is open, and its answer is still to come (F-22).
     SavingAs,
+    /// The Crop tool is picked, with no drag held (D-159).
+    Cropping,
 }
 
 /// The editor's key map. `key` is the key's name as the editor's toolkit gives it: one
@@ -86,10 +94,17 @@ pub fn action_for_key(key: &str, modifiers: Modifiers, activity: Activity) -> Op
         return None;
     }
     match activity {
-        Activity::Idle | Activity::EditingText if closes_window(key, modifiers) => {
+        Activity::Idle | Activity::Cropping | Activity::EditingText
+            if closes_window(key, modifiers) =>
+        {
             Some(KeyAction::CloseWindow)
         }
         Activity::Idle => idle_action(key, modifiers),
+        Activity::Cropping => match key {
+            "enter" if !modifiers.ctrl && !modifiers.shift => Some(KeyAction::ApplyCrop),
+            "escape" if !modifiers.ctrl && !modifiers.shift => Some(KeyAction::CancelCrop),
+            _ => idle_action(key, modifiers),
+        },
         Activity::EditingText => text_key(key, modifiers).map(KeyAction::Text),
         // D-44: one drag stays one edit. F-34: every key during a composition is the IME's.
         // F-22: a second Save As would drop the first one's answer.
@@ -186,6 +201,25 @@ mod tests {
         win: false,
     };
     const CTRL: Modifiers = Modifiers { ctrl: true, ..NONE };
+
+    #[test]
+    fn d159_enter_applies_and_esc_cancels_a_crop_and_every_other_key_means_what_it_did() {
+        let cropping = |key, modifiers| action_for_key(key, modifiers, Activity::Cropping);
+        assert_eq!(cropping("enter", NONE), Some(KeyAction::ApplyCrop));
+        assert_eq!(cropping("escape", NONE), Some(KeyAction::CancelCrop));
+        for (key, modifiers) in [("r", NONE), ("z", CTRL), ("w", CTRL), ("delete", NONE)] {
+            assert_eq!(
+                cropping(key, modifiers),
+                action_for_key(key, modifiers, Activity::Idle),
+                "{key}"
+            );
+        }
+        assert_eq!(action_for_key("enter", NONE, Activity::Idle), None);
+        assert_eq!(
+            action_for_key("escape", NONE, Activity::Idle),
+            Some(KeyAction::BackToSelect)
+        );
+    }
 
     #[test]
     fn d136_ctrl_w_closes_the_window_unless_a_drag_a_composition_or_save_as_holds_the_keys() {

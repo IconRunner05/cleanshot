@@ -1,6 +1,6 @@
 use cleanshot_core::{
-    Activity, BoxPress, Command, Drag, History, KeyAction, Modifiers, PointF, Press, Start,
-    TextKey, Tool, action_for_key, shape_at, text_reopened_at,
+    Activity, BoxPress, Command, Cropping, Drag, History, KeyAction, Modifiers, PointF, Press,
+    Start, TextKey, Tool, action_for_key, shape_at, text_reopened_at,
 };
 use gpui::{Context, KeyDownEvent, Window, point};
 
@@ -34,35 +34,7 @@ impl EditorView {
                 reach,
                 double_click,
                 ..
-            } => {
-                self.notice = None;
-                if let Some(text_box) = &mut self.text_box {
-                    match text_box.press(at, reach, window) {
-                        BoxPress::PlaceCaret | BoxPress::Ignore => {
-                            cx.notify();
-                            return;
-                        }
-                        BoxPress::Commit => self.close_text_box(window),
-                    }
-                }
-                if double_click && let Some(origin) = text_reopened_at(&self.document, at, reach) {
-                    self.selected = None;
-                    self.drag = None;
-                    self.open_text_box(origin);
-                    cx.notify();
-                    return;
-                }
-                let look = self.looks.look(self.tool);
-                let Press { selected, start } =
-                    Drag::press(&self.document, self.tool, look, self.selected, at, reach);
-                self.selected = selected;
-                self.drag = None;
-                match start {
-                    Some(Start::Drag(drag)) => self.drag = Some(drag),
-                    Some(Start::Type(origin)) => self.open_text_box(origin),
-                    None => {}
-                }
-            }
+            } => self.press(at, reach, double_click, window, cx),
             Pointer::Move { position, .. } if self.pan.is_some() => {
                 self.placement = self
                     .pan
@@ -117,6 +89,54 @@ impl EditorView {
         cx.notify();
     }
 
+    /// A press on the screenshot, past the colour sampler and Space's pan.
+    fn press(
+        &mut self,
+        at: PointF,
+        reach: f32,
+        double_click: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice = None;
+        // D-159: Enter after a press on the canvas is the canvas's, not a toolbar button's.
+        window.focus(&self.focus, cx);
+        if double_click
+            && self.cropping.is_some()
+            && Cropping::applied_by_double_click(&self.document, at)
+        {
+            self.drag = None;
+            self.act(KeyAction::ApplyCrop, window, cx);
+            return;
+        }
+        if let Some(text_box) = &mut self.text_box {
+            match text_box.press(at, reach, window) {
+                BoxPress::PlaceCaret | BoxPress::Ignore => {
+                    cx.notify();
+                    return;
+                }
+                BoxPress::Commit => self.close_text_box(window),
+            }
+        }
+        if double_click && let Some(origin) = text_reopened_at(&self.document, at, reach) {
+            self.selected = None;
+            self.drag = None;
+            self.open_text_box(origin);
+            cx.notify();
+            return;
+        }
+        let look = self.looks.look(self.tool);
+        let Press { selected, start } =
+            Drag::press(&self.document, self.tool, look, self.selected, at, reach);
+        self.selected = selected;
+        self.drag = None;
+        match start {
+            Some(Start::Drag(drag)) => self.drag = Some(drag),
+            Some(Start::Type(origin)) => self.open_text_box(origin),
+            None => {}
+        }
+    }
+
     /// D-147: the press after the picker's "From image" sets the colour under it, and does
     /// nothing else.
     fn sample(&mut self, at: PointF, window: &mut Window, cx: &mut Context<Self>) {
@@ -145,11 +165,16 @@ impl EditorView {
             (Some(_), _, _) => Activity::SavingAs,
             (None, Some(text_box), _) => text_box.edit().activity(),
             (None, None, Some(_)) => Activity::Dragging,
+            (None, None, None) if self.cropping.is_some() => Activity::Cropping,
             (None, None, None) => Activity::Idle,
         };
         let Some(action) = action_for_key(&event.keystroke.key, modifiers, activity) else {
             return;
         };
+        // D-159: Enter on a focused button presses that button when the key comes up.
+        if action == KeyAction::ApplyCrop && !self.focus.is_focused(window) {
+            return;
+        }
         self.act(action, window, cx);
     }
 
@@ -195,6 +220,16 @@ impl EditorView {
             KeyAction::Deliver(output) => self.deliver(output),
             KeyAction::SaveAs => self.save_as(window, cx),
             KeyAction::CloseWindow => window.remove_window(),
+            KeyAction::ApplyCrop => {
+                if let Some(cropping) = self.cropping {
+                    self.pick_tool(cropping.back_to(), window, cx);
+                }
+            }
+            KeyAction::CancelCrop => {
+                if let Some(cropping) = self.cropping.take() {
+                    self.pick_tool(cropping.back_to(), window, cx);
+                }
+            }
             KeyAction::Text(TextKey::Commit) => self.close_text_box(window),
             KeyAction::Text(key) => {
                 if let Some(text_box) = &mut self.text_box {

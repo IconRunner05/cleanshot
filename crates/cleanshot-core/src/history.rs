@@ -1,6 +1,9 @@
 use std::mem;
 
-use crate::document::{Document, Frame, RectF, Shape, ShapeEntry, ShapeId, SpotlightDim, Style};
+use crate::document::{
+    Document, Frame, PointF, RectF, Shape, ShapeEntry, ShapeId, SpotlightDim, Style,
+};
+use crate::selection::inside;
 use crate::tool::Tool;
 
 /// One edit to a document (F-38: every edit is a command).
@@ -95,6 +98,80 @@ enum Edit {
     SetCrop(Option<RectF>),
     SetFrame(Frame),
     SetDim(SpotlightDim),
+}
+
+/// The Crop tool at work: the tool it was picked from, which Apply and Cancel go back to, and
+/// the crop being drawn, a draft kept out of the history until Apply (F-37, D-159).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cropping {
+    back_to: Tool,
+    draft: Option<RectF>,
+}
+
+impl Cropping {
+    /// The Crop tool picked from `back_to` on `document`, its draft the document's crop.
+    #[must_use]
+    pub fn start(back_to: Tool, document: &Document) -> Self {
+        Self {
+            back_to,
+            draft: document.crop(),
+        }
+    }
+
+    /// The tool Apply and Cancel pick.
+    #[must_use]
+    pub fn back_to(self) -> Tool {
+        self.back_to
+    }
+
+    /// Takes a crop `command` into the draft, or hands any other back for the history.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::CropOutsideImage`] for a crop the history would refuse on `document`.
+    pub fn take(
+        &mut self,
+        command: Command,
+        document: &Document,
+    ) -> Result<Option<Command>, CommandError> {
+        match command {
+            Command::SetCrop(Some(rect)) if !inside_image(rect, document) => {
+                Err(CommandError::CropOutsideImage(rect))
+            }
+            Command::SetCrop(crop) => {
+                self.draft = crop;
+                Ok(None)
+            }
+            Command::Add { .. }
+            | Command::Remove(_)
+            | Command::Replace { .. }
+            | Command::Restack { .. }
+            | Command::SetFrame(_)
+            | Command::SetDim(_) => Ok(Some(command)),
+        }
+    }
+
+    /// `document` as the Crop tool shows it, and Copy and Save take it: with the draft crop.
+    #[must_use]
+    pub fn shown(self, document: &Document) -> Document {
+        Document {
+            crop: self.draft,
+            ..document.clone()
+        }
+    }
+
+    /// The one edit Apply makes to `document`: the draft crop, or `None` when it is the
+    /// document's crop already.
+    #[must_use]
+    pub fn applied(self, document: &Document) -> Option<Command> {
+        (self.draft != document.crop()).then_some(Command::SetCrop(self.draft))
+    }
+
+    /// Whether a double-click at `at` applies the crop: one inside the area it keeps.
+    #[must_use]
+    pub fn applied_by_double_click(document: &Document, at: PointF) -> bool {
+        inside(document.kept_area(), at)
+    }
 }
 
 impl History {
@@ -277,6 +354,94 @@ mod tests {
 
     use super::*;
     use crate::document::{Color, Fill, RgbaImage};
+
+    /// The editor's way with a command while the Crop tool is picked.
+    fn cropping_apply(history: &mut History, cropping: &mut Cropping, command: Command) {
+        if let Some(command) = cropping.take(command, history.document()).unwrap() {
+            history.apply(command).unwrap();
+        }
+    }
+
+    fn crop(x: f32) -> RectF {
+        RectF {
+            x,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }
+    }
+
+    #[test]
+    fn d159_a_crop_drawn_with_the_crop_tool_stays_out_of_undo_and_redo_until_applied() {
+        let mut history = history();
+        add(&mut history, rect(0.0));
+        add(&mut history, rect(10.0));
+        assert!(history.undo().unwrap());
+        let steps = |history: &History| (history.to_undo(), history.to_redo());
+        let before = steps(&history);
+        let mut cropping = Cropping::start(Tool::Pen, history.document());
+        cropping_apply(
+            &mut history,
+            &mut cropping,
+            Command::SetCrop(Some(crop(0.0))),
+        );
+        cropping_apply(
+            &mut history,
+            &mut cropping,
+            Command::SetCrop(Some(crop(20.0))),
+        );
+        assert_eq!(steps(&history), before);
+        assert_eq!(history.document().crop(), None);
+        assert_eq!(cropping.shown(history.document()).crop(), Some(crop(20.0)));
+        assert_eq!(cropping.back_to(), Tool::Pen);
+        let outside = Command::SetCrop(Some(crop(95.0)));
+        assert!(cropping.take(outside, history.document()).is_err());
+    }
+
+    #[test]
+    fn d159_an_edit_made_while_the_crop_tool_is_picked_survives_a_cancel() {
+        let mut history = history();
+        let id = add(&mut history, rect(0.0));
+        let mut cropping = Cropping::start(Tool::Select, history.document());
+        cropping_apply(
+            &mut history,
+            &mut cropping,
+            Command::SetCrop(Some(crop(0.0))),
+        );
+        cropping_apply(&mut history, &mut cropping, Command::Remove(id));
+        assert_eq!(history.document().shapes, []);
+        assert_eq!(history.to_undo(), Some(Change::Shape(Tool::Rectangle)));
+        assert_eq!(history.document().crop(), None);
+    }
+
+    #[test]
+    fn d159_apply_is_exactly_one_step_to_undo() {
+        let mut history = history();
+        add(&mut history, rect(0.0));
+        let mut cropping = Cropping::start(Tool::Arrow, history.document());
+        cropping_apply(
+            &mut history,
+            &mut cropping,
+            Command::SetCrop(Some(crop(0.0))),
+        );
+        cropping_apply(
+            &mut history,
+            &mut cropping,
+            Command::SetCrop(Some(crop(20.0))),
+        );
+        history
+            .apply(cropping.applied(history.document()).unwrap())
+            .unwrap();
+        assert_eq!(history.document().crop(), Some(crop(20.0)));
+        assert!(history.undo().unwrap());
+        assert_eq!(history.document().crop(), None);
+        assert_eq!(history.to_undo(), Some(Change::Shape(Tool::Rectangle)));
+        let unchanged = Cropping::start(Tool::Arrow, history.document());
+        assert_eq!(unchanged.applied(history.document()), None);
+        let kept = |x, y| Cropping::applied_by_double_click(history.document(), PointF { x, y });
+        assert!(kept(99.0, 49.0));
+        assert!(!kept(101.0, 5.0));
+    }
 
     fn history() -> History {
         let base = RgbaImage::new(100, 50, vec![0; 100 * 50 * 4]).unwrap();

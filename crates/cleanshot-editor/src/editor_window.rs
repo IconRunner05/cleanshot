@@ -9,9 +9,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cleanshot_core::{
-    Color, ColorValue, Command, CommandError, Delivered, DeliveryError, Document, Drag, History,
-    KeyAction, Looks, Monitor, Output, PointF, Property, PropertyError, Restack, RgbaImage,
-    ShapeId, TextBlockError, TextMasks, TextOrigin, Tool, delivery_notice, save_as_notice,
+    Color, ColorValue, Command, CommandError, Cropping, Delivered, DeliveryError, Document, Drag,
+    History, KeyAction, Looks, Monitor, Output, PointF, Property, PropertyError, Restack,
+    RgbaImage, ShapeId, TextBlockError, TextMasks, TextOrigin, Tool, delivery_notice,
+    save_as_notice,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -27,7 +28,7 @@ use crate::caption::caption_row;
 use crate::placement::{MIN_WINDOW, Placement, opening_size};
 use crate::settings_window::settings_opener;
 use crate::shape_menu::ShapeMenu;
-use crate::strip::property_strip;
+use crate::strip::{crop_strip, property_strip};
 use crate::text::{line_width, register_inter};
 use crate::text_box::TextBox;
 use crate::theme::{Theme, WindowSurface, window_surface};
@@ -114,10 +115,13 @@ struct EditorView {
     history: History,
     /// What the window opened on; kept until it closes (D-142).
     surface: WindowSurface,
-    /// The history's document as last drawn; renewed after each edit.
+    /// The history's document as last drawn, with the Crop tool's draft crop; renewed after
+    /// each edit.
     document: Rc<Document>,
     base: Arc<RenderImage>,
     tool: Tool,
+    /// Set while the Crop tool is picked, and only then (D-159).
+    cropping: Option<Cropping>,
     selected: Option<ShapeId>,
     drag: Option<Drag>,
     text_box: Option<TextBox>,
@@ -180,6 +184,7 @@ impl EditorView {
             document: Rc::new(document.clone()),
             history: History::new(document),
             tool: Tool::Select,
+            cropping: None,
             selected: None,
             drag: None,
             text_box: None,
@@ -207,7 +212,15 @@ impl EditorView {
     fn apply(&mut self, command: Command) {
         // D-113: a new crop is shown fitted, whatever the zoom was.
         let refit = matches!(command, Command::SetCrop(_));
-        match self.history.apply(command) {
+        let for_history = match &mut self.cropping {
+            Some(cropping) => cropping.take(command, self.history.document()),
+            None => Ok(Some(command)),
+        };
+        let applied = for_history.and_then(|command| match command {
+            Some(command) => self.history.apply(command),
+            None => Ok(()),
+        });
+        match applied {
             Ok(()) => {
                 if refit {
                     self.placement = None;
@@ -257,7 +270,7 @@ impl EditorView {
 
     fn deliver(&mut self, output: Output) {
         if let Some(outputs) = &self.outputs {
-            let delivered = (outputs.deliver)(output, self.history.document());
+            let delivered = (outputs.deliver)(output, &self.document);
             self.notice = Some(delivery_notice(&delivered).into());
         }
     }
@@ -294,7 +307,7 @@ impl EditorView {
         let Some(outputs) = &self.outputs else {
             return;
         };
-        let document = self.history.document();
+        let document = &self.document;
         if let Some(notice) = save_as_notice(chosen, |path| (outputs.save_to)(path, document)) {
             self.notice = Some(notice.into());
             cx.notify();
@@ -312,7 +325,18 @@ impl EditorView {
     /// Makes `tool` the current tool, shown on its group's button, any open menu closed
     /// (D-143).
     fn pick_tool(&mut self, tool: Tool, window: &mut Window, cx: &mut App) {
+        // D-159: leaving the Crop tool applies its crop.
+        if tool != Tool::Crop
+            && let Some(cropping) = self.cropping.take()
+            && let Some(command) = cropping.applied(self.history.document())
+        {
+            self.apply(command);
+        }
+        if tool == Tool::Crop && self.cropping.is_none() {
+            self.cropping = Some(Cropping::start(self.tool, self.history.document()));
+        }
         self.tool = tool;
+        self.refresh();
         show_tool(tool, cx);
         self.toolbar_menus.close(window, cx);
     }
@@ -327,7 +351,11 @@ impl EditorView {
     }
 
     fn refresh(&mut self) {
-        self.document = Rc::new(self.history.document().clone());
+        let history = self.history.document();
+        self.document = Rc::new(match self.cropping {
+            Some(cropping) => cropping.shown(history),
+            None => history.clone(),
+        });
         let document = &self.document;
         self.selected = self.selected.filter(|id| document.contains(*id));
         self.menu = self.menu.take().filter(|menu| document.contains(menu.id));
@@ -435,8 +463,14 @@ impl EditorView {
     }
 
     /// The property strip for what the next strip change would restyle, the spotlight dim while
-    /// a spotlight is picked, and the frame toggles.
+    /// a spotlight is picked, and the frame toggles; or the Crop tool's Apply and Cancel.
     fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> impl IntoElement + use<> {
+        if self.cropping.is_some() {
+            let actor = view.clone();
+            return crop_strip(theme, move |action, window: &mut Window, cx: &mut App| {
+                update_while_open(&actor, cx, |view, cx| view.act(action, window, cx));
+            });
+        }
         let setter = view.clone();
         let on_set = move |property, window: &mut Window, cx: &mut App| {
             update_while_open(&setter, cx, |view, cx| {

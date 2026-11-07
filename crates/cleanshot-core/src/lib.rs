@@ -46,7 +46,7 @@ pub use document::{
 };
 pub use drag::{Drag, Press, Start, text_reopened_at};
 pub use drawing::{smoothed_pen, snapped_to_45_degrees, squared};
-pub use history::{Change, Command, CommandError, History, Restack};
+pub use history::{Change, Command, CommandError, Cropping, History, Restack};
 pub use keys::{Activity, KeyAction, LineStep, TextKey, action_for_key, closes_window};
 pub use look::{Look, Property, PropertyError};
 pub use looks::Looks;

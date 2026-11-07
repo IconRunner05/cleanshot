@@ -1,6 +1,6 @@
 use cleanshot_core::{
-    Alignment, ColorValue, Command, Document, Fill, Frame, Horizontal, Look, Property, Setting,
-    SpotlightDim, Tool, TypedValue, Vertical, Warning,
+    Alignment, ColorValue, Command, Document, Fill, Frame, Horizontal, KeyAction, Look, Property,
+    Setting, SpotlightDim, Tool, TypedValue, Vertical, Warning,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -62,6 +62,52 @@ pub(crate) fn property_strip(
                 )
             }))
     };
+    strip_row()
+        .children(groups)
+        .children(dim.map(|dim| dim_group(dim, !own.is_empty(), theme, on_document)))
+        .child(last)
+}
+
+/// The Crop tool's strip: Apply, then Cancel, each calling `on_action` with its action (D-159).
+pub(crate) fn crop_strip(
+    theme: Theme,
+    on_action: impl Fn(KeyAction, &mut Window, &mut App) + Clone + 'static,
+) -> Stateful<Div> {
+    let buttons = [
+        (KeyAction::ApplyCrop, "Apply", "Enter"),
+        (KeyAction::CancelCrop, "Cancel", "Esc"),
+    ]
+    .map(|(action, name, key)| {
+        let on_action = on_action.clone();
+        div()
+            .id(name)
+            .focusable()
+            .tab_stop(true)
+            .role(Role::Button)
+            .aria_label(name)
+            .aria_keyshortcuts(key)
+            .map(|button| with_tooltip(button, tooltip_text(name, Some(key)), theme))
+            .focus_visible(|button| button.border_2().border_color(ACCENT))
+            .h(px(28.0))
+            .px(px(10.0))
+            .flex()
+            .items_center()
+            .rounded(px(7.0))
+            .hover(move |button| button.bg(theme.hover))
+            .on_click(move |_, window, cx| on_action(action, window, cx))
+            .child(div().text_xs().text_color(theme.text).child(name))
+    });
+    strip_row().child(
+        group(CROP, Role::Group, false, theme)
+            .child(group_label(CROP, theme))
+            .children(buttons),
+    )
+}
+
+const CROP: &str = "Crop";
+
+/// The strip's row, named for UI Automation.
+fn strip_row() -> Stateful<Div> {
     div()
         .flex()
         .items_center()
@@ -70,9 +116,6 @@ pub(crate) fn property_strip(
         .role(Role::Toolbar)
         .aria_label("Properties")
         .gap(px(8.0))
-        .children(groups)
-        .children(dim.map(|dim| dim_group(dim, !own.is_empty(), theme, on_document)))
-        .child(last)
 }
 
 /// Whether `setting` sits in the Shape group, which takes the image frame's place (D-131).
