@@ -1,0 +1,15 @@
+[package]
+name = "cleanshot-fieldtest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+# One manifest for the probe and cleanshot.exe, so the probe loads the same comctl32.
+build = "../cleanshot-app/build.rs"
+
+[dependencies]
+cleanshot-editor = { workspace = true, features = ["field-test"] }
+cleanshot-win = { workspace = true, features = ["field-test"] }
+
+[lints]
+workspace = true

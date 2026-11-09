@@ -1,0 +1,456 @@
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use cleanshot_core::thumbnail_layout::{
+    INSET, ThumbnailButton, button_at, buttons, centred, left_after, place, slid, window_size,
+};
+use cleanshot_core::{Rect, RgbaImage, saving_off_notice};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED,
+};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_ROUNDED_RECT, ID2D1Bitmap, ID2D1HwndRenderTarget,
+    ID2D1SolidColorBrush,
+};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
+use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyWindow, KillTimer, MA_NOACTIVATE, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowPos, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_PAINT, WM_TIMER, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
+};
+use windows::core::{Interface, PCWSTR, w};
+
+use super::drag::{self, Dragged, Ended};
+use super::{Export, RADIUS, ThumbnailEvent};
+use crate::Error;
+use crate::capture::{screen_point, screen_rect, win32_rect};
+use crate::palette::Palette;
+use crate::render_target::{bgra, target_and_bitmap};
+use crate::struct_size;
+use crate::text::{Fonts, TextStyle};
+use crate::toolbar::tips::Tips;
+use crate::window_state::{self, client_point, left_the_press};
+
+const WINDOW_CLASS: PCWSTR = w!("CleanshotThumbnail");
+const SLIDE_TIMER: usize = 1;
+const COUNTDOWN_TIMER: usize = 2;
+const FRAME: u32 = 8;
+const TICK: u32 = 100;
+const TEXT_SIZE: f32 = 12.0;
+const HAIRLINE: f32 = 1.0;
+
+struct Surface {
+    target: ID2D1HwndRenderTarget,
+    preview: ID2D1Bitmap,
+    /// Where the preview sits in the client area, centred when the window is larger.
+    framed: RECT,
+    material: ID2D1SolidColorBrush,
+    hairline: ID2D1SolidColorBrush,
+    label: ID2D1SolidColorBrush,
+    label_off: ID2D1SolidColorBrush,
+    /// Under a policy that turns saving off, Save is greyed and its tooltip says why.
+    save_off: bool,
+    text: TextStyle,
+    buttons: [(ThumbnailButton, Rect); 2],
+    rest: RECT,
+    distance: i32,
+    radius: f32,
+    shown: Instant,
+    ticked: Cell<Instant>,
+    /// `None` once [`ThumbnailEvent::TimedOut`] has been sent.
+    left: Cell<Option<Duration>>,
+    hovered: Cell<bool>,
+    /// A drag from the thumbnail is running; its modal loop still delivers the timers.
+    dragging: Cell<bool>,
+    /// Where the left button went down on the thumbnail, until it is released or a drag starts.
+    pressed: Cell<Option<POINT>>,
+    drag: Option<Box<dyn Fn() -> Option<Dragged>>>,
+    listener: RefCell<Box<dyn FnMut(ThumbnailEvent)>>,
+}
+
+impl Surface {
+    fn send(&self, event: ThumbnailEvent) {
+        if let Ok(mut listener) = self.listener.try_borrow_mut() {
+            listener(event);
+        }
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a thumbnail is a few hundred pixels"
+    )]
+    fn draw(&self) -> windows::core::Result<()> {
+        let rect = |area: RECT| D2D_RECT_F {
+            left: area.left as f32,
+            top: area.top as f32,
+            right: area.right as f32,
+            bottom: area.bottom as f32,
+        };
+        // SAFETY: the target, bitmap and brushes come from one factory and live with `self`.
+        unsafe {
+            self.target.BeginDraw();
+            let size = self.target.GetSize();
+            let whole = D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: size.width,
+                bottom: size.height,
+            };
+            self.target.FillRectangle(&raw const whole, &self.material);
+            let framed = rect(self.framed);
+            self.target.DrawBitmap(
+                &self.preview,
+                Some(&raw const framed),
+                1.0,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                None,
+            );
+            if self.hovered.get() {
+                for (button, area) in self.buttons {
+                    let pill = D2D1_ROUNDED_RECT {
+                        rect: rect(win32_rect(area)),
+                        radiusX: (area.bottom - area.top) as f32 / 2.0,
+                        radiusY: (area.bottom - area.top) as f32 / 2.0,
+                    };
+                    self.target
+                        .FillRoundedRectangle(&raw const pill, &self.material);
+                    self.target.DrawRoundedRectangle(
+                        &raw const pill,
+                        &self.hairline,
+                        HAIRLINE,
+                        None,
+                    );
+                    let brush = match (button, self.save_off) {
+                        (ThumbnailButton::Save, true) => &self.label_off,
+                        (ThumbnailButton::Save | ThumbnailButton::Dismiss, _) => &self.label,
+                    };
+                    self.text
+                        .draw(&self.target.cast()?, button.label(), &pill.rect, brush);
+                }
+            }
+            let edge = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: HAIRLINE / 2.0,
+                    top: HAIRLINE / 2.0,
+                    right: size.width - HAIRLINE / 2.0,
+                    bottom: size.height - HAIRLINE / 2.0,
+                },
+                radiusX: self.radius,
+                radiusY: self.radius,
+            };
+            self.target
+                .DrawRoundedRectangle(&raw const edge, &self.hairline, HAIRLINE, None);
+            self.target.EndDraw(None, None)
+        }
+    }
+
+    /// Moves the window one frame further into its resting place, and stops once it is there.
+    fn slide(&self, window: HWND) {
+        let offset = slid(self.shown.elapsed(), self.distance);
+        // SAFETY: `window` is this surface's own window.
+        unsafe {
+            // A failed move only skips a frame.
+            let _ = SetWindowPos(
+                window,
+                None,
+                self.rest.left + offset.unwrap_or(0),
+                self.rest.top,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+            );
+            if offset.is_none() {
+                // The timer is this window's own, so it fails only if already killed.
+                let _ = KillTimer(Some(window), SLIDE_TIMER);
+            }
+        }
+    }
+
+    /// Starts the drag-out once a press has moved past Windows' drag distance.
+    fn drag_from(&self, now: POINT) {
+        let (Some(start), Some(drag)) = (self.pressed.get(), &self.drag) else {
+            return;
+        };
+        if !left_the_press(start, now) {
+            return;
+        }
+        self.pressed.set(None);
+        self.dragging.set(true);
+        let ended = drag().map(drag::drag);
+        self.dragging.set(false);
+        match ended {
+            Some(Ok(Ended::Dropped)) => self.send(ThumbnailEvent::Dropped),
+            Some(Ok(Ended::Cancelled)) | None => {}
+            Some(Err(error)) => self.send(ThumbnailEvent::DragFailed(error)),
+        }
+    }
+
+    fn count_down(&self, window: HWND) {
+        let now = Instant::now();
+        let elapsed = now - self.ticked.replace(now);
+        let Some(left) = self.left.get() else { return };
+        let held = self.hovered.get() || self.dragging.get();
+        let left = left_after(left, elapsed, held);
+        self.left.set(left);
+        if left.is_none() {
+            // SAFETY: `window` is this surface's own window.
+            let _ = unsafe { KillTimer(Some(window), COUNTDOWN_TIMER) };
+            self.send(ThumbnailEvent::TimedOut);
+        }
+    }
+}
+
+pub(super) fn register_class() -> Result<(), Error> {
+    crate::register_window_class(WINDOW_CLASS, window_procedure)
+}
+
+/// Creates the thumbnail's window, not yet shown, at the start of its slide when `slide` is
+/// set and at its resting place otherwise.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the inset and radius are a few dozen pixels"
+)]
+pub(super) fn open_window(
+    preview: &RgbaImage,
+    work: RECT,
+    scale: f32,
+    slide: bool,
+    stay: Duration,
+    export: Export,
+    listener: Box<dyn FnMut(ThumbnailEvent)>,
+) -> Result<HWND, Error> {
+    let (Ok(width), Ok(height)) = (
+        i32::try_from(preview.width()),
+        i32::try_from(preview.height()),
+    ) else {
+        return Err(Error::PreviewTooLarge {
+            width: preview.width(),
+            height: preview.height(),
+        });
+    };
+    let (client_width, client_height) = window_size(width, height, scale);
+    let px = |dips: f32| (dips * scale).round() as i32;
+    let rest = win32_rect(place(
+        screen_rect(work),
+        client_width,
+        client_height,
+        px(INSET),
+    ));
+    let distance = if slide { px(INSET) } else { 0 };
+    // SAFETY: the class is registered and every string is 'static. The process is
+    // per-monitor DPI aware, so the rectangle is physical pixels.
+    let window = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            WINDOW_CLASS,
+            w!("Screenshot preview"),
+            WS_POPUP,
+            rest.left + distance,
+            rest.top,
+            client_width,
+            client_height,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .map_err(Error::Window)?;
+    let made = surface(
+        window, preview, rest, distance, scale, stay, export, listener,
+    )
+    .and_then(|surface| {
+        crate::round_window(window, client_width, client_height, px(RADIUS))?;
+        // SAFETY: `window` was created above with nothing stored on it, and
+        // window_procedure takes every message's Surface through window_state. The timers
+        // die with the window.
+        unsafe {
+            window_state::attach(window, Rc::new(surface));
+            if distance > 0 {
+                SetTimer(Some(window), SLIDE_TIMER, FRAME, None);
+            }
+            SetTimer(Some(window), COUNTDOWN_TIMER, TICK, None);
+        }
+        Ok(())
+    });
+    if let Err(error) = made {
+        // SAFETY: the window was created above and holds no state yet.
+        let destroyed = unsafe { DestroyWindow(window) };
+        debug_assert!(destroyed.is_ok(), "a window made here is destroyed once");
+        return Err(Error::Window(error));
+    }
+    Ok(window)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each part of the surface comes from its own value open_window works out"
+)]
+fn surface(
+    window: HWND,
+    preview: &RgbaImage,
+    rest: RECT,
+    distance: i32,
+    scale: f32,
+    stay: Duration,
+    export: Export,
+    listener: Box<dyn FnMut(ThumbnailEvent)>,
+) -> windows::core::Result<Surface> {
+    let factory = crate::render_target::factory()?;
+    let (width, height) = (preview.width(), preview.height());
+    let client = (rest.right - rest.left, rest.bottom - rest.top);
+    let target_size = D2D_SIZE_U {
+        width: client.0.unsigned_abs(),
+        height: client.1.unsigned_abs(),
+    };
+    let framed = win32_rect(centred(
+        client,
+        i32::try_from(width).expect("open_window checked it fits"),
+        i32::try_from(height).expect("open_window checked it fits"),
+    ));
+    let (target, preview) = target_and_bitmap(
+        &factory,
+        window,
+        target_size,
+        (width, height),
+        &bgra(preview),
+        D2D1_ALPHA_MODE_PREMULTIPLIED,
+    )?;
+    let palette = Palette::current()?;
+    // SAFETY: each colour lives in `palette`, which outlives its call.
+    let (material, hairline, label, label_off) = unsafe {
+        (
+            target.CreateSolidColorBrush(&raw const palette.material, None)?,
+            target.CreateSolidColorBrush(&raw const palette.hairline, None)?,
+            target.CreateSolidColorBrush(&raw const palette.label, None)?,
+            target.CreateSolidColorBrush(&raw const palette.label_off, None)?,
+        )
+    };
+    let buttons = buttons(client.0, client.1, scale);
+    let (drag, save_off) = match export {
+        Export::Allowed { drag } => (Some(drag), None),
+        Export::Off(off) => (None, Some(saving_off_notice(off))),
+    };
+    let texts = buttons.map(|(button, _)| match (button, &save_off) {
+        (ThumbnailButton::Save, Some(reason)) => Cow::Owned(reason.clone()),
+        (ThumbnailButton::Save | ThumbnailButton::Dismiss, _) => Cow::Borrowed(button.label()),
+    });
+    // The tooltips live as long as the window, which destroys them.
+    Tips::new(window, &texts)?.place(buttons.map(|(_, at)| win32_rect(at)));
+    let now = Instant::now();
+    Ok(Surface {
+        text: Fonts::inter()?.text_style(TEXT_SIZE * scale)?.centred()?,
+        buttons,
+        target,
+        preview,
+        framed,
+        material,
+        hairline,
+        label,
+        label_off,
+        save_off: save_off.is_some(),
+        rest,
+        distance,
+        radius: RADIUS * scale,
+        shown: now,
+        ticked: Cell::new(now),
+        left: Cell::new(Some(stay)),
+        hovered: Cell::new(false),
+        dragging: Cell::new(false),
+        pressed: Cell::new(None),
+        drag,
+        listener: RefCell::new(listener),
+    })
+}
+
+/// Clips `window` to a rectangle `width` x `height` with corners of `radius` pixels.
+unsafe extern "system" fn window_procedure(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // SAFETY: open_window stores a Surface on every window of this class. The count this
+    // message holds keeps a Thumbnail dropped while it runs (from an event, or during a drag's
+    // modal loop) from freeing the Surface until the message returns.
+    let Some(surface) = (unsafe { window_state::for_message::<Surface>(window, message) }) else {
+        // SAFETY: forwarding an unhandled message to the default procedure.
+        return unsafe { DefWindowProcW(window, message, wparam, lparam) };
+    };
+    match message {
+        WM_PAINT => {
+            let mut paint = PAINTSTRUCT::default();
+            // SAFETY: BeginPaint and EndPaint bracket this window's paint, as WM_PAINT needs.
+            unsafe { BeginPaint(window, &raw mut paint) };
+            let drawn = surface.draw();
+            // SAFETY: matches the BeginPaint above.
+            let _ = unsafe { EndPaint(window, &raw const paint) };
+            if let Err(error) = drawn {
+                surface.send(ThumbnailEvent::DrawFailed(error));
+            }
+            LRESULT(0)
+        }
+        // A click never activates the thumbnail, so the focus stays where it was.
+        WM_MOUSEACTIVATE => LRESULT(isize::try_from(MA_NOACTIVATE).expect("3 fits")),
+        WM_MOUSEMOVE => {
+            if !surface.hovered.replace(true) {
+                let mut leave = TRACKMOUSEEVENT {
+                    cbSize: struct_size::<TRACKMOUSEEVENT>(),
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: window,
+                    dwHoverTime: 0,
+                };
+                // SAFETY: `leave` is writable and names this thread's window.
+                unsafe {
+                    // Without them the buttons stay up until the next move, which is all a
+                    // failure costs.
+                    let _ = TrackMouseEvent(&raw mut leave);
+                    let _ = InvalidateRect(Some(window), None, false);
+                }
+            }
+            surface.drag_from(client_point(lparam));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            surface.hovered.set(false);
+            // SAFETY: invalidating this thread's own window; a failure only skips one repaint.
+            let _ = unsafe { InvalidateRect(Some(window), None, false) };
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            surface.pressed.set(Some(client_point(lparam)));
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if surface.pressed.take().is_none() {
+                return LRESULT(0);
+            }
+            surface.send(
+                match button_at(&surface.buttons, screen_point(client_point(lparam))) {
+                    Some(ThumbnailButton::Save) if surface.save_off => return LRESULT(0),
+                    Some(ThumbnailButton::Save) => ThumbnailEvent::Save,
+                    Some(ThumbnailButton::Dismiss) => ThumbnailEvent::Dismiss,
+                    None => ThumbnailEvent::Open,
+                },
+            );
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            match wparam.0 {
+                SLIDE_TIMER => surface.slide(window),
+                COUNTDOWN_TIMER => surface.count_down(window),
+                // SAFETY: forwarding a timer this window did not set.
+                _ => return unsafe { DefWindowProcW(window, message, wparam, lparam) },
+            }
+            LRESULT(0)
+        }
+        // SAFETY: forwarding an unhandled message to the default procedure.
+        _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
+    }
+}

@@ -1,0 +1,91 @@
+@echo off
+rem Measures every performance budget on this PC and leaves only results.txt here.
+setlocal
+cd /d "%~dp0"
+
+tasklist /FI "IMAGENAME eq cleanshot.exe" | find /I "cleanshot.exe" >nul
+if not errorlevel 1 (
+    echo Cleanshot is running. Quit it from its tray icon, then run this file again.
+    pause
+    exit /b 1
+)
+
+echo This measures Cleanshot's performance budgets. It takes about 2 minutes.
+echo Do not touch the keyboard or mouse until it says it is done.
+echo It opens and closes the capture overlay and an editor window, and it replaces
+echo what is on the clipboard.
+pause
+
+del /q cleanshot.toml cleanshot.log idle.log overlays.log editor.log overlays.txt editor.txt copy.txt probe.md sac.txt split.txt results.txt 2>nul
+
+echo Smart App Control state: > sac.txt
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState >> sac.txt 2>&1
+
+rem The waits are pings: timeout refuses the redirected input of release.yml's trial run.
+echo [0/5] Warm-up start, not measured
+rem The first start of a new exe waits for antivirus to scan it; the start budget is Cleanshot's own start.
+type nul > cleanshot.toml
+start "" cleanshot.exe --log
+call :wait_for "perf start " 120
+taskkill /IM cleanshot.exe /F >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+del /q cleanshot.log 2>nul
+
+echo [1/5] Idle start: start time, memory and CPU
+start "" cleanshot.exe --log
+rem Memory and CPU are logged 10 s after the tray is ready, however long the start took.
+call :wait_for "perf cpu " 120
+taskkill /IM cleanshot.exe /F >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+move /y cleanshot.log idle.log >nul 2>&1
+
+echo [2/5] Hotkey to overlay, and memory after use
+> cleanshot.toml echo [hotkeys]
+>> cleanshot.toml echo region = "Ctrl+Shift+4"
+start "" cleanshot.exe --log
+ping -n 4 127.0.0.1 >nul
+cleanshot-fieldtest.exe --overlays cleanshot.log > overlays.txt 2>&1
+taskkill /IM cleanshot.exe /F >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+move /y cleanshot.log overlays.log >nul 2>&1
+
+echo [3/5] Editor opened and closed, and memory after it, reported only
+> cleanshot.toml echo [hotkeys]
+>> cleanshot.toml echo full_screen = "Ctrl+Shift+7"
+start "" cleanshot.exe --log
+ping -n 4 127.0.0.1 >nul
+cleanshot-fieldtest.exe --editor cleanshot.log > editor.txt 2>&1
+taskkill /IM cleanshot.exe /F >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+move /y cleanshot.log editor.log >nul 2>&1
+
+echo [4/5] Copy of a 4K region
+copy_test.exe a_4k_region_copy --nocapture > copy.txt 2>&1
+
+echo [5/5] Probe, editor bench, monitors and scaling
+cleanshot-fieldtest.exe --report probe.md >nul 2>&1
+rem Another exe's time to main beside Cleanshot's says what is the exe and what is this PC.
+cleanshot-fieldtest.exe --start-split > split.txt 2>&1
+
+cleanshot-fieldtest.exe --budgets --exe cleanshot.exe --idle idle.log --overlays overlays.log --copy copy.txt --bench probe.md > results.txt 2>&1
+for %%F in (sac.txt probe.md split.txt overlays.txt editor.txt copy.txt idle.log overlays.log editor.log) do (
+    >> results.txt echo.
+    >> results.txt echo ===== %%F
+    if exist %%F (type %%F >> results.txt) else (>> results.txt echo missing)
+)
+del /q cleanshot.toml cleanshot.log idle.log overlays.log editor.log overlays.txt editor.txt copy.txt probe.md sac.txt split.txt 2>nul
+
+echo.
+echo Done. Attach this file to a GitHub issue:
+echo %~dp0results.txt
+pause
+exit /b 0
+
+:wait_for
+set waited=0
+:wait_for_next
+findstr /c:%1 cleanshot.log >nul 2>&1 && exit /b 0
+if %waited% geq %2 exit /b 1
+set /a waited+=1
+ping -n 2 127.0.0.1 >nul
+goto wait_for_next

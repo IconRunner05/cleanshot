@@ -1,0 +1,368 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "ci/**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tests_only:
+        description: Run only the checks job, to show a test failing
+        type: boolean
+        default: false
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A new push to a ci/ branch replaces that branch's older run. Every other ref gets a group
+# of its own, so each commit on main keeps its run.
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/heads/ci/') && format('{0}-{1}', github.workflow, github.ref) || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: Install ast-grep
+        run: npm install -g @ast-grep/cli@0.51.0
+
+      - name: ast-grep rules
+        run: ast-grep scan
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests on x64
+        run: cargo test --workspace --no-fail-fast
+
+      - name: Build for ARM64
+        run: cargo build --workspace --target aarch64-pc-windows-msvc
+
+      - name: Install cargo-deny and cargo-audit
+        run: cargo install --locked cargo-deny@0.19.7 cargo-audit@0.22.2
+
+      - name: cargo deny
+        run: cargo deny check
+
+      - name: cargo audit
+        run: cargo audit
+
+  release-exe:
+    if: ${{ !inputs.tests_only }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the release exe with build paths remapped
+        shell: bash
+        run: >
+          cargo build --release --locked -p cleanshot-app
+          --config "target.x86_64-pc-windows-msvc.rustflags = ['--remap-path-prefix=$GITHUB_WORKSPACE=src', '--remap-path-prefix=$USERPROFILE=~', '--remap-path-prefix=${CARGO_HOME:-$USERPROFILE\.cargo}=cargo']"
+
+      - name: Binary and unsafe scans
+        shell: bash
+        env:
+          LLVM_BIN: C:/Program Files/LLVM/bin
+        run: ./checks.sh --release-exe target/x86_64-pc-windows-msvc/release/cleanshot.exe
+
+      - name: Product name and version in the exe
+        shell: pwsh
+        run: |
+          $expected = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'cleanshot-app' | ForEach-Object version
+          $info = (Get-Item target/x86_64-pc-windows-msvc/release/cleanshot.exe).VersionInfo
+          $fixed = '{0}.{1}.{2}' -f $info.ProductMajorPart, $info.ProductMinorPart, $info.ProductBuildPart
+          $found = "ProductName=$($info.ProductName) FileDescription=$($info.FileDescription) ProductVersion=$($info.ProductVersion) FileVersion=$($info.FileVersion) fixed=$fixed"
+          $wanted = "ProductName=Cleanshot FileDescription=Cleanshot ProductVersion=$expected FileVersion=$expected fixed=$($expected -replace '[-+].*$', '')"
+          if ($found -ne $wanted) {
+            Write-Output "FAIL: the exe says $found, expected $wanted"
+            exit 1
+          }
+          Write-Output "Product and version: $found"
+
+      - name: Start-up
+        shell: bash
+        run: |
+          target/x86_64-pc-windows-msvc/release/cleanshot.exe &
+          started=$!
+          sleep 5
+          if ! kill -0 "$started" 2>/dev/null; then
+            status=0
+            wait "$started" || status=$?
+            echo "FAIL: cleanshot.exe exited within 5 s with status $status"
+            exit 1
+          fi
+          taskkill //F //IM cleanshot.exe
+
+      - name: DLLs planted beside the exe
+        shell: pwsh
+        run: |
+          $exe = 'target/x86_64-pc-windows-msvc/release/cleanshot.exe'
+          $run = Join-Path $env:RUNNER_TEMP 'planted'
+          New-Item -ItemType Directory -Force $run | Out-Null
+          Copy-Item $exe $run
+          Set-Content (Join-Path $run 'cleanshot.toml') ''
+          $knownKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs'
+          $knownValues = Get-ItemProperty $knownKey
+          $known = (Get-Item $knownKey).GetValueNames() |
+            ForEach-Object { $knownValues.$_ } | Where-Object { $_ -like '*.dll' } |
+            ForEach-Object { $_.ToLowerInvariant() }
+          Write-Output "KnownDLLs: $($known -join ' ')"
+          $imports = & 'C:/Program Files/LLVM/bin/llvm-readobj.exe' --coff-imports $exe
+          $static = @(); $delayed = @(); $section = ''
+          foreach ($line in $imports) {
+            if ($line -match '^(Delay)?Import \{') { $section = $Matches[0] }
+            elseif ($line -match '^  Name: (.+)$') {
+              if ($section -like 'Delay*') { $delayed += $Matches[1].ToLowerInvariant() }
+              else { $static += $Matches[1].ToLowerInvariant() }
+            }
+          }
+          Write-Output "Static imports: $($static -join ' ')"
+          Write-Output "Delay-loaded imports: $($delayed -join ' ')"
+          # Stop one start and wait for its exit, so the next is not a second launch.
+          function Stop-Cleanshot($process) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit(10000) | Out-Null
+          }
+          # Starts the copy with --log; returns the modules it holds once the tray is ready, or
+          # $null if it is not ready within 10 s.
+          function Start-Cleanshot {
+            $log = Join-Path $run 'cleanshot.log'
+            Remove-Item $log -ErrorAction SilentlyContinue
+            $process = Start-Process (Join-Path $run 'cleanshot.exe') '--log' -PassThru
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline -and -not ((Test-Path $log) -and (Select-String -Quiet 'perf start' $log))) {
+              Start-Sleep -Milliseconds 250
+            }
+            $modules = $null
+            if ((Test-Path $log) -and (Select-String -Quiet 'perf start' $log)) {
+              $process.Refresh()
+              $modules = @($process.Modules | ForEach-Object FileName)
+            }
+            Stop-Cleanshot $process
+            $modules
+          }
+          # The start-up step's exe may still be exiting.
+          Get-Process cleanshot -ErrorAction SilentlyContinue | ForEach-Object { Stop-Cleanshot $_ }
+          $clean = Start-Cleanshot
+          if ($null -eq $clean) { Write-Output 'FAIL: cleanshot.exe did not start with nothing planted'; exit 1 }
+          $system = [Environment]::GetFolderPath('System')
+          $loaded = $clean | Where-Object { $_ -like "$system\*" } |
+            ForEach-Object { [IO.Path]::GetFileName($_).ToLowerInvariant() }
+          $names = @($static + $delayed + $loaded) | Sort-Object -Unique |
+            Where-Object { $_ -notin $known -and $_ -notlike 'api-ms-*' -and $_ -notlike 'ext-ms-*' }
+          Write-Output "Planted, one at a time: $($names -join ' ')"
+          $decoy = Join-Path $system 'version.dll'
+          $failed = $false
+          foreach ($name in $names) {
+            $planted = Join-Path $run $name
+            Copy-Item $decoy $planted
+            $modules = Start-Cleanshot
+            Remove-Item $planted -Force
+            if ($null -eq $modules) {
+              Write-Output "FAIL: with $name planted beside it, cleanshot.exe did not start, so it loaded the decoy"
+              $failed = $true
+            } elseif ($modules | Where-Object { $_ -ieq $planted }) {
+              Write-Output "FAIL: cleanshot.exe loaded the $name planted beside it"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Output "None of $($names.Count) planted DLLs loaded"
+
+      - name: Build the field test
+        run: cargo build --release --locked -p cleanshot-fieldtest
+
+      - name: "Budgets: start, memory, CPU and size"
+        shell: bash
+        run: |
+          run="$RUNNER_TEMP/perf"
+          mkdir -p "$run"
+          cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
+          # An empty cleanshot.toml beside the exe is portable mode, so the log lands here.
+          : > "$run/cleanshot.toml"
+          # While the start-up step's exe lives, this launch would only signal it and exit.
+          for _ in $(seq 20); do
+            tasklist //FI "IMAGENAME eq cleanshot.exe" | grep -qi cleanshot.exe || break
+            sleep 0.5
+          done
+          if tasklist //FI "IMAGENAME eq cleanshot.exe" | grep -qi cleanshot.exe; then
+            echo "FAIL: the start-up step's cleanshot.exe is still running after 10 s"
+            exit 1
+          fi
+          "$run/cleanshot.exe" --log &
+          # Memory and CPU are logged 10 s after the tray is ready, which a slow cold start
+          # (antivirus scanning a fresh exe) pushes back, so this waits for the line, not a time.
+          for _ in $(seq 240); do
+            grep -q " perf cpu " "$run/cleanshot.log" 2>/dev/null && break
+            sleep 0.5
+          done
+          taskkill //F //IM cleanshot.exe
+          cat "$run/cleanshot.log"
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner \
+            --idle "$run/cleanshot.log" --exe target/x86_64-pc-windows-msvc/release/cleanshot.exe
+
+      - name: Upload cleanshot.exe
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cleanshot-exe
+          path: target/x86_64-pc-windows-msvc/release/cleanshot.exe
+          if-no-files-found: error
+
+  probe:
+    if: ${{ !inputs.tests_only }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the field test and the release exe
+        run: cargo build --release --locked -p cleanshot-fieldtest -p cleanshot-app
+
+      - name: "Budget: 4K region copy"
+        shell: bash
+        run: |
+          cargo test --release --locked -p cleanshot-app --bin cleanshot a_4k_region_copy -- --nocapture | tee copy.txt
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner --copy copy.txt
+
+      - name: Probe report
+        shell: bash
+        run: |
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --report probe.md
+          cat probe.md >> "$GITHUB_STEP_SUMMARY"
+          # Overlay time against memory: the prewarm's parts, each timed, through to its release.
+          for part in class factory palette target paint first_draw factory_released; do
+            grep -q "^- Overlay prewarm, ${part}: " probe.md || { echo "FAIL: the probe reported no prewarm part ${part}"; exit 1; }
+          done
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --start-split
+
+      - name: "Budget: overlay"
+        shell: bash
+        run: |
+          run="$RUNNER_TEMP/overlays"
+          mkdir -p "$run"
+          cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
+          # Portable mode. Ctrl+Shift+4, because the Snipping Tool may hold PrtSc.
+          printf '[hotkeys]\nregion = "Ctrl+Shift+4"\n' > "$run/cleanshot.toml"
+          "$run/cleanshot.exe" --log &
+          # --overlays waits for the tray-ready line, then 3 s, before the first press.
+          # Each press waits for the last overlay's line and for it to close, so a slow
+          # overlay is measured, not raced; one that never shows or closes fails the run.
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --overlays "$run/cleanshot.log" || failed=$?
+          # Exit from the tray closes Cleanshot, which logs that the shell removed its icon.
+          # A run that did not exit is ended so the job does not hang; otherwise taskkill has
+          # nothing to end.
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --exit "$run/cleanshot.log" || exited=$?
+          taskkill //F //IM cleanshot.exe 2>/dev/null || true
+          cat "$run/cleanshot.log"
+          (( ${failed:-0} == 0 )) || { echo "FAIL: the overlay run stopped (exit ${failed})"; exit 1; }
+          (( ${exited:-0} == 0 )) || { echo "FAIL: Cleanshot did not exit cleanly from its tray"; exit 1; }
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --budgets --runner --overlays "$run/cleanshot.log"
+          # The prewarm runs once the tray is ready, so the start budget does not wait for it.
+          ready=$(grep -n ' perf start tray_ready_ms=' "$run/cleanshot.log" | cut -d: -f1)
+          prewarmed=$(grep -n ' perf start overlay_prewarmed_ms=' "$run/cleanshot.log" | cut -d: -f1)
+          (( ${prewarmed:-0} > ${ready:-0} && ${ready:-0} > 0 )) || { echo "FAIL: the overlay prewarm was not logged after the tray was ready"; exit 1; }
+
+      - name: Memory after the editor closes (reported only)
+        shell: bash
+        run: |
+          run="$RUNNER_TEMP/editor"
+          mkdir -p "$run"
+          cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
+          printf '[hotkeys]\nfull_screen = "Ctrl+Shift+7"\n' > "$run/cleanshot.toml"
+          "$run/cleanshot.exe" --log &
+          # --editor presses Ctrl+Shift+7 then E, closes the editor once it has drawn and the exe
+          # has taken its idle sample, and waits for the after-editor sample the exe logs 15 s
+          # after the close.
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --editor "$run/cleanshot.log" || failed=$?
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --exit "$run/cleanshot.log" || true
+          taskkill //F //IM cleanshot.exe 2>/dev/null || true
+          cat "$run/cleanshot.log"
+          (( ${failed:-0} == 0 )) || { echo "FAIL: the editor run stopped (exit ${failed})"; exit 1; }
+          # The idle sample must be taken with the editor open: the after-editor sample comes 15 s
+          # after the close, so the idle line precedes it by at least that much.
+          idle=$(grep ' perf memory working_set_bytes=' "$run/cleanshot.log" | cut -d' ' -f1)
+          after=$(grep ' perf memory after_editor_private_bytes=' "$run/cleanshot.log" | cut -d' ' -f1)
+          (( ${idle:-0} > 0 && ${after:-0} - ${idle:-0} >= 15000 )) || { echo "FAIL: the idle sample was not taken while the editor was open"; exit 1; }
+
+      - name: Upload the probe report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: probe-report
+          path: probe.md
+          if-no-files-found: error
+
+  dpi:
+    if: ${{ !inputs.tests_only }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the field test and the scale tests
+        run: |
+          cargo build --release --locked -p cleanshot-fieldtest -p cleanshot-app
+          cargo test --release --locked -p cleanshot-win --lib --no-run
+          cargo test --release --locked -p cleanshot-app --test caption_fit --no-run
+
+      - name: "DPI: full-screen copy and toolbar scale at 100-175%"
+        shell: bash
+        run: |
+          run="$RUNNER_TEMP/dpi"
+          mkdir -p "$run"
+          cp target/x86_64-pc-windows-msvc/release/cleanshot.exe "$run/"
+          # Portable mode. Ctrl+Shift+7 is the key the field test presses.
+          printf 'after_capture = "copy"\nshow_thumbnail = false\n[hotkeys]\nfull_screen = "Ctrl+Shift+7"\n' > "$run/cleanshot.toml"
+          # The hotkey works once the tray is ready, which the exe logs. A press before
+          # that is lost, so wait for the line, not a fixed time; the log starts empty.
+          start() {
+            rm -f "$run/cleanshot.log"
+            "$run/cleanshot.exe" --log &
+            for _ in $(seq 120); do
+              grep -q " perf start " "$run/cleanshot.log" 2>/dev/null && return
+              sleep 0.5
+            done
+            echo "FAIL: cleanshot.exe logged no start line within 60 s"
+            status=1
+          }
+          # A launch while the last exe lives would only signal it and exit.
+          stop() {
+            taskkill //F //IM cleanshot.exe
+            for _ in $(seq 20); do
+              tasklist //FI "IMAGENAME eq cleanshot.exe" | grep -qi cleanshot.exe || break
+              sleep 0.5
+            done
+            cat "$run/cleanshot.log"
+          }
+          status=0
+          # Scale steps from the recommended 100% at 1920x1080, and the dpi each gives.
+          # Each step sets its scale, then starts its own exe, as a user launching at that scale does.
+          for scale in "0 96" "1 120" "2 144" "4 168"; do
+            target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --set-scale 1920 1080 $scale || { status=1; continue; }
+            start
+            target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --copy-at-scale 1920 1080 ${scale#* } "$run/cleanshot.log" || status=1
+            CLEANSHOT_DPI=${scale#* } cargo test --release --locked -p cleanshot-win --lib -- --ignored --exact overlay::tests::the_toolbar_takes_the_scale_windows_gives_the_monitor | tee "$run/toolbar.txt" || status=1
+            grep -q '^test result: ok\. 1 passed' "$run/toolbar.txt" || { echo "FAIL: the toolbar scale test did not run at ${scale#* } dpi"; status=1; }
+            stop
+            # At the least width no caption-row control clips or overlaps another.
+            if [ "$scale" = "2 144" ]; then
+              cargo test --release --locked -p cleanshot-app --test caption_fit || status=1
+            fi
+          done
+          start
+          # A thread reads the clipboard on every change, as Win+V clipboard history does.
+          target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe --copies-while-watched 20 "$run/cleanshot.log" || status=1
+          stop
+          exit "$status"
+

@@ -1,0 +1,10 @@
+id: panic-names-its-invariant
+language: rust
+severity: error
+message: A panic names the invariant it guards; give this one a message.
+rule:
+  any:
+    - pattern: panic!()
+    - pattern: unreachable!()
+    - pattern: unimplemented!()
+    - pattern: todo!()

@@ -1,0 +1,8 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static", "-C", "control-flow-guard"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/CETCOMPAT"]

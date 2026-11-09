@@ -1,0 +1,682 @@
+use std::cell::Cell;
+use std::num::NonZeroU32;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use cleanshot_core::{
+    BorderWidth, BoxHandle, Color, Command, Document, Drag, Fill, Handle, HighlightStrength,
+    History, Look, PointF, Property, RectF, RedactMode, RedactStrength, RgbaImage, Shape,
+    ShapeEntry, ShapeId, Style, TextBlock, TextMasks, Tool,
+};
+use gpui::{App, Pixels, Point, Window, point, px};
+
+use crate::canvas::Previews;
+use crate::editor_window::bench_hooks::{drag_redaction, extend_drag, show_at, start_shape_drag};
+use crate::editor_window::open_with;
+use crate::placement::{Placement, canvas_size};
+use crate::{Error, Log, MasksFor, hold_graphics};
+
+const WIDTH: u32 = 3840;
+const HEIGHT: u32 = 2160;
+const SHAPES: u32 = 200;
+const COLUMNS: u32 = 20;
+/// Where the bench's redaction drag is pressed, in image pixels.
+const DRAG_FROM: PointF = PointF { x: 64.0, y: 64.0 };
+const SHAPE_DRAGS: usize = 10;
+/// Frames in each shape drag: the shape's first frame, not timed, then the steps of the drag.
+const SHAPE_DRAG_FRAMES: usize = 31;
+
+/// Frame intervals over one kind of shape drag in one [`bench()`] run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShapeDragTiming {
+    /// The kind of drag and the size of the shape.
+    pub name: &'static str,
+    pub p50: Duration,
+    /// 95th-percentile interval (nearest rank).
+    pub p95: Duration,
+}
+
+/// Editor timings from one [`bench()`] run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BenchReport {
+    /// From opening the window, image upload included, to the frame after its first draw,
+    /// so up to one display refresh (about 16.7 ms at 60 Hz) over the draw itself.
+    pub first_frame: Duration,
+    /// Median frame-to-frame interval over the forced redraws: a third held still, a third
+    /// panning at 2x, a third zooming between fitted and 4x.
+    pub p50: Duration,
+    /// 95th-percentile interval (nearest rank).
+    pub p95: Duration,
+    /// Longest interval.
+    pub worst: Duration,
+    /// Median frame interval while a redaction is dragged from near the top-left
+    /// corner to near the bottom-right one, its preview remade every step. Reported apart from
+    /// `p50`, which it is not part of.
+    pub redaction_drag_p50: Duration,
+    /// 95th-percentile interval of the same drag.
+    pub redaction_drag_p95: Duration,
+    /// Moving, resizing and dragging the end of a shape with border and shadow, and resizing a
+    /// highlight, each at an ordinary size and near full screen.
+    pub shape_drags: [ShapeDragTiming; SHAPE_DRAGS],
+    /// Part of `first_frame`: GPUI taking its graphics device for the bench's window, none being
+    /// open before it.
+    pub graphics: Duration,
+    /// Part of `first_frame`: the first call to the mask maker, made before the first frame.
+    pub text_masks: Duration,
+    /// Making every preview image for the bench's document again, with its masks in hand,
+    /// after the first frame: the rest of the previews' share of `first_frame`.
+    pub previews: Duration,
+    /// Part of `first_frame`: the capture's average colour for the glow round the image card, taken
+    /// again after the first frame.
+    pub glow: Duration,
+}
+
+type OnDone = Box<dyn FnOnce(&mut App, Result<BenchReport, Error>)>;
+
+/// Opens the editor on a synthetic 4K image with 200 shapes, its texts' glyph masks made by
+/// `masks` as the editor's are, forces `redraws` redraws while panning and zooming as the editor
+/// does, then drags a redaction for a third as many frames, then drags shapes of its own, closes
+/// the window and passes the timings to `on_done`, which is called exactly once.
+///
+/// The window ignores close requests until the run ends.
+///
+/// # Panics
+///
+/// If the editor draws its first frame without asking for its texts' masks.
+pub fn bench(
+    cx: &mut App,
+    redraws: NonZeroU32,
+    masks: impl Fn(&Document) -> Option<TextMasks> + 'static,
+    on_done: impl FnOnce(&mut App, Result<BenchReport, Error>) + 'static,
+) {
+    let document = match synthetic_document() {
+        Ok(document) => document,
+        Err(error) => return on_done(cx, Err(error)),
+    };
+    let kept = document.kept_area();
+    let mut on_done: Option<OnDone> = Some(Box::new(on_done));
+    let replayed = document.clone();
+    let maker = Rc::new(masks);
+    let replay_maker = Rc::clone(&maker);
+    let first_masks: Rc<Cell<Option<Duration>>> = Rc::default();
+    let recorder = Rc::clone(&first_masks);
+    let timed: MasksFor = Rc::new(move |document: &Document| {
+        let started = Instant::now();
+        let made = maker(document);
+        if recorder.get().is_none() {
+            recorder.set(Some(started.elapsed()));
+        }
+        made
+    });
+    let start = Instant::now();
+    if let Err(error) = hold_graphics(cx) {
+        if let Some(on_done) = on_done.take() {
+            on_done(cx, Err(error));
+        }
+        return;
+    }
+    let graphics = start.elapsed();
+    // The bench runs from cleanshot-fieldtest, a console tool whose stderr is read.
+    let log: Log = Rc::new(|event| eprintln!("{event}"));
+    let replay_log = Rc::clone(&log);
+    let opened = open_with(cx, document, None, None, timed, log, |window, cx| {
+        let Some(on_done) = on_done.take() else {
+            return;
+        };
+        window.on_window_should_close(cx, |_, _| false);
+        window.on_next_frame(move |window, cx| {
+            let now = Instant::now();
+            let text_masks = first_masks
+                .get()
+                .expect("the bench's bordered texts have their masks made before its first frame");
+            let made = Cell::new(replay_maker(&replayed));
+            let replay = Instant::now();
+            Previews::new(Rc::new(move |_| made.take()), replay_log)
+                .update(&replayed, None, window);
+            let previews = replay.elapsed();
+            let glowing = Instant::now();
+            std::hint::black_box(replayed.base().average_color());
+            let glow = glowing.elapsed();
+            let canvas = canvas_size(window.viewport_size());
+            Run {
+                fitted: Placement::fitted(canvas, kept, window.scale_factor()),
+                centre: point(canvas.width / 2.0, canvas.height / 2.0),
+                first_frame: now - start,
+                graphics,
+                text_masks,
+                previews,
+                glow,
+                last_frame: Instant::now(),
+                intervals: Vec::with_capacity(redraws.get() as usize),
+                drag_intervals: Vec::new(),
+                shape_drags: shape_drags(),
+                dragged: None,
+                redraws,
+                on_done,
+            }
+            .continue_after(window, cx);
+        });
+    });
+    if let Err(error) = opened
+        && let Some(on_done) = on_done.take()
+    {
+        on_done(cx, Err(error));
+    }
+}
+
+struct Run {
+    fitted: Placement,
+    centre: Point<Pixels>,
+    first_frame: Duration,
+    graphics: Duration,
+    text_masks: Duration,
+    previews: Duration,
+    glow: Duration,
+    last_frame: Instant,
+    intervals: Vec<Duration>,
+    drag_intervals: Vec<Duration>,
+    shape_drags: [(ShapeDrag, Vec<Duration>); SHAPE_DRAGS],
+    dragged: Option<ShapeId>,
+    redraws: NonZeroU32,
+    on_done: OnDone,
+}
+
+impl Run {
+    fn continue_after(mut self, window: &mut Window, cx: &mut App) {
+        let drag_steps = self.redraws.get().div_ceil(3);
+        if self.redrawing() {
+            let frame = u32::try_from(self.intervals.len())
+                .expect("the redraws stop after `redraws` frames, a u32");
+            show_at(
+                window,
+                cx,
+                placement(frame, self.redraws, self.fitted, self.centre),
+            );
+        } else if self.redacting() {
+            let step = u32::try_from(self.drag_intervals.len())
+                .expect("the drag stops after a third of `redraws` steps, a u32");
+            if step == 0 {
+                show_at(window, cx, None);
+            }
+            let (from, to) = (DRAG_FROM, drag_corner(step + 1, drag_steps));
+            drag_redaction(window, cx, from, to, self.fitted);
+        } else if let Some((drag, frames)) = self.shape_drags.iter().find(|drag| unfinished(drag)) {
+            let frame = frames.len();
+            if frame == 0 {
+                self.dragged = Some(start_shape_drag(
+                    window,
+                    cx,
+                    self.dragged,
+                    drag.shape.clone(),
+                    |entry| drag.started_on(entry),
+                ));
+            } else {
+                extend_drag(window, cx, shape_drag_pointer(drag.pressed, frame));
+            }
+        } else {
+            window.remove_window();
+            let report = self.report();
+            (self.on_done)(cx, Ok(report));
+            return;
+        }
+        window.refresh();
+        window.on_next_frame(move |window, cx| self.frame_drawn(window, cx));
+    }
+
+    fn frame_drawn(mut self, window: &mut Window, cx: &mut App) {
+        let now = Instant::now();
+        let interval = now - self.last_frame;
+        if self.redrawing() {
+            self.intervals.push(interval);
+        } else if self.redacting() {
+            self.drag_intervals.push(interval);
+        } else if let Some((_, frames)) = self.shape_drags.iter_mut().find(|drag| unfinished(drag))
+        {
+            frames.push(interval);
+        }
+        self.last_frame = now;
+        self.continue_after(window, cx);
+    }
+
+    fn redrawing(&self) -> bool {
+        self.intervals.len() < self.redraws.get() as usize
+    }
+
+    fn redacting(&self) -> bool {
+        self.drag_intervals.len() < self.redraws.get().div_ceil(3) as usize
+    }
+
+    fn report(&self) -> BenchReport {
+        BenchReport {
+            first_frame: self.first_frame,
+            p50: nearest_rank(&self.intervals, 50),
+            p95: nearest_rank(&self.intervals, 95),
+            worst: nearest_rank(&self.intervals, 100),
+            redaction_drag_p50: nearest_rank(&self.drag_intervals, 50),
+            redaction_drag_p95: nearest_rank(&self.drag_intervals, 95),
+            shape_drags: std::array::from_fn(|index| {
+                let (drag, frames) = &self.shape_drags[index];
+                ShapeDragTiming {
+                    name: drag.name,
+                    p50: nearest_rank(&frames[1..], 50),
+                    p95: nearest_rank(&frames[1..], 95),
+                }
+            }),
+            graphics: self.graphics,
+            text_masks: self.text_masks,
+            previews: self.previews,
+            glow: self.glow,
+        }
+    }
+}
+
+/// The interval `percent` of `intervals` are no longer than (nearest rank); `intervals` is not
+/// empty.
+fn nearest_rank(intervals: &[Duration], percent: usize) -> Duration {
+    let mut sorted = intervals.to_vec();
+    sorted.sort_unstable();
+    sorted[(sorted.len() * percent).div_ceil(100) - 1]
+}
+
+/// Where the image is for forced redraw `frame` of `frames`: fitted for the first third, then
+/// panned 4 by 2 screen pixels a frame at 2x, then zoomed from fitted to 4x and back.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "frame counts stay far below 2^24, where f32 stops being exact"
+)]
+fn placement(
+    frame: u32,
+    frames: NonZeroU32,
+    fitted: Placement,
+    centre: Point<Pixels>,
+) -> Option<Placement> {
+    let third = frames.get().div_ceil(3);
+    match frame / third {
+        0 => None,
+        1 => {
+            let step = (frame - third) as f32;
+            Some(
+                fitted
+                    .zoomed(2.0, centre)
+                    .panned(point(px(-4.0 * step), px(-2.0 * step))),
+            )
+        }
+        _ => {
+            let progress = (frame - 2 * third) as f32 / third as f32;
+            let factor = 1.0 + 3.0 * (1.0 - (2.0 * progress - 1.0).abs());
+            Some(fitted.zoomed(factor, centre))
+        }
+    }
+}
+
+/// Where the dragged redaction's far corner is at drag step `step` of `steps`: on a line from
+/// [`DRAG_FROM`] to as far from the bottom-right corner, reached at the last step.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "step counts and image sides stay far below 2^24, where f32 stops being exact"
+)]
+fn drag_corner(step: u32, steps: u32) -> PointF {
+    let progress = step as f32 / steps as f32;
+    PointF {
+        x: DRAG_FROM.x + (WIDTH as f32 - 2.0 * DRAG_FROM.x) * progress,
+        y: DRAG_FROM.y + (HEIGHT as f32 - 2.0 * DRAG_FROM.y) * progress,
+    }
+}
+
+fn unfinished(drag: &(ShapeDrag, Vec<Duration>)) -> bool {
+    drag.1.len() < SHAPE_DRAG_FRAMES
+}
+
+/// One drag the bench times: `shape` added, then gripped at `pressed`.
+struct ShapeDrag {
+    name: &'static str,
+    shape: Command,
+    handle: Option<Handle>,
+    pressed: PointF,
+}
+
+impl ShapeDrag {
+    fn started_on(&self, original: ShapeEntry) -> Drag {
+        match self.handle {
+            Some(handle) => Drag::Resize {
+                original,
+                handle,
+                to: self.pressed,
+            },
+            None => Drag::Move {
+                original,
+                from: self.pressed,
+                to: self.pressed,
+            },
+        }
+    }
+}
+
+/// Where the pointer is at `frame` of a shape drag: up and left of `pressed`, 200 by 120 image
+/// pixels at the last frame, so a dragged corner stays on the image and every frame differs.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "frame counts stay far below 2^24, where f32 stops being exact"
+)]
+fn shape_drag_pointer(pressed: PointF, frame: usize) -> PointF {
+    let progress = frame as f32 / (SHAPE_DRAG_FRAMES - 1) as f32;
+    PointF {
+        x: pressed.x - 200.0 * progress,
+        y: pressed.y - 120.0 * progress,
+    }
+}
+
+fn shape_drags() -> [(ShapeDrag, Vec<Duration>); SHAPE_DRAGS] {
+    let ordinary = RectF {
+        x: 500.0,
+        y: 500.0,
+        width: 700.0,
+        height: 500.0,
+    };
+    let large = RectF {
+        x: 50.0,
+        y: 50.0,
+        width: 3700.0,
+        height: 2000.0,
+    };
+    let mut drags = drags_over(
+        ordinary,
+        [
+            "Move 700x500",
+            "Resize 700x500",
+            "Arrow move 700x500",
+            "Arrow end 700x500",
+            "Highlight resize 700x500",
+        ],
+    )
+    .into_iter()
+    .chain(drags_over(
+        large,
+        [
+            "Move 3700x2000",
+            "Resize 3700x2000",
+            "Arrow move 3700x2000",
+            "Arrow end 3700x2000",
+            "Highlight resize 3700x2000",
+        ],
+    ));
+    std::array::from_fn(|_| {
+        let drag = drags.next().expect("two sizes of five drags each");
+        (drag, Vec::with_capacity(SHAPE_DRAG_FRAMES))
+    })
+}
+
+fn drags_over(rect: RectF, names: [&'static str; 5]) -> [ShapeDrag; 5] {
+    let corner = PointF {
+        x: rect.x + rect.width,
+        y: rect.y + rect.height,
+    };
+    let bottom_right = Some(Handle::Box(BoxHandle::BottomRight));
+    let hollow = Shape::Rect {
+        rect,
+        fill: Fill::Hollow,
+    };
+    let arrow = Shape::Arrow {
+        from: PointF {
+            x: rect.x,
+            y: rect.y,
+        },
+        to: corner,
+    };
+    let highlight = Shape::Highlight {
+        rect,
+        strength: HighlightStrength::Strong,
+    };
+    let [moved, resized, arrow_moved, arrow_end, highlight_resized] = names;
+    [
+        ShapeDrag {
+            name: moved,
+            shape: with_border_and_shadow(hollow.clone()),
+            handle: None,
+            pressed: PointF {
+                x: rect.x + rect.width / 2.0,
+                y: rect.y,
+            },
+        },
+        ShapeDrag {
+            name: resized,
+            shape: with_border_and_shadow(hollow),
+            handle: bottom_right,
+            pressed: corner,
+        },
+        ShapeDrag {
+            name: arrow_moved,
+            shape: with_border_and_shadow(arrow.clone()),
+            handle: None,
+            pressed: PointF {
+                x: rect.x + rect.width / 2.0,
+                y: rect.y + rect.height / 2.0,
+            },
+        },
+        ShapeDrag {
+            name: arrow_end,
+            shape: with_border_and_shadow(arrow),
+            handle: Some(Handle::End),
+            pressed: corner,
+        },
+        ShapeDrag {
+            name: highlight_resized,
+            shape: Command::Add {
+                shape: highlight,
+                style: Style::new(Color { a: 96, ..RED }, 4.0),
+            },
+            handle: bottom_right,
+            pressed: corner,
+        },
+    ]
+}
+
+fn with_border_and_shadow(shape: Shape) -> Command {
+    let (shape, style) = Look::default_for(Tool::drawing(&shape))
+        .with(Property::Shadow(true))
+        .and_then(|look| look.with(Property::Border(true)))
+        .and_then(|look| look.with(Property::BorderWidth(BorderWidth::Thick)))
+        .expect("a box or an arrow takes a shadow and a border of any width")
+        .dress(shape);
+    Command::Add { shape, style }
+}
+
+fn synthetic_document() -> Result<Document, Error> {
+    let mut pixels = Vec::with_capacity(WIDTH as usize * HEIGHT as usize * 4);
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            pixels.extend([gradient(x, WIDTH), gradient(y, HEIGHT), 128, 255]);
+        }
+    }
+    let base = RgbaImage::new(WIDTH, HEIGHT, pixels).map_err(Error::SyntheticImage)?;
+    let mut history = History::new(Document::new(Arc::new(base)));
+    for index in 0..SHAPES {
+        history
+            .apply(synthetic_shape(index))
+            .map_err(Error::SyntheticShape)?;
+    }
+    Ok(history.document().clone())
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "position < extent keeps the value at most 255"
+)]
+fn gradient(position: u32, extent: u32) -> u8 {
+    (position * 255 / (extent - 1)) as u8
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "every value is below 4000, where f32 is exact"
+)]
+fn synthetic_shape(index: u32) -> Command {
+    let cell_width = (WIDTH / COLUMNS) as f32;
+    let cell_height = (HEIGHT / (SHAPES / COLUMNS)) as f32;
+    let left = (index % COLUMNS) as f32 * cell_width + 16.0;
+    let top = (index / COLUMNS) as f32 * cell_height + 16.0;
+    let (width, height) = (cell_width - 32.0, cell_height - 32.0);
+    let rect = RectF {
+        x: left,
+        y: top,
+        width,
+        height,
+    };
+    let from = PointF { x: left, y: top };
+    let to = PointF {
+        x: left + width,
+        y: top + height,
+    };
+    let (shape, alpha) = match index % 9 {
+        0 => (Shape::Arrow { from, to }, 255),
+        1 => (Shape::Line { from, to }, 255),
+        2 => (
+            Shape::Rect {
+                rect,
+                fill: Fill::Hollow,
+            },
+            255,
+        ),
+        3 => (
+            Shape::Ellipse {
+                rect,
+                fill: Fill::Hollow,
+            },
+            255,
+        ),
+        4 => (
+            Shape::Pen(
+                (0..32u8)
+                    .map(|step| PointF {
+                        x: left + width * f32::from(step) / 31.0,
+                        y: top + if step % 2 == 0 { 0.0 } else { height },
+                    })
+                    .collect(),
+            ),
+            255,
+        ),
+        5 => (
+            Shape::Highlight {
+                rect,
+                strength: HighlightStrength::Strong,
+            },
+            96,
+        ),
+        6 => (
+            Shape::Ellipse {
+                rect,
+                fill: Fill::Solid,
+            },
+            255,
+        ),
+        7 => {
+            return bordered_text(
+                TextBlock::new(from, format!("Shape {index}\nof {SHAPES}"), 24.0, 6.0)
+                    .expect("24 px and 6 ems make a valid text block"),
+            );
+        }
+        _ => (
+            Shape::Redact {
+                rect,
+                mode: if index.is_multiple_of(2) {
+                    RedactMode::Pixelate
+                } else {
+                    RedactMode::Blur
+                },
+                strength: RedactStrength::FINE,
+            },
+            255,
+        ),
+    };
+    Command::Add {
+        shape,
+        style: Style::new(Color { a: alpha, ..RED }, 4.0),
+    }
+}
+
+const RED: Color = Color {
+    r: 230,
+    g: 60,
+    b: 50,
+    a: 255,
+};
+
+/// Text in the bench's red with the thickest border, the one the canvas paints most often.
+fn bordered_text(block: TextBlock) -> Command {
+    let style = Look::default_for(Tool::Text)
+        .with(Property::Color(RED))
+        .and_then(|look| look.with(Property::Border(true)))
+        .and_then(|look| look.with(Property::BorderWidth(BorderWidth::Thick)))
+        .expect("a text look takes any colour and a border of any width")
+        .style_for(Tool::Text);
+    Command::Add {
+        shape: Shape::Text(block),
+        style,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bench_holds_still_then_pans_at_2x_then_zooms_to_4x_and_back() {
+        let fitted = Placement {
+            corner: point(px(10.0), px(20.0)),
+            scale: 0.5,
+        };
+        let centre = point(px(400.0), px(300.0));
+        let frames = NonZeroU32::new(300).unwrap();
+        let at = |frame| placement(frame, frames, fitted, centre);
+        assert_eq!((at(0), at(99)), (None, None));
+        let (first, next) = (at(100).unwrap(), at(101).unwrap());
+        assert_eq!((first.scale, next.scale), (1.0, 1.0));
+        assert_eq!(next.corner - first.corner, point(px(-4.0), px(-2.0)));
+        assert_eq!(at(200).unwrap(), fitted);
+        assert_eq!(at(250).unwrap().scale, 2.0);
+        assert!(at(299).unwrap().scale < 0.6);
+    }
+
+    #[test]
+    fn the_bench_drags_a_redaction_from_corner_to_corner_of_the_4k_image() {
+        assert_eq!(drag_corner(0, 50), DRAG_FROM);
+        assert_eq!(
+            drag_corner(50, 50),
+            PointF {
+                x: 3776.0,
+                y: 2096.0
+            }
+        );
+        let halfway = drag_corner(25, 50);
+        assert_eq!((halfway.x, halfway.y), (1920.0, 1080.0));
+    }
+
+    #[test]
+    fn every_text_in_the_bench_has_a_thick_border() {
+        let texts: Vec<_> = (0..SHAPES)
+            .map(synthetic_shape)
+            .filter_map(|command| {
+                if let Command::Add {
+                    shape: Shape::Text(_),
+                    style,
+                } = command
+                {
+                    Some(style.border().map(|border| border.width))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(texts.len(), 22);
+        assert!(texts.iter().all(|width| *width == Some(BorderWidth::Thick)));
+    }
+
+    #[test]
+    fn the_bench_reports_each_phase_by_nearest_rank() {
+        let intervals: Vec<_> = (1..=20).map(Duration::from_millis).collect();
+        assert_eq!(nearest_rank(&intervals, 50), Duration::from_millis(10));
+        assert_eq!(nearest_rank(&intervals, 95), Duration::from_millis(19));
+        assert_eq!(nearest_rank(&intervals, 100), Duration::from_millis(20));
+    }
+}

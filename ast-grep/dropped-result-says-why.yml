@@ -1,0 +1,12 @@
+id: dropped-result-says-why
+language: rust
+severity: error
+message: A value dropped with `let _ =` hides any error in it; report it, or say in a comment right above (one comment can cover a run of them) why dropping it is safe.
+rule:
+  pattern: let _ = $VALUE;
+  not:
+    follows:
+      stopBy: neighbor
+      any:
+        - kind: line_comment
+        - pattern: let _ = $OTHER;

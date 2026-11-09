@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+
+PackageIdentifier: Cleanshot.Cleanshot
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: Cleanshot
+PublisherUrl: https://github.com/IconRunner05/cleanshot
+PublisherSupportUrl: https://github.com/IconRunner05/cleanshot/issues
+PackageName: Cleanshot
+PackageUrl: https://github.com/IconRunner05/cleanshot
+License: MIT OR Apache-2.0
+LicenseUrl: https://github.com/IconRunner05/cleanshot#licence
+ShortDescription: Screenshot and markup tool for Windows 11, in one portable exe.
+Description: |-
+  Cleanshot captures a region, a monitor or the last region with a hotkey, then copies, saves
+  or opens it in an editor with arrows, shapes, text, numbered steps, speech bubbles, a
+  spotlight and redaction that leaves none of the original pixels. It has no network code,
+  writes no temporary files and keeps no capture history.
+Moniker: cleanshot
+Tags:
+  - screenshot
+  - screen-capture
+  - annotation
+ReleaseNotesUrl: https://github.com/IconRunner05/cleanshot/releases/tag/v@VERSION@
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0

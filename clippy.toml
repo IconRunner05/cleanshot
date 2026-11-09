@@ -1,0 +1,6 @@
+allow-unwrap-in-tests = true
+
+disallowed-methods = [
+    { path = "gpui::App::open_window", reason = "open windows with cleanshot_editor::open_window, which takes the graphics device first" },
+    { path = "gpui::AsyncApp::open_window", reason = "open windows with cleanshot_editor::open_window, which takes the graphics device first" },
+]

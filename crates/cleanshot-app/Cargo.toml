@@ -1,0 +1,67 @@
+[package]
+name = "cleanshot-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cleanshot"
+path = "src/main.rs"
+
+[[test]]
+name = "accessibility"
+harness = false
+
+[[test]]
+name = "toolbar_automation"
+harness = false
+
+[[test]]
+name = "toolbar_saving_off"
+harness = false
+
+[[test]]
+name = "text_drift"
+harness = false
+
+[[test]]
+name = "thumbnail_automation"
+harness = false
+
+[[test]]
+name = "settings_automation"
+harness = false
+
+[[test]]
+name = "closing"
+harness = false
+
+[[test]]
+name = "picker_drag"
+harness = false
+
+[[test]]
+name = "caption_fit"
+harness = false
+
+[[test]]
+name = "expand_collapse"
+harness = false
+
+[[test]]
+name = "minimap_redaction"
+harness = false
+
+[dependencies]
+cleanshot-core.workspace = true
+cleanshot-render.workspace = true
+cleanshot-win.workspace = true
+cleanshot-editor.workspace = true
+
+[dev-dependencies]
+cleanshot-win = { workspace = true, features = ["ui-automation-test", "drift-test"] }
+cleanshot-editor = { workspace = true, features = ["drift-test"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "1.0.0-rc.2"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+cleanshot-core = { path = "crates/cleanshot-core" }
+cleanshot-render = { path = "crates/cleanshot-render" }
+cleanshot-win = { path = "crates/cleanshot-win" }
+cleanshot-editor = { path = "crates/cleanshot-editor" }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
+
+[profile.scan-only]
+inherits = "release"
+
+[profile.scan-only.package.gpui_windows]
+debug-assertions = true

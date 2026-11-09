@@ -1,0 +1,186 @@
+name: Release
+
+# A tag vX.Y.Z publishes that version on GitHub Releases: as a pre-release when the
+# version has a pre-release suffix (v1.0.0-rc.2) or the exe is unsigned, otherwise as a release.
+# A manual run builds and checks the same files without publishing them, and uploads them as an
+# artifact.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Every CI gate, and the release exe they scanned, uploaded as cleanshot-exe.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag and Cargo.toml version
+        id: version
+        shell: bash
+        run: |
+          version=$(cargo pkgid -p cleanshot-app | sed 's/.*[#@]//')
+          if [[ $GITHUB_REF == refs/tags/* && $GITHUB_REF_NAME != "v$version" ]]; then
+            echo "FAIL: the tag is $GITHUB_REF_NAME but cleanshot-app is version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v heading="## $VERSION" '$0 == heading || index($0, heading " ") == 1 { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md" || { echo "FAIL: CHANGELOG.md has no notes under ## $VERSION"; exit 1; }
+
+      - name: Download the scanned exe
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cleanshot-exe
+          path: ${{ runner.temp }}/exe
+
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx@0.5.9
+
+      - name: Group Policy template XML
+        run: python3 -c 'import sys, xml.dom.minidom; [xml.dom.minidom.parse(path) for path in sys.argv[1:]]' policy/Cleanshot.admx policy/en-US/Cleanshot.adml
+
+      - name: Assemble the release files
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir dist
+          cp "$RUNNER_TEMP/exe/cleanshot.exe" "dist/cleanshot-$VERSION-x64.exe"
+          # The manifest names this exe's own checksum.
+          sha=$(sha256sum "dist/cleanshot-$VERSION-x64.exe" | cut -d' ' -f1)
+          for template in winget/*.yaml; do
+            sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHA256@/$sha/g" "$template" > "dist/${template#winget/}"
+          done
+          if grep -n '@VERSION@\|@SHA256@' dist/*.yaml; then echo "FAIL: a winget placeholder is left"; exit 1; fi
+          # Group Policy pairs an .adml with its .admx by name, so neither carries the version.
+          cp policy/Cleanshot.admx policy/en-US/Cleanshot.adml dist/
+          cargo cyclonedx --manifest-path crates/cleanshot-app/Cargo.toml --format json \
+            --spec-version 1.5 --target x86_64-pc-windows-msvc --override-filename sbom
+          cp crates/cleanshot-app/sbom.json "dist/cleanshot-$VERSION-x64.cdx.json"
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          listed=$(grep " cleanshot-$VERSION-x64.exe\$" SHA256SUMS | cut -d' ' -f1)
+          grep -qxF "    InstallerSha256: \"$listed\"" Cleanshot.Cleanshot.installer.yaml ||
+            { echo "FAIL: the winget manifest's InstallerSha256 is not the exe's line in SHA256SUMS"; exit 1; }
+
+      - name: Release or pre-release
+        id: kind
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          signed=$(python3 -c 'import struct, sys
+          image = open(sys.argv[1], "rb").read()
+          header = struct.unpack_from("<I", image, 0x3C)[0] + 24
+          if struct.unpack_from("<H", image, header)[0] != 0x20B:
+              sys.exit("FAIL: the exe is not a 64-bit PE image")
+          # The certificate table is data directory 4 of a PE32+ optional header; a signature fills it.
+          print("true" if struct.unpack_from("<I", image, header + 148)[0] else "false")' "dist/cleanshot-$VERSION-x64.exe")
+          if [[ $VERSION == *-* ]]; then
+            prerelease=true why="v$VERSION is a pre-release version"
+          elif [[ $signed == false ]]; then
+            prerelease=true why="the exe is unsigned"
+          else
+            prerelease=false why="v$VERSION is a plain version and the exe is signed"
+          fi
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "A tag publishes this as prerelease=$prerelease: $why"
+
+      - name: Attest the exe's build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/cleanshot-${{ steps.version.outputs.version }}-x64.exe
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.kind.outputs.prerelease }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --verify-tag --prerelease="$PRERELEASE" --title "Cleanshot $VERSION"
+          --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Upload the release files of a manual run
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+
+  # The files the reference machine measures the budgets with, never published.
+  budget-kit:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    needs: ci
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the scanned exe
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cleanshot-exe
+          path: kit
+
+      - name: Build the budget kit
+        shell: bash
+        run: |
+          cargo build --release --locked -p cleanshot-fieldtest
+          test_exe=$(cargo test --release --locked -p cleanshot-app --bin cleanshot --no-run --message-format json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test) | .executable')
+          cp target/x86_64-pc-windows-msvc/release/cleanshot-fieldtest.exe kit/
+          cp "$test_exe" kit/copy_test.exe
+          cp crates/cleanshot-fieldtest/budgets.bat kit/
+
+      - name: Trial run of the budget kit
+        shell: bash
+        run: |
+          cp -r kit "$RUNNER_TEMP/trial"
+          cd "$RUNNER_TEMP/trial"
+          cmd //c "budgets.bat < nul"
+          cat results.txt
+          missing=()
+          for verdict in 'overlay (PASS|FAIL): ' 'copy (PASS|FAIL): ' 'start (PASS|FAIL): ' \
+            'memory (PASS|FAIL): idle working set ' 'memory (PASS|FAIL): private working set ' \
+            'cpu (PASS|FAIL): ' 'size (PASS|FAIL): ' 'editor_open (PASS|FAIL): ' 'frames (PASS|FAIL): '; do
+            grep -qE "^$verdict" results.txt || missing+=("$verdict")
+          done
+          (( ${#missing[@]} == 0 )) || { printf 'FAIL: results.txt has no verdict for %s\n' "${missing[@]}"; exit 1; }
+          left=$(ls -A | LC_ALL=C sort | tr '\n' ' ')
+          expected="budgets.bat cleanshot-fieldtest.exe cleanshot.exe copy_test.exe results.txt "
+          [[ $left == "$expected" ]] || { echo "FAIL: the kit folder holds ${left}"; exit 1; }
+
+      - name: Upload the budget kit
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cleanshot-budget-kit
+          path: kit/
+          if-no-files-found: error
