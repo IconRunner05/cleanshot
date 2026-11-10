@@ -4,10 +4,12 @@ Notable changes in each release. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## 1.0.0-rc.2 (unreleased)
+## 1.0.0 (2026-11-10)
 
-Cleanshot is a screenshot and markup tool for Windows 11, in one portable exe with no
-installer, no admin rights and no network access.
+The first release. Cleanshot is a screenshot and markup tool for Windows 11, in one portable
+exe with no installer, no admin rights and no network access. This build is not code-signed
+yet, so Windows SmartScreen asks before the first run; it is marked as a pre-release until
+signed builds are in place.
 
 - Capture a region, a window, a full screen or the last region from a hotkey, the tray or
   the capture panel, with an optional countdown. The screen freezes while you choose.

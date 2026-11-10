@@ -3,7 +3,7 @@
 ## Supported versions
 
 Only the latest release on [GitHub Releases](https://github.com/IconRunner05/cleanshot/releases)
-gets security fixes. Before v1.0 every release is a pre-release.
+gets security fixes. Releases are marked as pre-releases until they are code-signed.
 
 ## Reporting a vulnerability
 

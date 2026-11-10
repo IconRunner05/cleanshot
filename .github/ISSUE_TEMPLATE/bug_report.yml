@@ -12,7 +12,7 @@ body:
     attributes:
       label: Cleanshot version
       description: The version in the exe's file name, or in its Properties > Details.
-      placeholder: 1.0.0-rc.2
+      placeholder: 1.0.0
     validations:
       required: true
   - type: input
