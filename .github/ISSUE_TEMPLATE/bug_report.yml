@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in Cleanshot does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem goes to a private report, not here: see SECURITY.md.
+        Please leave screenshots of private content out of this public issue.
+  - type: input
+    id: version
+    attributes:
+      label: Cleanshot version
+      description: The version in the exe's file name, or in its Properties > Details.
+      placeholder: 1.0.0-rc.2
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and build
+      description: Run `winver` to see it.
+      placeholder: Windows 11 24H2, build 26100.2314
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Press PrtSc
+        2. Drag a region
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Displays and setup
+      description: Number of monitors, their scale settings, and anything unusual (remote desktop, a second GPU, high contrast).

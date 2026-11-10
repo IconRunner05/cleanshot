@@ -1,7 +1,8 @@
 # Changelog
 
-A release's notes on GitHub are its section below, so a version is tagged only once its
-section exists.
+Notable changes in each release. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/).
 
 ## 1.0.0-rc.2 (unreleased)
 
