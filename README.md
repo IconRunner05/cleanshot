@@ -42,6 +42,10 @@
 2. Put it anywhere you like, for example in a `Tools` folder or on a USB stick, and run it.
    Cleanshot sits in the tray, ready for a hotkey.
 
+Versions follow [Semantic Versioning](https://semver.org/): a new middle number adds features,
+a new last number only fixes things. [CHANGELOG.md](CHANGELOG.md) and each release's notes say
+what changed, and the settings window shows the version you are running.
+
 Releases are not code-signed yet (see [Code signing policy](#code-signing-policy)), so
 Windows SmartScreen may warn on the first run. Choose **More info**, then **Run anyway**.
 To check that a download is the one this repository built, see
@@ -114,8 +118,9 @@ or opened as soon as you let go of the mouse.
 | Ctrl+wheel, Space+drag | Zoom, pan |
 | Ctrl+0 / Ctrl+1 | Fit to window / actual size |
 
-The property strip beside the tools sets colour, stroke, fill, shadow, border, text size and
-alignment, and redaction strength. Each tool remembers its own look, across restarts too.
+The property strip beside the tools sets colour, stroke, fill and its opacity, shadow, border,
+text size, alignment and background, and redaction and spotlight strength. Each tool remembers
+its own look, across restarts too.
 
 ## Settings
 

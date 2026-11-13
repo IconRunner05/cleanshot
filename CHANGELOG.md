@@ -4,6 +4,31 @@ Notable changes in each release. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.1.0 (2026-11-13)
+
+Small improvements to capturing, the editor and the settings window. Settings files from 1.0.0
+are read as before.
+
+### Added
+
+- In the capture toolbar, C copies, S saves and Shift+S opens Save As.
+- After capture can now open the editor: a region opens in it as soon as you let go of the
+  mouse.
+- The capture toolbar can sit at the top of the screen instead of the bottom, and it follows
+  the pointer to whichever monitor it is on.
+- Text can have a box behind it, in a colour of its own, with the border drawn round the box.
+- Filled shapes, text boxes, speech bubbles and numbered steps have an opacity slider.
+- The settings window shows which version of Cleanshot is running.
+
+### Changed
+
+- With After capture set to Copy, a region or a window you click is now copied as soon as you
+  let go of the mouse, instead of waiting at the toolbar. Choose Show the toolbar to keep the
+  old behaviour for regions.
+- The spotlight remembers how dark it was, like every other tool setting.
+- The editor window resizes to fit the image when a crop is applied or undone.
+- The settings window opens tall enough to show all of its settings, where the screen allows.
+
 ## 1.0.0 (2026-11-10)
 
 The first release. Cleanshot is a screenshot and markup tool for Windows 11, in one portable
