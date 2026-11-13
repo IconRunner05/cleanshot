@@ -1,6 +1,8 @@
 use std::ops::RangeInclusive;
 
-use crate::document::{BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength};
+use crate::document::{
+    BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength, SpotlightDim,
+};
 use crate::look::{ANNOTATION_RED, HIGHLIGHTER_YELLOW, Look, Property, WHITE};
 use crate::text::{Alignment, DEFAULT_TEXT_SIZE, Horizontal, Vertical};
 use crate::tool::Tool;
@@ -25,6 +27,8 @@ pub enum Setting {
     Border,
     BorderColor,
     BorderWidth,
+    /// How dark the image is outside every spotlight.
+    Dim,
 }
 
 impl Setting {
@@ -85,7 +89,12 @@ impl Setting {
                 Self::BorderColor,
                 Self::BorderWidth,
             ],
-            Tool::Spotlight => &[Self::Border, Self::BorderColor, Self::BorderWidth],
+            Tool::Spotlight => &[
+                Self::Dim,
+                Self::Border,
+                Self::BorderColor,
+                Self::BorderWidth,
+            ],
             Tool::Select | Tool::Crop => &[],
         }
     }
@@ -115,7 +124,8 @@ impl Setting {
             | Self::Shadow
             | Self::Alignment
             | Self::HorizontalAlignment
-            | Self::Border => true,
+            | Self::Border
+            | Self::Dim => true,
         }
     }
 
@@ -134,6 +144,7 @@ impl Setting {
             Self::Border => "Border",
             Self::BorderColor => "Border colour",
             Self::BorderWidth => "Border width",
+            Self::Dim => "Dim",
         }
     }
 
@@ -165,7 +176,8 @@ impl Setting {
             | Self::HorizontalAlignment
             | Self::Border
             | Self::BorderColor
-            | Self::BorderWidth => None,
+            | Self::BorderWidth
+            | Self::Dim => None,
         }
     }
 
@@ -192,7 +204,8 @@ impl Setting {
             | Self::Alignment
             | Self::HorizontalAlignment
             | Self::Border
-            | Self::BorderWidth => None,
+            | Self::BorderWidth
+            | Self::Dim => None,
         }
     }
 
@@ -214,6 +227,7 @@ impl Setting {
             Self::Border => &BORDER_CHOICES,
             Self::BorderColor => &BORDER_COLOR_CHOICES,
             Self::BorderWidth => &BORDER_WIDTH_CHOICES,
+            Self::Dim => &DIM_CHOICES,
         }
     }
 }
@@ -376,6 +390,12 @@ const BORDER_WIDTH_CHOICES: [(Property, &str); 3] = [
     (Property::BorderWidth(BorderWidth::Thin), "2 pixels"),
     (Property::BorderWidth(BorderWidth::Medium), "4 pixels"),
     (Property::BorderWidth(BorderWidth::Thick), "6 pixels"),
+];
+
+const DIM_CHOICES: [(Property, &str); 3] = [
+    (Property::Dim(SpotlightDim::Light), "Light"),
+    (Property::Dim(SpotlightDim::Medium), "Medium"),
+    (Property::Dim(SpotlightDim::Dark), "Dark"),
 ];
 
 const STROKE_WIDTH_CHOICES: [(Property, &str); 4] = [

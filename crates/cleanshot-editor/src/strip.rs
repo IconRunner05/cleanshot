@@ -1,6 +1,6 @@
 use cleanshot_core::{
-    Alignment, ColorValue, Command, Document, Fill, Horizontal, KeyAction, Look, Property, Setting,
-    SpotlightDim, Tool, TypedValue, Vertical, Warning, tooltip_text,
+    Alignment, ColorValue, Document, Fill, Horizontal, KeyAction, Look, Property, Setting, Tool,
+    TypedValue, Vertical, Warning, tooltip_text,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -16,21 +16,23 @@ use crate::theme::{CORNER, ControlFill, Theme, filled, panel};
 use crate::tooltip::with_tooltip;
 
 /// The property strip under the toolbar: a group for each setting `tool`
-/// shows in `look`, with `look`'s values checked, then the document's spotlight dim for the
-/// Spotlight tool, then the shape's shadow and border where the tool has them.
-/// `on_set` is called with the choice picked, `on_document` with the document change, by
-/// click, Enter or Space, and `on_sample` when the colour picker's "From image" asks for a
-/// colour from the screenshot. The caption row lays the groups out.
+/// shows in `look`, with `look`'s values checked and the document's own spotlight dim, then
+/// the shape's shadow and border where the tool has them.
+/// `on_set` is called with the choice picked, by click, Enter or Space, and `on_sample` when
+/// the colour picker's "From image" asks for a colour from the screenshot. The caption row
+/// lays the groups out.
 pub(crate) fn property_strip(
     tool: Tool,
     look: Look,
     document: &Document,
     theme: Theme,
     on_set: impl Fn(Property, &mut Window, &mut App) + Clone + 'static,
-    on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
     on_sample: impl Fn(ColorValue, &mut Window, &mut App) + Clone + 'static,
 ) -> Vec<(StripGroup, AnyElement)> {
-    let dim = (tool == Tool::Spotlight).then(|| document.dim());
+    // Undo can take the image's dim away from the one its tool remembers.
+    let look = look
+        .with(Property::Dim(document.dim()))
+        .expect("a dim is never refused");
     let (shape, own): (Vec<Setting>, Vec<Setting>) = Setting::shown_for(tool, &look)
         .into_iter()
         .partition(|&setting| in_shape_group(setting));
@@ -41,10 +43,6 @@ pub(crate) fn property_strip(
             (StripGroup::Setting(setting), group.into_any_element())
         })
         .collect();
-    if let Some(dim) = dim {
-        let group = dim_group(dim, theme, on_document);
-        groups.push((StripGroup::Dim, group.into_any_element()));
-    }
     if !shape.is_empty() {
         let group = group(SHAPE, Role::Group, theme)
             .child(group_label(SHAPE, theme))
@@ -60,7 +58,6 @@ pub(crate) fn property_strip(
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum StripGroup {
     Setting(Setting),
-    Dim,
     Shape,
     Crop,
 }
@@ -114,7 +111,8 @@ fn in_shape_group(setting: Setting) -> bool {
         | Setting::HighlightStrength
         | Setting::TextSize
         | Setting::Alignment
-        | Setting::HorizontalAlignment => false,
+        | Setting::HorizontalAlignment
+        | Setting::Dim => false,
     }
 }
 
@@ -164,7 +162,8 @@ fn setting_group(
         | Setting::RedactStrength
         | Setting::HighlightStrength
         | Setting::TextSize
-        | Setting::BorderWidth => {
+        | Setting::BorderWidth
+        | Setting::Dim => {
             let choices = setting.choices().iter().map(|&(property, choice)| {
                 let on_set = on_set.clone();
                 let id = format!("{name}: {choice}");
@@ -440,34 +439,6 @@ fn alignment_glyph(alignment: Alignment, theme: Theme) -> Div {
     frame.children(lines)
 }
 
-/// The spotlight dim's three steps, with `dim` checked.
-fn dim_group(
-    dim: SpotlightDim,
-    theme: Theme,
-    on_document: impl Fn(Command, &mut Window, &mut App) + Clone + 'static,
-) -> Stateful<Div> {
-    let choices = [
-        (SpotlightDim::Light, "Light"),
-        (SpotlightDim::Medium, "Medium"),
-        (SpotlightDim::Dark, "Dark"),
-    ]
-    .map(|(choice, name)| {
-        let on_document = on_document.clone();
-        strip_button(
-            format!("{SPOTLIGHT_DIM}: {name}"),
-            Role::RadioButton,
-            name,
-            choice == dim,
-            theme,
-        )
-        .on_click(move |_, window, cx| on_document(Command::SetDim(choice), window, cx))
-        .child(div().text_xs().text_color(theme.text).child(name))
-    });
-    group(SPOTLIGHT_DIM, Role::RadioGroup, theme).children(choices)
-}
-
-const SPOTLIGHT_DIM: &str = "Dim";
-
 /// A labelled row of buttons.
 fn group(name: &'static str, role: Role, theme: Theme) -> Stateful<Div> {
     div()
@@ -539,7 +510,8 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
         Property::Redact(_)
         | Property::HighlightStrength(_)
         | Property::Shadow(_)
-        | Property::Border(_) => div().text_xs().text_color(theme.text).child(name),
+        | Property::Border(_)
+        | Property::Dim(_) => div().text_xs().text_color(theme.text).child(name),
         Property::TextSize(size) => div()
             .text_xs()
             .text_color(theme.text)

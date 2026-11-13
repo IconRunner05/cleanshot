@@ -27,6 +27,12 @@ impl Document {
         }
     }
 
+    /// This document, before its first edit, dimmed `dim` outside every spotlight.
+    #[must_use]
+    pub fn with_dim(self, dim: SpotlightDim) -> Self {
+        Self { dim, ..self }
+    }
+
     /// The capture, never changed by an edit.
     #[must_use]
     pub fn base(&self) -> &Arc<RgbaImage> {

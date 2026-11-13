@@ -1,6 +1,6 @@
 use crate::document::{
     Border, BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength, Shape,
-    ShapeEntry, Style,
+    ShapeEntry, SpotlightDim, Style,
 };
 use crate::text::{Alignment, DEFAULT_TEXT_SIZE, TextBlock};
 use crate::tool::Tool;
@@ -40,6 +40,7 @@ pub struct Look {
     border: bool,
     border_color: Color,
     border_width: BorderWidth,
+    dim: SpotlightDim,
 }
 
 impl Look {
@@ -73,7 +74,14 @@ impl Look {
             border: false,
             border_color: WHITE,
             border_width: BorderWidth::Thin,
+            dim: SpotlightDim::Medium,
         }
+    }
+
+    /// How dark the image is outside every spotlight, for a spotlight's look.
+    #[must_use]
+    pub fn dim(&self) -> SpotlightDim {
+        self.dim
     }
 
     /// Whether this look's shapes cast a shadow, where the shape can cast one.
@@ -244,6 +252,7 @@ impl Look {
                 ..self
             },
             Property::Alignment(alignment) => Self { alignment, ..self },
+            Property::Dim(dim) => Self { dim, ..self },
         })
     }
 
@@ -319,6 +328,8 @@ pub enum Property {
     Border(bool),
     BorderColor(Color),
     BorderWidth(BorderWidth),
+    /// One setting for the whole image, which the next image also starts with.
+    Dim(SpotlightDim),
 }
 
 /// Whether the shapes `tool` draws can cast a shadow.

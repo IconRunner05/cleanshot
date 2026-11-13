@@ -28,7 +28,8 @@ impl Looks {
     /// Sets `property` on `selected` if a shape is selected, otherwise on how `tool` draws its
     /// next shape. The returned command restyles the selection through [`Look::dress`], the
     /// rule new shapes are drawn by, so it is one undo step; `None` if nothing on the
-    /// document changes. The selected shape's tool draws its next shape the same way.
+    /// document changes. The selected shape's tool draws its next shape the same way. A
+    /// spotlight dim is the image's own, so it always comes back as the command that sets it.
     ///
     /// # Errors
     ///
@@ -41,8 +42,9 @@ impl Looks {
     ) -> Result<Option<Command>, PropertyError> {
         let tool = selected.map_or(tool, |entry| Tool::drawing(&entry.shape));
         let next = self.look(tool).with(property)?;
-        let restyled = match selected {
-            Some(entry) => {
+        let restyled = match (property, selected) {
+            (Property::Dim(dim), _) => Some(Command::SetDim(dim)),
+            (_, Some(entry)) => {
                 let (shape, style) = Look::of(entry, next)
                     .with(property)?
                     .dress(entry.shape.clone());
@@ -52,7 +54,7 @@ impl Looks {
                     style,
                 })
             }
-            None => None,
+            (_, None) => None,
         };
         self.by_tool.insert(tool, next);
         Ok(restyled)
@@ -158,7 +160,7 @@ mod tests {
     use crate::document::Color;
     use crate::document::{
         Border, BorderWidth, Document, Fill, HighlightStrength, PointF, RectF, RedactMode,
-        RedactStrength, RgbaImage, Shape,
+        RedactStrength, RgbaImage, Shape, SpotlightDim,
     };
     use crate::drag::{Drag, Start};
     use crate::look::{HIGHLIGHTER_YELLOW, WHITE, takes_border, takes_shadow};
@@ -592,6 +594,27 @@ mod tests {
             }
         }
         assert_eq!(looks.look(Tool::Pen), Look::default_for(Tool::Pen));
+    }
+
+    #[test]
+    fn a_dim_picked_on_the_strip_sets_the_image_in_one_step_and_is_kept_for_the_next_image() {
+        let mut looks = Looks::default();
+        let dark = Property::Dim(SpotlightDim::Dark);
+        assert_eq!(
+            looks.set(dark, Tool::Spotlight, None),
+            Ok(Some(Command::SetDim(SpotlightDim::Dark)))
+        );
+        assert_eq!(looks.look(Tool::Spotlight).dim(), SpotlightDim::Dark);
+        let spotlight = entry(
+            Shape::Spotlight(AREA),
+            Look::default_for(Tool::Spotlight).style(),
+        );
+        let light = Property::Dim(SpotlightDim::Light);
+        assert_eq!(
+            looks.set(light, Tool::Select, Some(&spotlight)),
+            Ok(Some(Command::SetDim(SpotlightDim::Light)))
+        );
+        assert_eq!(looks.look(Tool::Spotlight).dim(), SpotlightDim::Light);
     }
 
     #[test]

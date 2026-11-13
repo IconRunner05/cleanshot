@@ -1,7 +1,9 @@
 use toml::{Table, Value};
 
 use super::Reader;
-use crate::document::{BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength};
+use crate::document::{
+    BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength, SpotlightDim,
+};
 use crate::look::{Look, Property};
 use crate::looks::Looks;
 use crate::strip::Setting;
@@ -115,6 +117,7 @@ fn key(setting: Setting) -> &'static str {
         Setting::Border => "border",
         Setting::BorderColor => "border_color",
         Setting::BorderWidth => "border_width",
+        Setting::Dim => "dim",
     }
 }
 
@@ -157,6 +160,12 @@ fn value(setting: Setting, look: &Look) -> Value {
         Setting::Border => look.border().into(),
         Setting::BorderColor => look.border_color().hex().into(),
         Setting::BorderWidth => i64::from(look.border_width().pixels()).into(),
+        Setting::Dim => match look.dim() {
+            SpotlightDim::Light => "light",
+            SpotlightDim::Medium => "medium",
+            SpotlightDim::Dark => "dark",
+        }
+        .into(),
     }
 }
 
@@ -221,6 +230,12 @@ fn property(setting: Setting, value: &Value, look: &Look) -> Option<Property> {
             2 => BorderWidth::Thin,
             4 => BorderWidth::Medium,
             6 => BorderWidth::Thick,
+            _ => return None,
+        })),
+        Setting::Dim => offered(Property::Dim(match value.as_str()? {
+            "light" => SpotlightDim::Light,
+            "medium" => SpotlightDim::Medium,
+            "dark" => SpotlightDim::Dark,
             _ => return None,
         })),
     }
@@ -333,7 +348,8 @@ pub(super) mod tests {
                     | Setting::HorizontalAlignment
                     | Setting::Border
                     | Setting::BorderColor
-                    | Setting::BorderWidth => setting
+                    | Setting::BorderWidth
+                    | Setting::Dim => setting
                         .choices()
                         .iter()
                         .rev()
@@ -420,6 +436,7 @@ pub(super) mod tests {
             (Tool::Bubble, Property::Alignment(bottom_right)),
             (Tool::Step, Property::TextSize(36.0)),
             (Tool::Spotlight, Property::Border(true)),
+            (Tool::Spotlight, Property::Dim(SpotlightDim::Dark)),
         ]);
         assert_ne!(looks, Looks::default());
         let written = Settings {
@@ -445,6 +462,38 @@ pub(super) mod tests {
             restarted.look(Tool::Redact).redact_strength(),
             RedactStrength::clamped(100)
         );
+    }
+
+    #[test]
+    fn every_value_the_strip_can_set_for_any_tool_survives_a_restart() {
+        let teal = Color::from_hex("#17A2A8").unwrap();
+        for tool in Tool::ALL {
+            let default = Look::default_for(tool);
+            for &setting in Setting::for_tool(tool) {
+                let mut properties: Vec<Property> = setting
+                    .choices()
+                    .iter()
+                    .map(|&(choice, _)| choice)
+                    .collect();
+                if let Some(typed) = setting.typed(&default) {
+                    let range = typed.range();
+                    properties
+                        .extend([*range.start(), *range.end()].map(|end| typed.property(end)));
+                }
+                if let Some(colored) = setting.colored(&default) {
+                    properties.push(colored.property(teal));
+                }
+                for property in properties {
+                    let looks = set_all(&[(tool, property)]);
+                    let written = Settings {
+                        looks: looks.clone(),
+                        ..Settings::default()
+                    }
+                    .to_toml();
+                    assert_eq!(read(&written), (looks, vec![]), "{tool:?} {property:?}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -483,7 +532,8 @@ pub(super) mod tests {
              [looks.ellipse]\nfill = 3\n\
              [looks.highlighter]\nstrength = 'light'\n\
              [looks.pen]\nstroke_width = 5\n\
-             [looks.step]\ntext_size = 'large'\n",
+             [looks.step]\ntext_size = 'large'\n\
+             [looks.spotlight]\ndim = 'darkest'\n",
         );
         assert_eq!(
             problems,
@@ -496,6 +546,7 @@ pub(super) mod tests {
                 invalid("looks.redact.strength"),
                 invalid("looks.text.text_size"),
                 invalid("looks.text.alignment"),
+                invalid("looks.spotlight.dim"),
                 invalid("looks.step.text_size"),
             ]
         );

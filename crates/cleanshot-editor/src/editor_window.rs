@@ -190,6 +190,8 @@ impl EditorView {
                 cx.notify();
             }
         });
+        let looks = remembered_looks(cx);
+        let document = document.with_dim(looks.look(Tool::Spotlight).dim());
         Self {
             glow: document.base().average_color(),
             base: render_image(document.base()),
@@ -201,7 +203,7 @@ impl EditorView {
             drag: None,
             text_box: None,
             menu: None,
-            looks: remembered_looks(cx),
+            looks,
             toolbar_menus: ToolbarMenus::new(cx),
             surface,
             previews: Rc::new(Previews::new(masks, Rc::clone(&log))),
@@ -492,8 +494,8 @@ impl EditorView {
         (tools, actions)
     }
 
-    /// The property strip for what the next strip change would restyle and the spotlight dim
-    /// while a spotlight is picked; or the Crop tool's Apply and Cancel.
+    /// The property strip for what the next strip change would restyle; or the Crop tool's
+    /// Apply and Cancel.
     fn strip(&self, view: &WeakEntity<Self>, theme: Theme) -> Vec<(StripGroup, AnyElement)> {
         if self.cropping.is_some() {
             let actor = view.clone();
@@ -514,28 +516,13 @@ impl EditorView {
                 cx.notify();
             });
         };
-        let changer = view.clone();
-        let on_document = move |command, _: &mut Window, cx: &mut App| {
-            update_while_open(&changer, cx, |view, cx| {
-                view.apply(command);
-                cx.notify();
-            });
-        };
         let (strip_tool, look) = if let Some(text_box) = &self.text_box {
             (text_box.tool(), text_box.look(&self.looks))
         } else {
             let selected = self.selected.and_then(|id| self.document.shape(id));
             self.looks.shown(self.tool, selected)
         };
-        property_strip(
-            strip_tool,
-            look,
-            &self.document,
-            theme,
-            on_set,
-            on_document,
-            on_sample,
-        )
+        property_strip(strip_tool, look, &self.document, theme, on_set, on_sample)
     }
 
     /// Sets what the strip or the colour picker picked, and remembers a changed look.
