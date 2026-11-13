@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cleanshot_core::{
-    Document, Fill, Label, PointF, RectF, Shape, ShapeEntry, ShapeId, Style, TextMasks, moved,
+    Document, Fill, Label, Opacity, PointF, RectF, Shape, ShapeEntry, ShapeId, Style, TextMasks,
+    moved,
 };
 use cleanshot_render::{shape_border, shape_shadow};
 use gpui::{App, BoxShadow, Corners, RenderImage, Rgba, Window, hsla, point, px};
@@ -185,8 +186,12 @@ impl ShapePatches {
 
 /// The box and corner radius, in image pixels, that cast `shape`'s shadow when GPUI can draw it
 /// as a box shadow: a solid rectangle, a numbered step's circle, a speech bubble's box, a text's
-/// background in `style`.
+/// background in `style`. Under a see-through fill the export's shadow also takes the opaque
+/// border and text, which a box shadow cannot, so none is given.
 fn box_shadow(shape: &Shape, style: Style) -> Option<(RectF, f32)> {
+    if style.opacity() != Opacity::FULL {
+        return None;
+    }
     match shape {
         Shape::Text(block) if style.background().is_some() => Some((block.padded_extent(), 0.0)),
         Shape::Rect {
@@ -232,13 +237,11 @@ pub(super) fn paint_shadow(
     let fit = painting.fit;
     let offset = Style::SHADOW_OFFSET as f32;
     if let Some((rect, radius)) = box_shadow(shape, style) {
-        let fill_share = f32::from(style.opacity().percent()) / 100.0;
         window.paint_drop_shadows(
             fit.bounds(rect),
             Corners::all(px(radius * fit.scale)),
             &[BoxShadow {
-                // The export casts a shadow as dark as the fill is opaque.
-                color: hsla(0.0, 0.0, 0.0, Style::SHADOW_ALPHA * fill_share),
+                color: hsla(0.0, 0.0, 0.0, Style::SHADOW_ALPHA),
                 offset: point(px(0.0), px(offset * fit.scale)),
                 blur_radius: px(Style::SHADOW_BLUR as f32 * fit.scale),
                 spread_radius: px(0.0),
@@ -247,7 +250,7 @@ pub(super) fn paint_shadow(
         );
         return Ok(());
     }
-    if let Shape::Text(block) = shape {
+    if let (Shape::Text(block), None) = (shape, style.background()) {
         let below = Fit {
             origin: fit.origin + point(px(0.0), px(offset * fit.scale)),
             ..*fit

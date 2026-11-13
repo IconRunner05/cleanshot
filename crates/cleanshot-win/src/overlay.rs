@@ -169,10 +169,16 @@ impl Shared {
 
     /// Moves the toolbar to `window`, which shows `monitor` at `scale`, unless it is there.
     fn host_toolbar(&self, window: HWND, monitor: RECT, scale: f32) {
-        if self.toolbar_window.replace(Some(window)) != Some(window) {
-            self.toolbar.set(Some((monitor, scale)));
-            self.changed();
+        let before = self.toolbar_window.replace(Some(window));
+        if before == Some(window) {
+            return;
         }
+        // A screen reader holding the old window's toolbar asks the new one instead.
+        if let Some(before) = before {
+            automation::forget(before);
+        }
+        self.toolbar.set(Some((monitor, scale)));
+        self.changed();
     }
 
     /// A selection made with the pointer is copied or edited at once when After capture says so.
@@ -845,6 +851,36 @@ pub(crate) mod tests {
             bottom: 20,
         };
         assert_eq!(copied.get(), Some(expected));
+    }
+
+    #[test]
+    fn with_after_capture_set_to_copy_a_window_picked_with_the_keyboard_only_selects_it() {
+        let _screen = screen();
+        let copied = Rc::new(Cell::new(false));
+        let sink = Rc::clone(&copied);
+        let overlay = Overlay::show(
+            &[monitor()],
+            Opening {
+                pickable: vec![Pickable {
+                    frame: screen_rect(monitor().bounds),
+                    title: "Notes".to_owned(),
+                }],
+                after_selecting: AfterCapture::Copy,
+                ..Opening::default()
+            },
+            Vec::new,
+            move |event| sink.set(sink.get() || matches!(event, OverlayEvent::Copy(_))),
+        )
+        .expect("the overlay opens");
+        overlay.pick_window();
+        overlay.shared.press(Key::Focus(TabDirection::Forward));
+        overlay.shared.press(Key::Press);
+        assert!(
+            overlay.shared.selected.get().is_some(),
+            "Tab then Enter picks the window"
+        );
+        drop(overlay);
+        assert!(!copied.get(), "a keyboard pick waits for the toolbar");
     }
 
     #[test]

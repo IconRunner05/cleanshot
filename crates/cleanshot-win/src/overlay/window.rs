@@ -154,7 +154,7 @@ impl Surface {
             return self.shared.choose(control);
         }
         if let Mode::Window { .. } = self.shared.mode.get() {
-            return self.shared.pick(self.shared.picked_at(at));
+            return self.pick_with_pointer(at);
         }
         // SAFETY: the window belongs to this thread; capture keeps the drag going past its edge.
         unsafe { SetCapture(window) };
@@ -175,7 +175,9 @@ impl Surface {
     }
 
     fn moved(&self, window: HWND, now: POINT) {
-        self.shared.host_toolbar(window, self.monitor, self.scale);
+        if let Err(error) = self.take_toolbar(window) {
+            return self.shared.send(OverlayEvent::DrawFailed(error));
+        }
         if self.tips.borrow().is_none() {
             self.make_tips(window);
         }
@@ -212,10 +214,33 @@ impl Surface {
             return self.shared.changed();
         };
         if gesture.clicking {
-            return self.shared.pick(self.shared.picked_at(at));
+            return self.pick_with_pointer(at);
         }
         self.shared.changed();
         if gesture.grip == Grip::Draw && self.shared.selected.get().is_some() {
+            self.shared.selected_with_pointer();
+        }
+    }
+
+    /// Brings the toolbar to this window, making its paint the first time, outside any draw.
+    fn take_toolbar(&self, window: HWND) -> windows::core::Result<()> {
+        if self.toolbar.borrow().is_none() {
+            let paint = Paint::new(
+                &self.target.cast()?,
+                Some(&self.frozen),
+                self.scale,
+                &self.shared.palette,
+            )?;
+            *self.toolbar.borrow_mut() = Some(paint);
+        }
+        self.shared.host_toolbar(window, self.monitor, self.scale);
+        Ok(())
+    }
+
+    fn pick_with_pointer(&self, at: POINT) {
+        let picked = self.shared.picked_at(at);
+        self.shared.pick(picked);
+        if picked.is_some() {
             self.shared.selected_with_pointer();
         }
     }
@@ -240,18 +265,9 @@ impl Surface {
                     .flat_map(|placed| placed.client_areas(self.origin)),
             );
         }
-        let Some(placed) = placed else {
+        let toolbar = self.toolbar.borrow();
+        let (Some(paint), Some(placed)) = (&*toolbar, placed) else {
             return Ok(());
-        };
-        let mut toolbar = self.toolbar.borrow_mut();
-        let paint = match &mut *toolbar {
-            Some(paint) => paint,
-            None => toolbar.insert(Paint::new(
-                &self.target.cast()?,
-                Some(&self.frozen),
-                self.scale,
-                &self.shared.palette,
-            )?),
         };
         paint.draw(&placed, self.origin, self.shared.focus.get(), |control| {
             ControlFace {
