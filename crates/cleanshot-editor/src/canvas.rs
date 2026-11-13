@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     Bubble, Color, Command, Document, Fill, Label, PointF, RectF, RgbaImage, Shape, ShapeId,
-    SpotlightDim, Style, areas_outside, arrow_head, box_handles, dimmed_areas, handles,
+    SpotlightDim, Style, TextBlock, areas_outside, arrow_head, box_handles, dimmed_areas, handles,
     step_numbers, text_on,
 };
 use gpui::{
@@ -423,7 +423,7 @@ fn paint_shape(
             let points: Vec<_> = points.iter().map(|p| fit.point(*p)).collect();
             paint_polygon(window, stroke, &points, false, color)
         }
-        Shape::Text(block) => paint_label(&Label::Block(block), color, fit, window, cx),
+        Shape::Text(block) => paint_text(block, style, fit, window, cx),
         Shape::Redact {
             rect,
             mode,
@@ -456,6 +456,20 @@ fn paint_shape(
         }
         Shape::Bubble(bubble) => paint_bubble(bubble, style, fit, window, cx),
     }
+}
+
+/// The text in the style colour, on its background where it has one.
+fn paint_text(
+    block: &TextBlock,
+    style: Style,
+    fit: &Fit,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), Unpainted> {
+    if let Some(background) = style.background() {
+        window.paint_quad(fill(fit.bounds(block.padded_extent()), rgba(background)));
+    }
+    paint_label(&Label::Block(block), rgba(style.color), fit, window, cx)
 }
 
 /// The rounded box and tail in the style colour, the text on them in the colour that reads.

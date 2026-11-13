@@ -156,7 +156,11 @@ fn painted_box(entry: &ShapeEntry, masks: Option<&TextMasks>) -> Option<RectF> {
         | Shape::Spotlight(rect) => corners(*rect).to_vec(),
         Shape::Pen(points) => points.clone(),
         Shape::Text(block) => {
-            let mut points = corners(block.extent()).to_vec();
+            let area = match entry.style.background() {
+                Some(_) => block.padded_extent(),
+                None => block.extent(),
+            };
+            let mut points = corners(area).to_vec();
             for layer in masks
                 .and_then(|masks| masks.layers(entry.id))
                 .unwrap_or(&[])

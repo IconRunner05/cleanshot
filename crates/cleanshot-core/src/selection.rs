@@ -1,4 +1,4 @@
-use crate::document::{Document, Fill, PointF, RectF, Shape, ShapeId};
+use crate::document::{Document, Fill, PointF, RectF, Shape, ShapeId, Style};
 
 /// One of the eight points on a box's outline that resize it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub fn shape_at(document: &Document, point: PointF, tolerance: f32) -> Option<Sh
         .rev()
         .find(|entry| {
             let reach = tolerance + entry.style.stroke_width / 2.0;
-            hits(&entry.shape, point, reach)
+            hits(&entry.shape, &entry.style, point, reach)
         })
         .map(|entry| entry.id)
 }
@@ -260,10 +260,10 @@ const BOX_HANDLES: [BoxHandle; 8] = [
     BoxHandle::Left,
 ];
 
-/// Whether a press at `point` lands on `shape`, within `reach` image pixels of its outline or inside
-/// it, as [`shape_at`] tests every shape.
+/// Whether a press at `point` lands on `shape` drawn in `style`, within `reach` image pixels of
+/// its outline or inside it, a text's background among it, as [`shape_at`] tests every shape.
 #[must_use]
-pub fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
+pub fn hits(shape: &Shape, style: &Style, point: PointF, reach: f32) -> bool {
     match shape {
         Shape::Arrow { from, to } | Shape::Line { from, to } => {
             segment_distance(*from, *to, point) <= reach
@@ -298,7 +298,13 @@ pub fn hits(shape: &Shape, point: PointF, reach: f32) -> bool {
             rect,
             fill: Fill::Solid,
         } => inside_ellipse(grown(*rect, reach), point),
-        Shape::Text(block) => inside(grown(block.extent(), reach), point),
+        Shape::Text(block) => {
+            let area = match style.background() {
+                Some(_) => block.padded_extent(),
+                None => block.extent(),
+            };
+            inside(grown(area, reach), point)
+        }
         Shape::Step(step) => inside_ellipse(grown(step.circle(), reach), point),
         Shape::Bubble(bubble) => {
             inside(grown(bubble.outline(), reach), point)
@@ -687,7 +693,8 @@ mod tests {
     #[test]
     fn a_spotlight_is_gripped_by_its_edge_and_not_inside() {
         let spotlight = Shape::Spotlight(rect(0.0, 0.0, 100.0, 50.0));
-        assert!(hits(&spotlight, point(100.0, 25.0), 3.0));
-        assert!(!hits(&spotlight, point(50.0, 25.0), 3.0));
+        let plain = crate::Look::default_for(crate::Tool::Spotlight).style();
+        assert!(hits(&spotlight, &plain, point(100.0, 25.0), 3.0));
+        assert!(!hits(&spotlight, &plain, point(50.0, 25.0), 3.0));
     }
 }

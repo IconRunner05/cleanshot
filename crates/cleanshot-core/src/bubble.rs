@@ -1,10 +1,6 @@
 use crate::document::{PointF, RectF};
 use crate::selection::BoxHandle;
-use crate::text::{BoxSize, LINE_HEIGHT, TextBlock};
-
-/// The space between a bubble's text and its edge, and its corners' radius, as a multiple of
-/// its text size.
-pub(crate) const BUBBLE_PADDING: f32 = 0.5;
+use crate::text::{BOX_PADDING, BoxSize, LINE_HEIGHT, TextBlock};
 
 /// A speech bubble: text in a rounded box filled with the style colour, with a tail
 /// from the box to `tail`. The box is not stored: it is the text's extent, padded.
@@ -27,7 +23,7 @@ impl Bubble {
     /// high.
     #[must_use]
     pub(crate) fn text_box_in(area: RectF, size: f32) -> Option<(PointF, BoxSize)> {
-        let padding = BUBBLE_PADDING * size;
+        let padding = BOX_PADDING * size;
         let width = (area.width - 2.0 * padding) / size;
         (width >= 1.0).then_some((
             PointF {
@@ -65,20 +61,13 @@ impl Bubble {
     /// The rounded box, with corners of [`Bubble::corner_radius`].
     #[must_use]
     pub fn outline(&self) -> RectF {
-        let padding = BUBBLE_PADDING * self.block.size();
-        let text = self.block.extent();
-        RectF {
-            x: text.x - padding,
-            y: text.y - padding,
-            width: text.width + 2.0 * padding,
-            height: text.height + 2.0 * padding,
-        }
+        self.block.padded_extent()
     }
 
     /// The radius of the box's corners, in image pixels: half the text size.
     #[must_use]
     pub fn corner_radius(&self) -> f32 {
-        BUBBLE_PADDING * self.block.size()
+        BOX_PADDING * self.block.size()
     }
 
     /// The tail as a triangle: a base edge on the side of the box facing the tail, set a little
@@ -159,7 +148,7 @@ impl Bubble {
         measure: impl Fn(&str) -> f32,
     ) -> Self {
         let size = self.block.size();
-        let padding = BUBBLE_PADDING * size;
+        let padding = BOX_PADDING * size;
         let outline = self.outline();
         let (left, right) = (outline.x, outline.x + outline.width);
         let (top, bottom) = (outline.y, outline.y + outline.height);
@@ -250,7 +239,7 @@ mod tests {
         let [_, tip, _] = new.tail_triangle().expect("the tail is drawn");
         assert!(tip.x < outline.x, "the tip {tip:?} is left of the box");
         assert!(
-            (outline.y..outline.y + LINE_HEIGHT * 20.0 + BUBBLE_PADDING * 20.0).contains(&tip.y),
+            (outline.y..outline.y + LINE_HEIGHT * 20.0 + BOX_PADDING * 20.0).contains(&tip.y),
             "the tip {tip:?} is level with the first line"
         );
     }
@@ -260,13 +249,14 @@ mod tests {
         use crate::document::Shape;
         use crate::selection::{Handle, handles, hits, moved, resized};
         let shape = Shape::Bubble(bubble(PointF { x: 120.0, y: 200.0 }));
+        let plain = crate::Look::default_for(crate::Tool::Bubble).style();
         assert_eq!(
             handles(&shape).last(),
             Some(&(Handle::End, PointF { x: 120.0, y: 200.0 }))
         );
-        assert!(hits(&shape, PointF { x: 120.0, y: 180.0 }, 1.0));
-        assert!(hits(&shape, PointF { x: 150.0, y: 110.0 }, 1.0));
-        assert!(!hits(&shape, PointF { x: 160.0, y: 180.0 }, 1.0));
+        assert!(hits(&shape, &plain, PointF { x: 120.0, y: 180.0 }, 1.0));
+        assert!(hits(&shape, &plain, PointF { x: 150.0, y: 110.0 }, 1.0));
+        assert!(!hits(&shape, &plain, PointF { x: 160.0, y: 180.0 }, 1.0));
         let Shape::Bubble(pointed) =
             resized(&shape, Handle::End, PointF { x: 0.0, y: 0.0 }, |_| 0.0)
         else {

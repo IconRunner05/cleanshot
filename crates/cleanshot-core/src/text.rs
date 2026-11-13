@@ -6,6 +6,10 @@ use crate::{Color, PointF, RectF, ShapeId};
 /// A line's height as a multiple of the font size.
 pub const LINE_HEIGHT: f32 = 1.25;
 
+/// The space between text and the edge of the box it is in, a bubble's or a text background's,
+/// and a bubble's corners' radius, as a multiple of its text size.
+pub(crate) const BOX_PADDING: f32 = 0.5;
+
 /// The font size of a new text box, in image pixels.
 pub(crate) const DEFAULT_TEXT_SIZE: f32 = 24.0;
 
@@ -296,6 +300,20 @@ impl TextBlock {
             y: self.at.y,
             width: self.box_width() * self.size,
             height: height * self.size,
+        }
+    }
+
+    /// The box a bubble or a text background fills: [`Self::extent`] with [`BOX_PADDING`] of
+    /// the text size round it.
+    #[must_use]
+    pub fn padded_extent(&self) -> RectF {
+        let padding = BOX_PADDING * self.size;
+        let text = self.extent();
+        RectF {
+            x: text.x - padding,
+            y: text.y - padding,
+            width: text.width + 2.0 * padding,
+            height: text.height + 2.0 * padding,
         }
     }
 

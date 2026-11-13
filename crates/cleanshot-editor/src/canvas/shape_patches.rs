@@ -35,7 +35,7 @@ pub(super) enum PatchKind {
 impl PatchKind {
     fn wanted(&self, entry: &ShapeEntry) -> bool {
         match self {
-            Self::Shadow => entry.style.shadow() && box_shadow(&entry.shape).is_none(),
+            Self::Shadow => entry.style.shadow() && box_shadow(&entry.shape, entry.style).is_none(),
             Self::Border(_) => entry.style.border().is_some(),
         }
     }
@@ -158,7 +158,9 @@ impl ShapePatches {
         let made = match &self.kind {
             PatchKind::Shadow => shape_shadow(entry, width, height),
             PatchKind::Border(masks_for) => {
-                let text_masks = if let Shape::Text(_) = entry.shape {
+                let text_masks = if let Shape::Text(_) = entry.shape
+                    && entry.style.background().is_none()
+                {
                     let Some(text_masks) = masks.get_or_init(|| masks_for(document)) else {
                         (self.log)("border_preview no_text_masks");
                         return None;
@@ -182,9 +184,11 @@ impl ShapePatches {
 }
 
 /// The box and corner radius, in image pixels, that cast `shape`'s shadow when GPUI can draw it
-/// as a box shadow: a solid rectangle, a numbered step's circle, a speech bubble's box.
-fn box_shadow(shape: &Shape) -> Option<(RectF, f32)> {
+/// as a box shadow: a solid rectangle, a numbered step's circle, a speech bubble's box, a text's
+/// background in `style`.
+fn box_shadow(shape: &Shape, style: Style) -> Option<(RectF, f32)> {
     match shape {
+        Shape::Text(block) if style.background().is_some() => Some((block.padded_extent(), 0.0)),
         Shape::Rect {
             rect,
             fill: Fill::Solid,
@@ -227,7 +231,7 @@ pub(super) fn paint_shadow(
     }
     let fit = painting.fit;
     let offset = Style::SHADOW_OFFSET as f32;
-    if let Some((rect, radius)) = box_shadow(shape) {
+    if let Some((rect, radius)) = box_shadow(shape, style) {
         window.paint_drop_shadows(
             fit.bounds(rect),
             Corners::all(px(radius * fit.scale)),

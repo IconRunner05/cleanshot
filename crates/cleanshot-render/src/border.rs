@@ -8,8 +8,9 @@ use crate::patch::Alone;
 use crate::{Error, Patch};
 
 /// The border `entry` has on an image of `width` by `height`, drawn alone as the export draws
-/// it under the shape, for the editor to show; a text's from its glyphs in `masks`,
-/// and none without them. `None` when `entry` has no border or it falls outside the image.
+/// it under the shape, for the editor to show; a text's with no background from its glyphs in
+/// `masks`, and none without them. `None` when `entry` has no border or it falls outside the
+/// image.
 ///
 /// # Errors
 ///
@@ -32,9 +33,10 @@ pub fn shape_border(
 }
 
 /// Draws `entry`'s border, if it has one, where the shape is about to be drawn over it: a stroke is
-/// drawn again wider, an outline round a filled shape is a stroke along its edge that the fill then
-/// covers on the inside, text is its glyphs grown by the border's width, and a highlight's or
-/// spotlight's is a band just outside its rectangle, so it never covers what the rectangle marks.
+/// drawn again wider, an outline round a filled shape or a text's background is a stroke along its
+/// edge that the fill then covers on the inside, other text is its glyphs grown by the border's
+/// width, and a highlight's or spotlight's is a band just outside its rectangle, so it never covers
+/// what the rectangle marks.
 /// Pen strokes and redactions draw none.
 ///
 /// # Errors
@@ -97,6 +99,10 @@ pub(crate) fn draw_border(
                 stroke_path(closed(&tail), outline);
             }
         }
+        Shape::Text(block) if entry.style.background().is_some() => stroke_path(
+            skia_rect(block.padded_extent()).map(PathBuilder::from_rect),
+            outline,
+        ),
         Shape::Text(_) => {
             let Some(masks) = masks else {
                 return Ok(());
@@ -220,6 +226,39 @@ mod tests {
         let corner = &patch.pixels.pixels()[..4];
         assert_eq!(corner[3], 0, "growth is round, so the corner stays clear");
         assert_eq!(shape_border(entry, 32, 32, None).unwrap(), None);
+    }
+
+    #[test]
+    fn a_text_on_a_background_has_its_border_round_the_box_and_needs_no_glyphs_for_it() {
+        let block = TextBlock::new(PointF { x: 10.0, y: 10.0 }, "hi".into(), 8.0, 2.0).unwrap();
+        let (shape, style) = Look::default_for(Tool::Text)
+            .with(Property::TextSize(8.0))
+            .and_then(|look| look.with(Property::Border(true)))
+            .and_then(|look| look.with(Property::Background(true)))
+            .unwrap()
+            .dress(Shape::Text(block.clone()));
+        assert_eq!(shape, Shape::Text(block.clone()));
+        let mut history = History::new(Document::new(Arc::new(
+            RgbaImage::new(40, 40, vec![0; 40 * 40 * 4]).unwrap(),
+        )));
+        history.apply(Command::Add { shape, style }).unwrap();
+        let entry = &history.document().shapes()[0];
+        let patch = shape_border(entry, 40, 40, None).unwrap().unwrap();
+        let area = block.padded_extent();
+        assert_eq!(
+            (area.x, area.y, area.width, area.height),
+            (6.0, 6.0, 24.0, 18.0)
+        );
+        assert_eq!(
+            (
+                patch.left,
+                patch.top,
+                patch.pixels.width(),
+                patch.pixels.height()
+            ),
+            (4, 4, 28, 22),
+            "a 2 pixel band each side of the box's edge"
+        );
     }
 
     #[test]

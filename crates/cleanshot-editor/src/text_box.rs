@@ -2,8 +2,8 @@ use std::ops::Range;
 
 use cleanshot_core::{
     BoxPress, Color, Command, LineMove, LinePosition, LineStep, Look, Looks, PointF, Property,
-    PropertyError, Style, TextBlock, TextBlockError, TextEdit, TextEditError, TextKey, TextOrigin,
-    Tool, commit_text, hits,
+    PropertyError, TextBlock, TextBlockError, TextEdit, TextEditError, TextKey, TextOrigin, Tool,
+    commit_text, hits,
 };
 use gpui::{
     App, BorderStyle, Bounds, ClipboardItem, Pixels, Point, Rgba, UTF16Selection, Window, fill,
@@ -121,7 +121,8 @@ impl TextBox {
     /// Inside the box it moves the caret to the character nearest `at`, and a drag from there
     /// selects up to the pointer until the button comes up.
     pub(crate) fn press(&mut self, at: PointF, reach: f32, window: &Window) -> BoxPress {
-        let inside = hits(&self.origin.frame().around(self.block(window)), at, reach);
+        let shape = self.origin.frame().around(self.block(window));
+        let inside = hits(&shape, &self.origin.style(), at, reach);
         let press = self.edit.press(inside);
         if press == BoxPress::PlaceCaret {
             let offset = self.offset_at(at, window);
@@ -236,13 +237,7 @@ impl TextBox {
     }
 
     fn text_color(&self) -> Color {
-        self.origin.frame().text_color(self.style().color)
-    }
-
-    fn style(&self) -> Style {
-        match &self.origin {
-            TextOrigin::New { style, .. } | TextOrigin::Existing { style, .. } => *style,
-        }
+        self.origin.frame().text_color(self.origin.style().color)
     }
 
     /// The box's text as the text block it would become, measured and wrapped now.

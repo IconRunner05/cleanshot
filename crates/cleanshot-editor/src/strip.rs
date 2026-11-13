@@ -112,6 +112,8 @@ fn in_shape_group(setting: Setting) -> bool {
         | Setting::TextSize
         | Setting::Alignment
         | Setting::HorizontalAlignment
+        | Setting::Background
+        | Setting::BackgroundColor
         | Setting::Dim => false,
     }
 }
@@ -137,6 +139,7 @@ fn setting_group(
     match setting {
         Setting::Shadow => check(look.shadow(), Property::Shadow(!look.shadow())),
         Setting::Border => check(look.border(), Property::Border(!look.border())),
+        Setting::Background => check(look.background(), Property::Background(!look.background())),
         Setting::Alignment | Setting::HorizontalAlignment => {
             group(name, Role::Group, theme).child(AlignmentPicker {
                 setting,
@@ -145,7 +148,7 @@ fn setting_group(
                 on_set,
             })
         }
-        Setting::Color | Setting::BorderColor => {
+        Setting::Color | Setting::BorderColor | Setting::BackgroundColor => {
             group(name, Role::Group, theme).child(ColorField {
                 setting,
                 value: setting
@@ -487,7 +490,9 @@ fn strip_button(
 /// How a choice looks on its button: the colour, the line width, the fill, or its name.
 fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElement {
     match property {
-        Property::Color(color) | Property::BorderColor(color) => div()
+        Property::Color(color)
+        | Property::BorderColor(color)
+        | Property::BackgroundColor(color) => div()
             .size(px(16.0))
             .rounded_full()
             .bg(rgba(color))
@@ -511,6 +516,7 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
         | Property::HighlightStrength(_)
         | Property::Shadow(_)
         | Property::Border(_)
+        | Property::Background(_)
         | Property::Dim(_) => div().text_xs().text_color(theme.text).child(name),
         Property::TextSize(size) => div()
             .text_xs()

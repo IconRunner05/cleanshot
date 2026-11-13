@@ -279,7 +279,14 @@ pub(crate) fn draw(
         } => redact(pixmap, *rect, *mode, *strength),
         // Flatten dims around every spotlight before it draws any shape.
         Shape::Spotlight(_) => {}
-        Shape::Text(_) => text(pixmap, entry.id, masks, entry.style.color)?,
+        Shape::Text(block) => {
+            if let Some(background) = entry.style.background() {
+                let box_paint = self::paint(background, BlendMode::SourceOver);
+                let area = skia_rect(block.padded_extent()).map(PathBuilder::from_rect);
+                fill(pixmap, area, &box_paint);
+            }
+            text(pixmap, entry.id, masks, entry.style.color)?;
+        }
         Shape::Step(step) => {
             fill(
                 pixmap,

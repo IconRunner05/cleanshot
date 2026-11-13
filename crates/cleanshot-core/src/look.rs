@@ -40,6 +40,8 @@ pub struct Look {
     border: bool,
     border_color: Color,
     border_width: BorderWidth,
+    background: bool,
+    background_color: Color,
     dim: SpotlightDim,
 }
 
@@ -74,6 +76,8 @@ impl Look {
             border: false,
             border_color: WHITE,
             border_width: BorderWidth::Thin,
+            background: false,
+            background_color: WHITE,
             dim: SpotlightDim::Medium,
         }
     }
@@ -104,6 +108,17 @@ impl Look {
     /// The width of this look's border, used while [`Self::border`] is on.
     pub(crate) fn border_width(&self) -> BorderWidth {
         self.border_width
+    }
+
+    /// Whether this look's text is drawn on a box, where the shape can be.
+    #[must_use]
+    pub fn background(&self) -> bool {
+        self.background
+    }
+
+    /// The colour of this look's text box, used while [`Self::background`] is on.
+    pub(crate) fn background_color(&self) -> Color {
+        self.background_color
     }
 
     #[must_use]
@@ -184,8 +199,8 @@ impl Look {
         (shape, style)
     }
 
-    /// The style `tool`'s shapes are drawn in: this look's, with its shadow and border where they
-    /// take them. Nothing else gives a shape a shadow or a border.
+    /// The style `tool`'s shapes are drawn in: this look's, with its shadow, border and text
+    /// background where they take them. Nothing else gives a shape any of them.
     #[must_use]
     pub fn style_for(&self, tool: Tool) -> Style {
         let border = Border {
@@ -195,6 +210,9 @@ impl Look {
         self.style
             .with_shadow(self.shadow && takes_shadow(tool))
             .with_border((self.border && takes_border(tool)).then_some(border))
+            .with_background(
+                (self.background && tool == Tool::Text).then_some(self.background_color),
+            )
     }
 
     pub(crate) fn dress_text(&self, block: &TextBlock) -> TextBlock {
@@ -252,6 +270,11 @@ impl Look {
                 ..self
             },
             Property::Alignment(alignment) => Self { alignment, ..self },
+            Property::Background(background) => Self { background, ..self },
+            Property::BackgroundColor(background_color) => Self {
+                background_color,
+                ..self
+            },
             Property::Dim(dim) => Self { dim, ..self },
         })
     }
@@ -263,11 +286,15 @@ impl Look {
         }
     }
 
-    /// The look `entry` is drawn in: its own style, shadow, border, fill, redaction, highlight
-    /// strength, text size or alignment, and the rest from `rest`.
+    /// The look `entry` is drawn in: its own style, shadow, border, text background, fill,
+    /// redaction, highlight strength, text size or alignment, and the rest from `rest`.
     pub(crate) fn of(entry: &ShapeEntry, rest: Self) -> Self {
         let look = Self {
-            style: entry.style.with_shadow(false).with_border(None),
+            style: entry
+                .style
+                .with_shadow(false)
+                .with_border(None)
+                .with_background(None),
             shadow: entry.style.shadow(),
             border: entry.style.border().is_some(),
             border_color: entry
@@ -278,6 +305,8 @@ impl Look {
                 .style
                 .border()
                 .map_or(rest.border_width, |border| border.width),
+            background: entry.style.background().is_some(),
+            background_color: entry.style.background().unwrap_or(rest.background_color),
             ..rest
         };
         match &entry.shape {
@@ -328,6 +357,9 @@ pub enum Property {
     Border(bool),
     BorderColor(Color),
     BorderWidth(BorderWidth),
+    /// A box behind a text, in its own colour, on or off.
+    Background(bool),
+    BackgroundColor(Color),
     /// One setting for the whole image, which the next image also starts with.
     Dim(SpotlightDim),
 }

@@ -490,6 +490,14 @@ impl TextOrigin {
         }
     }
 
+    /// The style the box's shape is drawn in.
+    #[must_use]
+    pub fn style(&self) -> Style {
+        match self {
+            Self::New { style, .. } | Self::Existing { style, .. } => *style,
+        }
+    }
+
     /// `text` as a block where this origin puts it: at a new box's place, text size, box and
     /// alignment, or in an existing block's place, size, box and alignment. `measure` gives a
     /// line's width in ems.

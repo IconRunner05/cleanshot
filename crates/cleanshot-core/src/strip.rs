@@ -27,6 +27,9 @@ pub enum Setting {
     Border,
     BorderColor,
     BorderWidth,
+    /// On or off, shown as one check box: a box behind a text.
+    Background,
+    BackgroundColor,
     /// How dark the image is outside every spotlight.
     Dim,
 }
@@ -67,6 +70,8 @@ impl Setting {
                 Self::Color,
                 Self::TextSize,
                 Self::HorizontalAlignment,
+                Self::Background,
+                Self::BackgroundColor,
                 Self::Shadow,
                 Self::Border,
                 Self::BorderColor,
@@ -114,6 +119,7 @@ impl Setting {
     fn is_switched_on(self, look: &Look) -> bool {
         match self {
             Self::BorderColor | Self::BorderWidth => look.border(),
+            Self::BackgroundColor => look.background(),
             Self::Color
             | Self::StrokeWidth
             | Self::Fill
@@ -125,6 +131,7 @@ impl Setting {
             | Self::Alignment
             | Self::HorizontalAlignment
             | Self::Border
+            | Self::Background
             | Self::Dim => true,
         }
     }
@@ -144,6 +151,8 @@ impl Setting {
             Self::Border => "Border",
             Self::BorderColor => "Border colour",
             Self::BorderWidth => "Border width",
+            Self::Background => "Background",
+            Self::BackgroundColor => "Background colour",
             Self::Dim => "Dim",
         }
     }
@@ -177,6 +186,8 @@ impl Setting {
             | Self::Border
             | Self::BorderColor
             | Self::BorderWidth
+            | Self::Background
+            | Self::BackgroundColor
             | Self::Dim => None,
         }
     }
@@ -194,6 +205,10 @@ impl Setting {
                 kind: Colored::Border,
                 shown: look.border_color(),
             }),
+            Self::BackgroundColor => Some(ColorValue {
+                kind: Colored::Background,
+                shown: look.background_color(),
+            }),
             Self::StrokeWidth
             | Self::Fill
             | Self::Redact
@@ -205,6 +220,7 @@ impl Setting {
             | Self::HorizontalAlignment
             | Self::Border
             | Self::BorderWidth
+            | Self::Background
             | Self::Dim => None,
         }
     }
@@ -227,6 +243,8 @@ impl Setting {
             Self::Border => &BORDER_CHOICES,
             Self::BorderColor => &BORDER_COLOR_CHOICES,
             Self::BorderWidth => &BORDER_WIDTH_CHOICES,
+            Self::Background => &BACKGROUND_CHOICES,
+            Self::BackgroundColor => &BACKGROUND_COLOR_CHOICES,
             Self::Dim => &DIM_CHOICES,
         }
     }
@@ -251,6 +269,7 @@ pub struct ColorValue {
 enum Colored {
     Shape,
     Border,
+    Background,
 }
 
 impl ColorValue {
@@ -260,12 +279,13 @@ impl ColorValue {
         self.shown
     }
 
-    /// What picking `color` sets: the shape's colour, or its border's.
+    /// What picking `color` sets: the shape's colour, its border's or its text background's.
     #[must_use]
     pub fn property(self, color: Color) -> Property {
         match self.kind {
             Colored::Shape => Property::Color(color),
             Colored::Border => Property::BorderColor(color),
+            Colored::Background => Property::BackgroundColor(color),
         }
     }
 
@@ -380,6 +400,25 @@ const BORDER_COLOR_CHOICES: [(Property, &str); 11] = {
     }
     choices
 };
+
+// A text background can be any colour the strip offers a shape.
+const BACKGROUND_COLOR_CHOICES: [(Property, &str); 11] = {
+    let mut choices = [(Property::BackgroundColor(WHITE), ""); 11];
+    let mut index = 0;
+    while index < PALETTE.len() {
+        choices[index] = (
+            Property::BackgroundColor(PALETTE[index].0),
+            PALETTE[index].1,
+        );
+        index += 1;
+    }
+    choices
+};
+
+const BACKGROUND_CHOICES: [(Property, &str); 2] = [
+    (Property::Background(false), "No background"),
+    (Property::Background(true), "Background"),
+];
 
 const BORDER_CHOICES: [(Property, &str); 2] = [
     (Property::Border(false), "No border"),
@@ -691,9 +730,9 @@ mod tests {
                 "{tool:?}"
             );
             let on = off.with(Property::Border(true)).unwrap();
-            assert_eq!(
-                Setting::shown_for(tool, &on),
-                Setting::for_tool(tool),
+            let shown = Setting::shown_for(tool, &on);
+            assert!(
+                border_rows.iter().all(|row| shown.contains(row)),
                 "{tool:?}"
             );
         }

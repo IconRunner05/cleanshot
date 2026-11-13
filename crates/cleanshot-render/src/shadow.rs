@@ -6,8 +6,8 @@ use crate::patch::{Alone, covered};
 use crate::{Error, Patch};
 
 /// The shadow `entry` casts on an image of `width` by `height`, drawn alone as the export
-/// draws it under the shape, for the editor to show. Text casts none here, having no
-/// glyph masks. `None` when `entry` casts no shadow or it falls outside the image.
+/// draws it under the shape, for the editor to show. Text casts none here but its background's,
+/// having no glyph masks. `None` when `entry` casts no shadow or it falls outside the image.
 ///
 /// # Errors
 ///

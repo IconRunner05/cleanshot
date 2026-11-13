@@ -351,7 +351,7 @@ impl SpotlightDim {
 }
 
 /// The colour a shape is drawn in, its stroke width in image pixels, whether it casts a
-/// shadow, and its border.
+/// shadow, its border, and the background behind a text.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
     pub color: Color,
@@ -359,6 +359,7 @@ pub struct Style {
     // Only Look::style_for sets them, and only for a shape that takes them.
     shadow: bool,
     border: Option<Border>,
+    background: Option<Color>,
 }
 
 /// An outline in a second colour round a shape, drawn under it.
@@ -397,7 +398,7 @@ impl Style {
     /// The shadow's opacity where the shape fully covers it: black at 50%.
     pub const SHADOW_ALPHA: f32 = 0.5;
 
-    /// A style casting no shadow, with no border.
+    /// A style casting no shadow, with no border or background.
     #[must_use]
     pub const fn new(color: Color, stroke_width: f32) -> Self {
         Self {
@@ -405,6 +406,7 @@ impl Style {
             stroke_width,
             shadow: false,
             border: None,
+            background: None,
         }
     }
 
@@ -426,6 +428,16 @@ impl Style {
 
     pub(crate) fn with_border(self, border: Option<Border>) -> Self {
         Self { border, ..self }
+    }
+
+    /// The colour of the box a text is drawn on, if it has one.
+    #[must_use]
+    pub fn background(&self) -> Option<Color> {
+        self.background
+    }
+
+    pub(crate) fn with_background(self, background: Option<Color>) -> Self {
+        Self { background, ..self }
     }
 }
 

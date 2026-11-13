@@ -321,6 +321,7 @@ fn text_scenes() -> Vec<(&'static str, Vec<Step>)> {
         ("text_redact_crop", text_redact_crop()),
         ("text_shadow", text_shadow()),
         ("text_border", text_border()),
+        ("text_background", text_background()),
     ]
 }
 
@@ -545,6 +546,34 @@ fn text_border() -> Vec<Step> {
                 BorderWidth::Medium,
             ),
             Some(vec![solid(62, 42, 10, 8, None)]),
+        ),
+    ]
+}
+
+/// Text in `color` on a box of `background`, with `extra` set as well: only a look can give it
+/// a background.
+fn on_background(block: TextBlock, color: Color, background: Color, extra: Property) -> Command {
+    let (shape, style) = Look::default_for(Tool::Text)
+        .with(Property::Color(color))
+        .and_then(|look| look.with(Property::Background(true)))
+        .and_then(|look| look.with(Property::BackgroundColor(background)))
+        .and_then(|look| look.with(extra))
+        .unwrap()
+        .dress(Shape::Text(block));
+    Command::Add { shape, style }
+}
+
+fn text_background() -> Vec<Step> {
+    let bordered = TextBlock::new(point(8.0, 8.0), "synthetic".into(), 12.0, 3.0).unwrap();
+    let shadowed = TextBlock::new(point(56.0, 34.0), "hi".into(), 12.0, 2.0).unwrap();
+    vec![
+        (
+            on_background(bordered, WHITE, BLUE, Property::Border(true)),
+            Some(vec![solid(10, 10, 20, 8, None)]),
+        ),
+        (
+            on_background(shadowed, RED, WHITE, Property::Shadow(true)),
+            Some(vec![ramp(58, 36, 20, 10)]),
         ),
     ]
 }

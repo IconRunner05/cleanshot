@@ -618,6 +618,43 @@ mod tests {
     }
 
     #[test]
+    fn a_text_background_goes_on_text_alone_in_its_own_colour_and_a_press_on_it_grips_the_text() {
+        let mut looks = Looks::default();
+        for tool in TOOLS_FOR_TEST {
+            looks.set(Property::Background(true), tool, None).unwrap();
+            looks
+                .set(Property::BackgroundColor(BLUE), tool, None)
+                .unwrap();
+        }
+        for tool in TOOLS_FOR_TEST {
+            let background = looks.look(tool).style_for(tool).background();
+            let expected = (tool == Tool::Text).then_some(BLUE);
+            assert_eq!(background, expected, "{tool:?}");
+        }
+        assert!(
+            !Setting::shown_for(Tool::Text, &Look::default_for(Tool::Text))
+                .contains(&Setting::BackgroundColor),
+            "the colour shows only while Background is ticked"
+        );
+        let text = TextBlock::new(PointF { x: 20.0, y: 20.0 }, "Hi".into(), 20.0, 2.0).unwrap();
+        let plain_style = Look::default_for(Tool::Text).style_for(Tool::Text);
+        let plain = entry(Shape::Text(text.clone()), plain_style);
+        let Ok(Some(Command::Replace { style, .. })) =
+            looks.set(Property::Background(true), Tool::Select, Some(&plain))
+        else {
+            panic!("ticking Background restyles the selected text");
+        };
+        assert_eq!(style.color, plain_style.color, "the text keeps its colour");
+        let in_the_padding = PointF { x: 13.0, y: 15.0 };
+        let shape = Shape::Text(text);
+        assert!(crate::hits(&shape, &style, in_the_padding, 1.0));
+        assert!(!crate::hits(&shape, &plain_style, in_the_padding, 1.0));
+        let boxed = entry(shape, style);
+        let (_, shown) = looks.shown(Tool::Select, Some(&boxed));
+        assert!(shown.background() && shown.has(Property::BackgroundColor(BLUE)));
+    }
+
+    #[test]
     fn the_strip_shows_only_the_settings_what_is_drawn_has() {
         assert_eq!(Setting::for_tool(Tool::Select), &[]);
         assert_eq!(Setting::for_tool(Tool::Crop), &[]);

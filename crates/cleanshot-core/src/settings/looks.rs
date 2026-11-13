@@ -117,6 +117,8 @@ fn key(setting: Setting) -> &'static str {
         Setting::Border => "border",
         Setting::BorderColor => "border_color",
         Setting::BorderWidth => "border_width",
+        Setting::Background => "background",
+        Setting::BackgroundColor => "background_color",
         Setting::Dim => "dim",
     }
 }
@@ -160,6 +162,8 @@ fn value(setting: Setting, look: &Look) -> Value {
         Setting::Border => look.border().into(),
         Setting::BorderColor => look.border_color().hex().into(),
         Setting::BorderWidth => i64::from(look.border_width().pixels()).into(),
+        Setting::Background => look.background().into(),
+        Setting::BackgroundColor => look.background_color().hex().into(),
         Setting::Dim => match look.dim() {
             SpotlightDim::Light => "light",
             SpotlightDim::Medium => "medium",
@@ -232,6 +236,10 @@ fn property(setting: Setting, value: &Value, look: &Look) -> Option<Property> {
             6 => BorderWidth::Thick,
             _ => return None,
         })),
+        Setting::Background => Some(Property::Background(value.as_bool()?)),
+        Setting::BackgroundColor => {
+            Some(Property::BackgroundColor(Color::from_hex(value.as_str()?)?))
+        }
         Setting::Dim => offered(Property::Dim(match value.as_str()? {
             "light" => SpotlightDim::Light,
             "medium" => SpotlightDim::Medium,
@@ -349,6 +357,8 @@ pub(super) mod tests {
                     | Setting::Border
                     | Setting::BorderColor
                     | Setting::BorderWidth
+                    | Setting::Background
+                    | Setting::BackgroundColor
                     | Setting::Dim => setting
                         .choices()
                         .iter()
