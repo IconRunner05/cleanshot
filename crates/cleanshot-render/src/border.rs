@@ -1,9 +1,12 @@
 use cleanshot_core::{
-    BorderWidth, Color, Fill, GlyphMask, PointF, RectF, Shape, ShapeEntry, TextMasks, arrow_head,
+    BorderWidth, Color, Fill, GlyphMask, Opacity, PointF, RectF, Shape, ShapeEntry, TextMasks,
+    arrow_head,
 };
-use tiny_skia::{BlendMode, LineCap, LineJoin, Path, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    BlendMode, FillRule, LineCap, LineJoin, Mask, Path, PathBuilder, Pixmap, Stroke, Transform,
+};
 
-use crate::flatten::{glyphs, paint, polyline, rounded_rect, skia_rect};
+use crate::flatten::{filled, glyphs, paint, polyline, rounded_rect, skia_rect};
 use crate::patch::Alone;
 use crate::{Error, Patch};
 
@@ -36,8 +39,8 @@ pub fn shape_border(
 /// drawn again wider, an outline round a filled shape or a text's background is a stroke along its
 /// edge that the fill then covers on the inside, other text is its glyphs grown by the border's
 /// width, and a highlight's or spotlight's is a band just outside its rectangle, so it never covers
-/// what the rectangle marks.
-/// Pen strokes and redactions draw none.
+/// what the rectangle marks. Under a fill that lets the image through, the outline stops at the
+/// fill's edge, so the fill never shows it. Pen strokes and redactions draw none.
 ///
 /// # Errors
 ///
@@ -52,6 +55,14 @@ pub(crate) fn draw_border(
     };
     let reach = f32::from(border.width.pixels());
     let paint = paint(border.color, BlendMode::SourceOver);
+    let outside_fill = filled(entry)
+        .filter(|_| entry.style.opacity() != Opacity::FULL)
+        .and_then(|(area, _)| {
+            let mut mask = Mask::new(pixmap.width(), pixmap.height())?;
+            mask.fill_path(&area, FillRule::Winding, true, Transform::identity());
+            mask.invert();
+            Some(mask)
+        });
     let mut stroke_path = |path: Option<Path>, width: f32| {
         let stroke = Stroke {
             width,
@@ -60,7 +71,13 @@ pub(crate) fn draw_border(
             ..Stroke::default()
         };
         if let Some(path) = path {
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                Transform::identity(),
+                outside_fill.as_ref(),
+            );
         }
     };
     let casing = entry.style.stroke_width + 2.0 * reach;

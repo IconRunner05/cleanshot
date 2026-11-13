@@ -8,10 +8,10 @@ use cleanshot_core::{
     step_numbers, text_on,
 };
 use gpui::{
-    App, BorderStyle, Bounds, Canvas, ContentMask, DispatchPhase, Hitbox, HitboxBehavior,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point,
-    RenderImage, Rgba, ScrollDelta, ScrollEvent, Window, canvas, fill, point, px, quad, size,
-    transparent_black,
+    App, BorderStyle, Bounds, Canvas, ContentMask, DispatchPhase, FillOptions, Hitbox,
+    HitboxBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
+    PathStyle, Pixels, Point, RenderImage, Rgba, ScrollDelta, ScrollEvent, Window, canvas, fill,
+    point, px, quad, size, transparent_black,
 };
 use smallvec::smallvec;
 
@@ -363,6 +363,7 @@ fn paint_shape(
         ..
     } = *painting;
     let color = rgba(style.color);
+    let filling = rgba(style.filled(style.color));
     let width = px(style.stroke_width * fit.scale);
     let stroke = PathBuilder::stroke(width);
     match shape {
@@ -402,7 +403,7 @@ fn paint_shape(
             rect,
             fill: Fill::Solid,
         } => {
-            window.paint_quad(fill(fit.bounds(*rect), color));
+            window.paint_quad(fill(fit.bounds(*rect), filling));
             Ok(())
         }
         Shape::Ellipse {
@@ -417,7 +418,7 @@ fn paint_shape(
             PathBuilder::fill(),
             &ellipse(fit.bounds(*rect)),
             true,
-            color,
+            filling,
         ),
         Shape::Pen(points) => {
             let points: Vec<_> = points.iter().map(|p| fit.point(*p)).collect();
@@ -444,7 +445,7 @@ fn paint_shape(
                 PathBuilder::fill(),
                 &ellipse(fit.bounds(step.circle())),
                 true,
-                color,
+                filling,
             );
             circle.and(paint_label(
                 &step.label(number),
@@ -467,12 +468,14 @@ fn paint_text(
     cx: &mut App,
 ) -> Result<(), Unpainted> {
     if let Some(background) = style.background() {
-        window.paint_quad(fill(fit.bounds(block.padded_extent()), rgba(background)));
+        let area = fit.bounds(block.padded_extent());
+        window.paint_quad(fill(area, rgba(style.filled(background))));
     }
     paint_label(&Label::Block(block), rgba(style.color), fit, window, cx)
 }
 
-/// The rounded box and tail in the style colour, the text on them in the colour that reads.
+/// The rounded box and tail in the style colour at its fill opacity, as one shape so their
+/// overlap is not filled twice, and the text on them in the colour that reads.
 fn paint_bubble(
     bubble: &Bubble,
     style: Style,
@@ -480,19 +483,54 @@ fn paint_bubble(
     window: &mut Window,
     cx: &mut App,
 ) -> Result<(), Unpainted> {
-    let color = rgba(style.color);
-    window.paint_quad(quad(
-        fit.bounds(bubble.outline()),
-        px(bubble.corner_radius() * fit.scale),
-        color,
-        px(0.0),
-        transparent_black(),
-        BorderStyle::Solid,
-    ));
-    let tail = bubble.tail_triangle().map_or(Ok(()), |tail| {
-        let tail = tail.map(|point| fit.point(point));
-        paint_polygon(window, PathBuilder::fill(), &tail, true, color)
-    });
+    // The control-point distance that makes a cubic Bezier follow a quarter circle.
+    const KAPPA: f32 = 0.552_284_8;
+    let outline = bubble.outline();
+    let radius = bubble
+        .corner_radius()
+        .min(outline.width / 2.0)
+        .min(outline.height / 2.0);
+    let control = radius * (1.0 - KAPPA);
+    let (left, top) = (outline.x, outline.y);
+    let (right, bottom) = (left + outline.width, top + outline.height);
+    let at = |x: f32, y: f32| fit.point(PointF { x, y });
+    let mut shape = PathBuilder::fill().with_style(PathStyle::Fill(FillOptions::non_zero()));
+    shape.move_to(at(left + radius, top));
+    shape.line_to(at(right - radius, top));
+    shape.cubic_bezier_to(
+        at(right, top + radius),
+        at(right - control, top),
+        at(right, top + control),
+    );
+    shape.line_to(at(right, bottom - radius));
+    shape.cubic_bezier_to(
+        at(right - radius, bottom),
+        at(right, bottom - control),
+        at(right - control, bottom),
+    );
+    shape.line_to(at(left + radius, bottom));
+    shape.cubic_bezier_to(
+        at(left, bottom - radius),
+        at(left + control, bottom),
+        at(left, bottom - control),
+    );
+    shape.line_to(at(left, top + radius));
+    shape.cubic_bezier_to(
+        at(left + radius, top),
+        at(left, top + control),
+        at(left + control, top),
+    );
+    shape.close();
+    if let Some([start, tip, end]) = bubble.tail_triangle() {
+        shape.move_to(fit.point(start));
+        shape.line_to(fit.point(tip));
+        shape.line_to(fit.point(end));
+        shape.close();
+    }
+    let filled = shape
+        .build()
+        .map(|path| window.paint_path(path, rgba(style.filled(style.color))))
+        .map_err(|_| Unpainted::Path);
     let text = paint_label(
         &Label::Block(bubble.block()),
         rgba(text_on(style.color)),
@@ -500,7 +538,7 @@ fn paint_bubble(
         window,
         cx,
     );
-    tail.and(text)
+    filled.and(text)
 }
 
 /// What the canvas lays over the image outside the crop while it is being changed.

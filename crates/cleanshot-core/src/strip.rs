@@ -1,7 +1,7 @@
 use std::ops::RangeInclusive;
 
 use crate::document::{
-    BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength, SpotlightDim,
+    BorderWidth, Color, Fill, HighlightStrength, Opacity, RedactMode, RedactStrength, SpotlightDim,
 };
 use crate::look::{ANNOTATION_RED, HIGHLIGHTER_YELLOW, Look, Property, WHITE};
 use crate::text::{Alignment, DEFAULT_TEXT_SIZE, Horizontal, Vertical};
@@ -30,6 +30,8 @@ pub enum Setting {
     /// On or off, shown as one check box: a box behind a text.
     Background,
     BackgroundColor,
+    /// How opaque a fill is, shown as a slider while the shape has a fill.
+    Opacity,
     /// How dark the image is outside every spotlight.
     Dim,
 }
@@ -53,6 +55,7 @@ impl Setting {
                 Self::Color,
                 Self::StrokeWidth,
                 Self::Fill,
+                Self::Opacity,
                 Self::Shadow,
                 Self::Border,
                 Self::BorderColor,
@@ -72,6 +75,7 @@ impl Setting {
                 Self::HorizontalAlignment,
                 Self::Background,
                 Self::BackgroundColor,
+                Self::Opacity,
                 Self::Shadow,
                 Self::Border,
                 Self::BorderColor,
@@ -79,6 +83,7 @@ impl Setting {
             ],
             Tool::Bubble => &[
                 Self::Color,
+                Self::Opacity,
                 Self::TextSize,
                 Self::Alignment,
                 Self::Shadow,
@@ -88,6 +93,7 @@ impl Setting {
             ],
             Tool::Step => &[
                 Self::Color,
+                Self::Opacity,
                 Self::TextSize,
                 Self::Shadow,
                 Self::Border,
@@ -106,20 +112,33 @@ impl Setting {
 
     /// The settings the strip shows for `tool` drawing in `look`: [`Self::for_tool`]'s, less
     /// those that only set something `look` has switched off, as the border's colour and width
-    /// while Border is off.
+    /// while Border is off, or the fill opacity while nothing is filled.
     #[must_use]
     pub fn shown_for(tool: Tool, look: &Look) -> Vec<Self> {
         Self::for_tool(tool)
             .iter()
             .copied()
-            .filter(|setting| setting.is_switched_on(look))
+            .filter(|setting| setting.is_switched_on(tool, look))
             .collect()
     }
 
-    fn is_switched_on(self, look: &Look) -> bool {
+    fn is_switched_on(self, tool: Tool, look: &Look) -> bool {
         match self {
             Self::BorderColor | Self::BorderWidth => look.border(),
             Self::BackgroundColor => look.background(),
+            Self::Opacity => match tool {
+                Tool::Rectangle | Tool::Ellipse => look.fill() == Fill::Solid,
+                Tool::Text => look.background(),
+                Tool::Step | Tool::Bubble => true,
+                Tool::Select
+                | Tool::Arrow
+                | Tool::Line
+                | Tool::Pen
+                | Tool::Highlighter
+                | Tool::Redact
+                | Tool::Crop
+                | Tool::Spotlight => false,
+            },
             Self::Color
             | Self::StrokeWidth
             | Self::Fill
@@ -153,6 +172,7 @@ impl Setting {
             Self::BorderWidth => "Border width",
             Self::Background => "Background",
             Self::BackgroundColor => "Background colour",
+            Self::Opacity => "Fill opacity",
             Self::Dim => "Dim",
         }
     }
@@ -188,6 +208,7 @@ impl Setting {
             | Self::BorderWidth
             | Self::Background
             | Self::BackgroundColor
+            | Self::Opacity
             | Self::Dim => None,
         }
     }
@@ -221,6 +242,7 @@ impl Setting {
             | Self::Border
             | Self::BorderWidth
             | Self::Background
+            | Self::Opacity
             | Self::Dim => None,
         }
     }
@@ -245,6 +267,7 @@ impl Setting {
             Self::BorderWidth => &BORDER_WIDTH_CHOICES,
             Self::Background => &BACKGROUND_CHOICES,
             Self::BackgroundColor => &BACKGROUND_COLOR_CHOICES,
+            Self::Opacity => &OPACITY_CHOICES,
             Self::Dim => &DIM_CHOICES,
         }
     }
@@ -414,6 +437,27 @@ const BACKGROUND_COLOR_CHOICES: [(Property, &str); 11] = {
     }
     choices
 };
+
+// The slider's stops, each a tenth.
+const OPACITY_CHOICES: [(Property, &str); 10] = [
+    (Property::Opacity(opacity(10)), "10%"),
+    (Property::Opacity(opacity(20)), "20%"),
+    (Property::Opacity(opacity(30)), "30%"),
+    (Property::Opacity(opacity(40)), "40%"),
+    (Property::Opacity(opacity(50)), "50%"),
+    (Property::Opacity(opacity(60)), "60%"),
+    (Property::Opacity(opacity(70)), "70%"),
+    (Property::Opacity(opacity(80)), "80%"),
+    (Property::Opacity(opacity(90)), "90%"),
+    (Property::Opacity(Opacity::FULL), "100%"),
+];
+
+const fn opacity(percent: u8) -> Opacity {
+    match Opacity::new(percent) {
+        Some(opacity) => opacity,
+        None => panic!("a slider stop is an opacity"),
+    }
+}
 
 const BACKGROUND_CHOICES: [(Property, &str); 2] = [
     (Property::Background(false), "No background"),
@@ -667,6 +711,35 @@ impl Hsv {
     }
 }
 
+/// How far one arrow key moves the fill opacity slider, and the stops a drag lands on, in
+/// percent.
+const OPACITY_STEP: u8 = 10;
+
+impl Opacity {
+    /// The slider's stop nearest `across`, a fraction from 0 to 1 of its length.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the fraction is clamped to 0..=1 and rounded to one of ten stops first"
+    )]
+    #[must_use]
+    pub fn at(across: f32) -> Self {
+        let stop = (across.clamp(0.0, 1.0) * 10.0).round() as u8;
+        Self::clamped(stop * OPACITY_STEP)
+    }
+
+    /// This opacity after the arrow `key` on the slider: Left and Right step it a tenth.
+    /// `None` for any other key.
+    #[must_use]
+    pub fn stepped(self, key: &str) -> Option<Self> {
+        match key {
+            "left" => Some(Self::clamped(self.percent().saturating_sub(OPACITY_STEP))),
+            "right" => Some(Self::clamped(self.percent().saturating_add(OPACITY_STEP))),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,6 +809,19 @@ mod tests {
                 "{tool:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_opacity_slider_steps_a_tenth_by_arrow_and_lands_a_drag_on_the_nearest_tenth() {
+        let half = Opacity::new(50).unwrap();
+        assert_eq!(half.stepped("left"), Opacity::new(40));
+        assert_eq!(half.stepped("right"), Opacity::new(60));
+        assert_eq!(Opacity::FULL.stepped("right"), Some(Opacity::FULL));
+        assert_eq!(Opacity::LEAST.stepped("left"), Some(Opacity::LEAST));
+        assert_eq!(half.stepped("up"), None);
+        assert_eq!(Opacity::at(0.0), Opacity::LEAST);
+        assert_eq!(Opacity::at(0.34), Opacity::new(30).unwrap());
+        assert_eq!(Opacity::at(1.5), Opacity::FULL);
     }
 
     #[test]

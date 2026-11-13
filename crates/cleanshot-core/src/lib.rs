@@ -42,8 +42,8 @@ pub use delivery::{
 };
 pub use document::{
     Border, BorderWidth, Color, ContrastColors, Document, Fill, HighlightStrength, ImageError,
-    PointF, RectF, RedactMode, RedactStrength, RgbaImage, Shape, ShapeEntry, ShapeId, SpotlightDim,
-    Style, areas_outside, arrow_head, dimmed_areas, step_numbers,
+    Opacity, PointF, RectF, RedactMode, RedactStrength, RgbaImage, Shape, ShapeEntry, ShapeId,
+    SpotlightDim, Style, areas_outside, arrow_head, dimmed_areas, step_numbers,
 };
 pub use drag::{Drag, Press, Start, text_reopened_at};
 pub use history::{Change, Command, CommandError, Cropping, History, Restack};

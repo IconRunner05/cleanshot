@@ -232,11 +232,13 @@ pub(super) fn paint_shadow(
     let fit = painting.fit;
     let offset = Style::SHADOW_OFFSET as f32;
     if let Some((rect, radius)) = box_shadow(shape, style) {
+        let fill_share = f32::from(style.opacity().percent()) / 100.0;
         window.paint_drop_shadows(
             fit.bounds(rect),
             Corners::all(px(radius * fit.scale)),
             &[BoxShadow {
-                color: hsla(0.0, 0.0, 0.0, Style::SHADOW_ALPHA),
+                // The export casts a shadow as dark as the fill is opaque.
+                color: hsla(0.0, 0.0, 0.0, Style::SHADOW_ALPHA * fill_share),
                 offset: point(px(0.0), px(offset * fit.scale)),
                 blur_radius: px(Style::SHADOW_BLUR as f32 * fit.scale),
                 spread_radius: px(0.0),

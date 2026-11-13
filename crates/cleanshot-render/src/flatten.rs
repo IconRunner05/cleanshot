@@ -229,6 +229,16 @@ pub(crate) fn draw(
     masks: Option<&TextMasks>,
 ) -> Result<(), Error> {
     draw_border(pixmap, entry, masks)?;
+    if let Some((area, color)) = filled(entry) {
+        let filling = paint(entry.style.filled(color), BlendMode::SourceOver);
+        pixmap.fill_path(
+            &area,
+            &filling,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
     let paint = paint(entry.style.color, BlendMode::SourceOver);
     let stroke = Stroke {
         width: entry.style.stroke_width,
@@ -257,18 +267,6 @@ pub(crate) fn draw(
             rect,
             fill: Fill::Hollow,
         } => stroke_path(skia_rect(*rect).and_then(PathBuilder::from_oval)),
-        Shape::Rect {
-            rect,
-            fill: Fill::Solid,
-        } => fill(pixmap, skia_rect(*rect).map(PathBuilder::from_rect), &paint),
-        Shape::Ellipse {
-            rect,
-            fill: Fill::Solid,
-        } => fill(
-            pixmap,
-            skia_rect(*rect).and_then(PathBuilder::from_oval),
-            &paint,
-        ),
         Shape::Highlight { rect, strength } => {
             highlight(pixmap, *rect, entry.style.color, *strength);
         }
@@ -277,33 +275,17 @@ pub(crate) fn draw(
             mode,
             strength,
         } => redact(pixmap, *rect, *mode, *strength),
-        // Flatten dims around every spotlight before it draws any shape.
-        Shape::Spotlight(_) => {}
-        Shape::Text(block) => {
-            if let Some(background) = entry.style.background() {
-                let box_paint = self::paint(background, BlendMode::SourceOver);
-                let area = skia_rect(block.padded_extent()).map(PathBuilder::from_rect);
-                fill(pixmap, area, &box_paint);
-            }
-            text(pixmap, entry.id, masks, entry.style.color)?;
+        // Flatten dims around every spotlight before it draws any shape, and a solid shape is
+        // all fill, painted above.
+        Shape::Spotlight(_)
+        | Shape::Rect {
+            fill: Fill::Solid, ..
         }
-        Shape::Step(step) => {
-            fill(
-                pixmap,
-                skia_rect(step.circle()).and_then(PathBuilder::from_oval),
-                &paint,
-            );
-            text(pixmap, entry.id, masks, text_on(entry.style.color))?;
-        }
-        Shape::Bubble(bubble) => {
-            fill(
-                pixmap,
-                rounded_rect(bubble.outline(), bubble.corner_radius()),
-                &paint,
-            );
-            if let Some(tail) = bubble.tail_triangle() {
-                fill(pixmap, polyline(&tail), &paint);
-            }
+        | Shape::Ellipse {
+            fill: Fill::Solid, ..
+        } => {}
+        Shape::Text(_) => text(pixmap, entry.id, masks, entry.style.color)?,
+        Shape::Step(_) | Shape::Bubble(_) => {
             text(pixmap, entry.id, masks, text_on(entry.style.color))?;
         }
     }
@@ -351,6 +333,50 @@ pub(crate) fn rounded_rect(rect: RectF, radius: f32) -> Option<Path> {
     builder.cubic_to(left, top + control, left + control, top, left + radius, top);
     builder.close();
     builder.finish()
+}
+
+/// The area `entry` fills, as one path, and the colour it fills it with before its fill
+/// opacity: a solid shape's, a step's circle, a bubble's box and tail, a text's background.
+pub(crate) fn filled(entry: &ShapeEntry) -> Option<(Path, Color)> {
+    let color = entry.style.color;
+    match &entry.shape {
+        Shape::Rect {
+            rect,
+            fill: Fill::Solid,
+        } => Some((PathBuilder::from_rect(skia_rect(*rect)?), color)),
+        Shape::Ellipse {
+            rect,
+            fill: Fill::Solid,
+        } => Some((PathBuilder::from_oval(skia_rect(*rect)?)?, color)),
+        Shape::Step(step) => Some((PathBuilder::from_oval(skia_rect(step.circle())?)?, color)),
+        Shape::Bubble(bubble) => {
+            let mut builder = PathBuilder::new();
+            builder.push_path(&rounded_rect(bubble.outline(), bubble.corner_radius())?);
+            if let Some([start, tip, end]) = bubble.tail_triangle() {
+                builder.move_to(start.x, start.y);
+                builder.line_to(tip.x, tip.y);
+                builder.line_to(end.x, end.y);
+                builder.close();
+            }
+            Some((builder.finish()?, color))
+        }
+        Shape::Text(block) => Some((
+            PathBuilder::from_rect(skia_rect(block.padded_extent())?),
+            entry.style.background()?,
+        )),
+        Shape::Rect {
+            fill: Fill::Hollow, ..
+        }
+        | Shape::Ellipse {
+            fill: Fill::Hollow, ..
+        }
+        | Shape::Line { .. }
+        | Shape::Arrow { .. }
+        | Shape::Pen(_)
+        | Shape::Highlight { .. }
+        | Shape::Redact { .. }
+        | Shape::Spotlight(_) => None,
+    }
 }
 
 /// Paints the glyph layers of the shape `id` in `color`, or in a colour glyph's own colour.

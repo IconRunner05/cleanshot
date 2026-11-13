@@ -2,7 +2,7 @@ use toml::{Table, Value};
 
 use super::Reader;
 use crate::document::{
-    BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength, SpotlightDim,
+    BorderWidth, Color, Fill, HighlightStrength, Opacity, RedactMode, RedactStrength, SpotlightDim,
 };
 use crate::look::{Look, Property};
 use crate::looks::Looks;
@@ -119,6 +119,7 @@ fn key(setting: Setting) -> &'static str {
         Setting::BorderWidth => "border_width",
         Setting::Background => "background",
         Setting::BackgroundColor => "background_color",
+        Setting::Opacity => "opacity",
         Setting::Dim => "dim",
     }
 }
@@ -164,6 +165,7 @@ fn value(setting: Setting, look: &Look) -> Value {
         Setting::BorderWidth => i64::from(look.border_width().pixels()).into(),
         Setting::Background => look.background().into(),
         Setting::BackgroundColor => look.background_color().hex().into(),
+        Setting::Opacity => i64::from(look.opacity().percent()).into(),
         Setting::Dim => match look.dim() {
             SpotlightDim::Light => "light",
             SpotlightDim::Medium => "medium",
@@ -237,6 +239,9 @@ fn property(setting: Setting, value: &Value, look: &Look) -> Option<Property> {
             _ => return None,
         })),
         Setting::Background => Some(Property::Background(value.as_bool()?)),
+        Setting::Opacity => Some(Property::Opacity(Opacity::new(
+            u8::try_from(value.as_integer()?).ok()?,
+        )?)),
         Setting::BackgroundColor => {
             Some(Property::BackgroundColor(Color::from_hex(value.as_str()?)?))
         }
@@ -359,6 +364,7 @@ pub(super) mod tests {
                     | Setting::BorderWidth
                     | Setting::Background
                     | Setting::BackgroundColor
+                    | Setting::Opacity
                     | Setting::Dim => setting
                         .choices()
                         .iter()
@@ -447,6 +453,8 @@ pub(super) mod tests {
             (Tool::Step, Property::TextSize(36.0)),
             (Tool::Spotlight, Property::Border(true)),
             (Tool::Spotlight, Property::Dim(SpotlightDim::Dark)),
+            (Tool::Text, Property::Background(true)),
+            (Tool::Text, Property::Opacity(Opacity::new(30).unwrap())),
         ]);
         assert_ne!(looks, Looks::default());
         let written = Settings {
@@ -536,13 +544,14 @@ pub(super) mod tests {
         let (looks, problems) = read(
             "[looks]\ncolor = '#12345'\n\
              [looks.arrow]\nborder = true\nborder_color = 'red'\n\
-             [looks.rectangle]\nstroke_width = 7\nfill = 'filled'\nshadow = 'yes'\n\
+             [looks.rectangle]\nstroke_width = 7\nfill = 'filled'\nopacity = 5\nshadow = 'yes'\n\
              [looks.redact]\nredaction = 'blur'\nstrength = 4\n\
              [looks.text]\ntext_size = 0\nalignment = 'middle'\n\
              [looks.ellipse]\nfill = 3\n\
              [looks.highlighter]\nstrength = 'light'\n\
              [looks.pen]\nstroke_width = 5\n\
-             [looks.step]\ntext_size = 'large'\n\
+             [looks.step]\nopacity = 'half'\ntext_size = 'large'\n\
+             [looks.bubble]\nopacity = 40\n\
              [looks.spotlight]\ndim = 'darkest'\n",
         );
         assert_eq!(
@@ -551,12 +560,14 @@ pub(super) mod tests {
                 invalid("looks.color"),
                 invalid("looks.arrow.border_color"),
                 invalid("looks.rectangle.stroke_width"),
+                invalid("looks.rectangle.opacity"),
                 invalid("looks.rectangle.shadow"),
                 invalid("looks.ellipse.fill"),
                 invalid("looks.redact.strength"),
                 invalid("looks.text.text_size"),
                 invalid("looks.text.alignment"),
                 invalid("looks.spotlight.dim"),
+                invalid("looks.step.opacity"),
                 invalid("looks.step.text_size"),
             ]
         );
@@ -569,6 +580,7 @@ pub(super) mod tests {
                 Property::HighlightStrength(HighlightStrength::Light),
             ),
             (Tool::Redact, Property::Redact(RedactMode::Blur)),
+            (Tool::Bubble, Property::Opacity(Opacity::new(40).unwrap())),
         ]);
         assert_eq!(looks, kept);
     }

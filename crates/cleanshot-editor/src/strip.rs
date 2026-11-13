@@ -1,12 +1,13 @@
 use cleanshot_core::{
-    Alignment, ColorValue, Document, Fill, Horizontal, KeyAction, Look, Property, Setting, Tool,
-    TypedValue, Vertical, Warning, tooltip_text,
+    Alignment, ColorValue, Document, Fill, Horizontal, KeyAction, Look, Opacity, Property, Setting,
+    Tool, TypedValue, Vertical, Warning, tooltip_text,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Div, ElementId, Entity, InteractiveElement, IntoElement, KeyDownEvent,
-    ParentElement, RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled, Toggled, Window,
-    anchored, deferred, div, point, px,
+    AnyElement, App, Bounds, DispatchPhase, Div, ElementId, Entity, Hitbox, HitboxBehavior,
+    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, RenderOnce, Role, Stateful, StatefulInteractiveElement,
+    Styled, Toggled, Window, anchored, canvas, deferred, div, point, px,
 };
 
 use crate::canvas::rgba;
@@ -114,6 +115,7 @@ fn in_shape_group(setting: Setting) -> bool {
         | Setting::HorizontalAlignment
         | Setting::Background
         | Setting::BackgroundColor
+        | Setting::Opacity
         | Setting::Dim => false,
     }
 }
@@ -159,6 +161,11 @@ fn setting_group(
                 on_sample,
             })
         }
+        Setting::Opacity => group(name, Role::Group, theme).child(OpacitySlider {
+            opacity: look.opacity(),
+            theme,
+            on_set,
+        }),
         Setting::StrokeWidth
         | Setting::Fill
         | Setting::Redact
@@ -417,6 +424,137 @@ impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for Ty
     }
 }
 
+/// The fill opacity as a slider naming its value: a press or a drag moves it to the nearest
+/// tenth and the release sets it, and Left and Right step it a tenth.
+#[derive(IntoElement)]
+struct OpacitySlider<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> {
+    opacity: Opacity,
+    theme: Theme,
+    on_set: F,
+}
+
+const SLIDER_WIDTH: f32 = 96.0;
+
+impl<F: Fn(Property, &mut Window, &mut App) + Clone + 'static> RenderOnce for OpacitySlider<F> {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self {
+            opacity,
+            theme,
+            on_set,
+        } = self;
+        let name = Setting::Opacity.name();
+        let draft = window.use_keyed_state(
+            ElementId::Name(format!("{name}: draft").into()),
+            cx,
+            |_, _| None::<Opacity>,
+        );
+        let percent = draft.read(cx).unwrap_or(opacity).percent();
+        let on_key = on_set.clone();
+        let slide = canvas(
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |bounds, hitbox, window, _| {
+                listen_on_slide(bounds, hitbox, &draft, &on_set, window);
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        div()
+            .id(ElementId::Name(format!("{name}: slider").into()))
+            .focusable()
+            .tab_stop(true)
+            .role(Role::Slider)
+            .aria_label(name)
+            .aria_value(format!("{percent}%"))
+            .aria_numeric_value(f64::from(percent))
+            .aria_min_numeric_value(f64::from(Opacity::LEAST.percent()))
+            .aria_max_numeric_value(f64::from(Opacity::FULL.percent()))
+            .map(|slider| filled(slider, ControlFill::Neutral, theme))
+            .relative()
+            .h(px(28.0))
+            .w(px(SLIDER_WIDTH))
+            .rounded(CORNER)
+            .overflow_hidden()
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .h_full()
+                    .w(px(SLIDER_WIDTH * f32::from(percent) / 100.0))
+                    .bg(theme.hover),
+            )
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(theme.text)
+                    .child(format!("{percent}%")),
+            )
+            .child(slide)
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                let Some(next) = opacity.stepped(&event.keystroke.key) else {
+                    return;
+                };
+                on_key(Property::Opacity(next), window, cx);
+                cx.stop_propagation();
+            })
+    }
+}
+
+/// A press on the slider at `bounds` and the drag after it move `draft`; the release sets it.
+fn listen_on_slide(
+    bounds: Bounds<Pixels>,
+    hitbox: Hitbox,
+    draft: &Entity<Option<Opacity>>,
+    on_set: &(impl Fn(Property, &mut Window, &mut App) + Clone + 'static),
+    window: &mut Window,
+) {
+    let at = move |x: Pixels| Opacity::at((x - bounds.origin.x) / bounds.size.width);
+    let press = draft.clone();
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble
+            && event.button == MouseButton::Left
+            && hitbox.is_hovered(window)
+        {
+            press.update(cx, |draft, cx| {
+                *draft = Some(at(event.position.x));
+                cx.notify();
+            });
+            cx.stop_propagation();
+        }
+    });
+    let drag = draft.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+        if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) {
+            drag.update(cx, |draft, cx| {
+                if draft.is_some() {
+                    *draft = Some(at(event.position.x));
+                    cx.notify();
+                }
+            });
+        }
+    });
+    let (release, on_set) = (draft.clone(), on_set.clone());
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+        if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+            return;
+        }
+        let set = release.update(cx, |draft, cx| {
+            cx.notify();
+            draft.take()
+        });
+        if let Some(opacity) = set {
+            on_set(Property::Opacity(opacity), window, cx);
+        }
+    });
+}
+
 /// Three lines in a box, set where `alignment` puts text.
 fn alignment_glyph(alignment: Alignment, theme: Theme) -> Div {
     let lines = [10.0, 6.0, 8.0].map(|width| div().w(px(width)).h(px(2.0)).bg(theme.text));
@@ -517,6 +655,7 @@ fn swatch(property: Property, name: &'static str, theme: Theme) -> impl IntoElem
         | Property::Shadow(_)
         | Property::Border(_)
         | Property::Background(_)
+        | Property::Opacity(_)
         | Property::Dim(_) => div().text_xs().text_color(theme.text).child(name),
         Property::TextSize(size) => div()
             .text_xs()

@@ -71,8 +71,9 @@ impl Bubble {
     }
 
     /// The tail as a triangle: a base edge on the side of the box facing the tail, set a little
-    /// inside the box so the two fill as one shape, then the tip. `None` while the tail is
-    /// inside the box.
+    /// inside the box so the two fill as one shape, then the tip. It runs clockwise on screen,
+    /// as the box's outline is drawn, so one non-zero fill of both covers their overlap once.
+    /// `None` while the tail is inside the box.
     #[must_use]
     pub fn tail_triangle(&self) -> Option<[PointF; 3]> {
         let outline = self.outline();
@@ -134,7 +135,13 @@ impl Bubble {
                 },
             ]
         };
-        Some(triangle)
+        let [start, tip, end] = triangle;
+        let turn = (tip.x - start.x) * (end.y - start.y) - (tip.y - start.y) * (end.x - start.x);
+        Some(if turn < 0.0 {
+            [end, tip, start]
+        } else {
+            triangle
+        })
     }
 
     /// This bubble with the box's `handle` dragged to `to`: the box takes the new width, at
@@ -415,14 +422,14 @@ mod tests {
             .unwrap();
         assert_eq!(below[1], PointF { x: 120.0, y: 200.0 });
         assert_eq!((below[0].y, below[2].y), (130.0, 130.0));
-        assert_eq!((below[0].x, below[2].x), (110.0, 130.0));
+        assert_eq!((below[0].x, below[2].x), (130.0, 110.0));
         let left = bubble(PointF { x: 10.0, y: 112.0 })
             .tail_triangle()
             .unwrap();
         assert_eq!((left[0].x, left[2].x), (95.0, 95.0));
-        assert_eq!((left[0].y, left[2].y), (102.0, 122.0));
+        assert_eq!((left[0].y, left[2].y), (122.0, 102.0));
         let corner = bubble(PointF { x: 0.0, y: 400.0 }).tail_triangle().unwrap();
-        assert_eq!(corner[0], PointF { x: 100.0, y: 130.0 });
+        assert_eq!(corner[2], PointF { x: 100.0, y: 130.0 });
         assert_eq!(bubble(PointF { x: 140.0, y: 110.0 }).tail_triangle(), None);
     }
 }

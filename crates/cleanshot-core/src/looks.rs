@@ -159,7 +159,7 @@ mod tests {
     use super::*;
     use crate::document::Color;
     use crate::document::{
-        Border, BorderWidth, Document, Fill, HighlightStrength, PointF, RectF, RedactMode,
+        Border, BorderWidth, Document, Fill, HighlightStrength, Opacity, PointF, RectF, RedactMode,
         RedactStrength, RgbaImage, Shape, SpotlightDim,
     };
     use crate::drag::{Drag, Start};
@@ -652,6 +652,69 @@ mod tests {
         let boxed = entry(shape, style);
         let (_, shown) = looks.shown(Tool::Select, Some(&boxed));
         assert!(shown.background() && shown.has(Property::BackgroundColor(BLUE)));
+    }
+
+    #[test]
+    fn the_fill_opacity_shows_only_while_a_fill_does_and_fades_only_the_fill() {
+        let slider_shown =
+            |tool: Tool, look: &Look| Setting::shown_for(tool, look).contains(&Setting::Opacity);
+        for tool in TOOLS_FOR_TEST {
+            let default = Look::default_for(tool);
+            let filled = matches!(tool, Tool::Step | Tool::Bubble);
+            assert_eq!(slider_shown(tool, &default), filled, "{tool:?}");
+        }
+        let solid = Look::default_for(Tool::Rectangle)
+            .with(Property::Fill(Fill::Solid))
+            .unwrap();
+        assert!(slider_shown(Tool::Rectangle, &solid));
+        let boxed = Look::default_for(Tool::Text)
+            .with(Property::Background(true))
+            .unwrap();
+        assert!(slider_shown(Tool::Text, &boxed));
+
+        let half = Opacity::new(50).unwrap();
+        let mut looks = Looks::default();
+        looks
+            .set(Property::Opacity(half), Tool::Rectangle, None)
+            .unwrap();
+        looks
+            .set(Property::Opacity(half), Tool::Arrow, None)
+            .unwrap();
+        let style = looks.look(Tool::Rectangle).style_for(Tool::Rectangle);
+        assert_eq!(style.opacity(), half);
+        assert_eq!(style.filled(style.color).a, 127);
+        assert_eq!(style.color.a, 255, "the stroke stays opaque");
+        let arrow = looks.look(Tool::Arrow).style_for(Tool::Arrow);
+        assert_eq!(
+            arrow.opacity(),
+            Opacity::FULL,
+            "an arrow has no fill to fade"
+        );
+        let rect = Shape::Rect {
+            rect: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            fill: Fill::Solid,
+        };
+        let faded = entry(rect, style);
+        let (_, shown) = Looks::default().shown(Tool::Select, Some(&faded));
+        assert_eq!(
+            shown.opacity(),
+            half,
+            "a selected shape shows its own opacity"
+        );
+        let Ok(Some(Command::Replace { style, .. })) =
+            looks.set(Property::Opacity(Opacity::FULL), Tool::Select, Some(&faded))
+        else {
+            panic!("the slider restyles the selected shape in one undo step");
+        };
+        assert_eq!(style.opacity(), Opacity::FULL);
+        assert_eq!(Opacity::new(9), None);
+        assert_eq!(Opacity::new(101), None);
+        assert_eq!(Opacity::clamped(0), Opacity::LEAST);
     }
 
     #[test]

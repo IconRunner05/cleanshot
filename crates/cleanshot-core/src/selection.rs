@@ -308,10 +308,10 @@ pub fn hits(shape: &Shape, style: &Style, point: PointF, reach: f32) -> bool {
         Shape::Step(step) => inside_ellipse(grown(step.circle(), reach), point),
         Shape::Bubble(bubble) => {
             inside(grown(bubble.outline(), reach), point)
-                || bubble.tail_triangle().is_some_and(|[left, tip, right]| {
-                    segment_distance(left, tip, point) <= reach
-                        || segment_distance(tip, right, point) <= reach
-                        || inside_triangle([left, tip, right], point)
+                || bubble.tail_triangle().is_some_and(|[start, tip, end]| {
+                    segment_distance(start, tip, point) <= reach
+                        || segment_distance(tip, end, point) <= reach
+                        || inside_triangle([start, tip, end], point)
                 })
         }
     }

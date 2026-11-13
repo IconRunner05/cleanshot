@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use cleanshot_core::{
     BorderWidth, Bubble, Color, Command, Document, Fill, GlyphMask, HighlightStrength, History,
-    Look, PointF, Property, RectF, RedactMode, RedactStrength, RgbaImage, Shape, Style, TextBlock,
-    TextMasks, Tool,
+    Look, Opacity, PointF, Property, RectF, RedactMode, RedactStrength, RgbaImage, Shape, Style,
+    TextBlock, TextMasks, Tool,
 };
 use cleanshot_render::Format;
 
@@ -322,6 +322,7 @@ fn text_scenes() -> Vec<(&'static str, Vec<Step>)> {
         ("text_shadow", text_shadow()),
         ("text_border", text_border()),
         ("text_background", text_background()),
+        ("fill_opacity", fill_opacity()),
     ]
 }
 
@@ -574,6 +575,68 @@ fn text_background() -> Vec<Step> {
         (
             on_background(shadowed, RED, WHITE, Property::Shadow(true)),
             Some(vec![ramp(58, 36, 20, 10)]),
+        ),
+    ]
+}
+
+/// `shape` drawn in its tool's look with each of `properties` set: only a look can fade a fill.
+fn in_look(shape: Shape, properties: &[Property]) -> Command {
+    let look = properties
+        .iter()
+        .try_fold(
+            Look::default_for(Tool::drawing(&shape)),
+            |look, &property| look.with(property),
+        )
+        .unwrap();
+    let (shape, style) = look.dress(shape);
+    Command::Add { shape, style }
+}
+
+fn fill_opacity() -> Vec<Step> {
+    let half = Property::Opacity(Opacity::new(50).unwrap());
+    let faint = Property::Opacity(Opacity::new(30).unwrap());
+    let bubble_text = TextBlock::new(point(52.0, 8.0), "hi".into(), 10.0, 1.0).unwrap();
+    let boxed_text = TextBlock::new(point(14.0, 44.0), "ok".into(), 10.0, 2.0).unwrap();
+    vec![
+        (
+            in_look(
+                Shape::Rect {
+                    rect: rect(6.0, 6.0, 30.0, 20.0),
+                    fill: Fill::Solid,
+                },
+                &[
+                    Property::Fill(Fill::Solid),
+                    half,
+                    Property::Border(true),
+                    Property::BorderWidth(BorderWidth::Thick),
+                ],
+            ),
+            None,
+        ),
+        (
+            in_look(
+                Shape::Bubble(Bubble::new(bubble_text, point(40.0, 60.0))),
+                &[
+                    Property::Color(BLUE),
+                    Property::TextSize(10.0),
+                    faint,
+                    Property::Border(true),
+                ],
+            ),
+            Some(vec![solid(54, 10, 10, 8, None)]),
+        ),
+        (
+            in_look(
+                Shape::Text(boxed_text),
+                &[
+                    Property::TextSize(10.0),
+                    Property::Background(true),
+                    Property::BackgroundColor(BLUE),
+                    half,
+                    Property::Shadow(true),
+                ],
+            ),
+            Some(vec![ramp(16, 46, 18, 8)]),
         ),
     ]
 }

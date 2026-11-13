@@ -324,6 +324,39 @@ impl RedactStrength {
     }
 }
 
+/// How opaque a shape's fill is, in percent: from [`Self::LEAST`] to [`Self::FULL`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Opacity(u8);
+
+impl Opacity {
+    /// The faintest a fill can be.
+    pub const LEAST: Self = Self(10);
+    /// A fill that hides what is under it, the default.
+    pub const FULL: Self = Self(100);
+
+    /// The opacity of `percent`, or `None` outside [`Self::LEAST`] to [`Self::FULL`].
+    #[must_use]
+    pub const fn new(percent: u8) -> Option<Self> {
+        if percent >= Self::LEAST.0 && percent <= Self::FULL.0 {
+            Some(Self(percent))
+        } else {
+            None
+        }
+    }
+
+    /// The opacity of `percent`, or the nearest one a fill takes.
+    #[must_use]
+    pub fn clamped(percent: u8) -> Self {
+        Self(percent.clamp(Self::LEAST.0, Self::FULL.0))
+    }
+
+    /// This opacity in percent, from 10 to 100.
+    #[must_use]
+    pub const fn percent(self) -> u8 {
+        self.0
+    }
+}
+
 /// How dark the image is outside every spotlight, one setting for the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpotlightDim {
@@ -351,7 +384,7 @@ impl SpotlightDim {
 }
 
 /// The colour a shape is drawn in, its stroke width in image pixels, whether it casts a
-/// shadow, its border, and the background behind a text.
+/// shadow, its border, the background behind a text, and how opaque its fill is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
     pub color: Color,
@@ -360,6 +393,7 @@ pub struct Style {
     shadow: bool,
     border: Option<Border>,
     background: Option<Color>,
+    opacity: Opacity,
 }
 
 /// An outline in a second colour round a shape, drawn under it.
@@ -398,7 +432,7 @@ impl Style {
     /// The shadow's opacity where the shape fully covers it: black at 50%.
     pub const SHADOW_ALPHA: f32 = 0.5;
 
-    /// A style casting no shadow, with no border or background.
+    /// A style casting no shadow, with no border or background, filling at full opacity.
     #[must_use]
     pub const fn new(color: Color, stroke_width: f32) -> Self {
         Self {
@@ -407,6 +441,7 @@ impl Style {
             shadow: false,
             border: None,
             background: None,
+            opacity: Opacity::FULL,
         }
     }
 
@@ -438,6 +473,31 @@ impl Style {
 
     pub(crate) fn with_background(self, background: Option<Color>) -> Self {
         Self { background, ..self }
+    }
+
+    /// How opaque the shape's fill is, a solid shape's, a bubble's, a step's or a text's
+    /// background; strokes, borders and text stay opaque.
+    #[must_use]
+    pub fn opacity(&self) -> Opacity {
+        self.opacity
+    }
+
+    pub(crate) fn with_opacity(self, opacity: Opacity) -> Self {
+        Self { opacity, ..self }
+    }
+
+    /// `color` as the shape's fill draws it, at [`Self::opacity`].
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "an alpha times a percent of at most 100, over 100, is at most the alpha"
+    )]
+    #[must_use]
+    pub fn filled(&self, color: Color) -> Color {
+        let alpha = u16::from(color.a) * u16::from(self.opacity.0) / 100;
+        Color {
+            a: alpha as u8,
+            ..color
+        }
     }
 }
 

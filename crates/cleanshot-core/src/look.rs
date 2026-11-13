@@ -1,6 +1,6 @@
 use crate::document::{
-    Border, BorderWidth, Color, Fill, HighlightStrength, RedactMode, RedactStrength, Shape,
-    ShapeEntry, SpotlightDim, Style,
+    Border, BorderWidth, Color, Fill, HighlightStrength, Opacity, RedactMode, RedactStrength,
+    Shape, ShapeEntry, SpotlightDim, Style,
 };
 use crate::text::{Alignment, DEFAULT_TEXT_SIZE, TextBlock};
 use crate::tool::Tool;
@@ -42,6 +42,7 @@ pub struct Look {
     border_width: BorderWidth,
     background: bool,
     background_color: Color,
+    opacity: Opacity,
     dim: SpotlightDim,
 }
 
@@ -78,6 +79,7 @@ impl Look {
             border_width: BorderWidth::Thin,
             background: false,
             background_color: WHITE,
+            opacity: Opacity::FULL,
             dim: SpotlightDim::Medium,
         }
     }
@@ -119,6 +121,12 @@ impl Look {
     /// The colour of this look's text box, used while [`Self::background`] is on.
     pub(crate) fn background_color(&self) -> Color {
         self.background_color
+    }
+
+    /// How opaque this look's fill is, where the shape has one.
+    #[must_use]
+    pub fn opacity(&self) -> Opacity {
+        self.opacity
     }
 
     #[must_use]
@@ -199,8 +207,8 @@ impl Look {
         (shape, style)
     }
 
-    /// The style `tool`'s shapes are drawn in: this look's, with its shadow, border and text
-    /// background where they take them. Nothing else gives a shape any of them.
+    /// The style `tool`'s shapes are drawn in: this look's, with its shadow, border, text
+    /// background and fill opacity where they take them. Nothing else gives a shape any of them.
     #[must_use]
     pub fn style_for(&self, tool: Tool) -> Style {
         let border = Border {
@@ -213,6 +221,11 @@ impl Look {
             .with_background(
                 (self.background && tool == Tool::Text).then_some(self.background_color),
             )
+            .with_opacity(if takes_fill(tool) {
+                self.opacity
+            } else {
+                Opacity::FULL
+            })
     }
 
     pub(crate) fn dress_text(&self, block: &TextBlock) -> TextBlock {
@@ -275,6 +288,7 @@ impl Look {
                 background_color,
                 ..self
             },
+            Property::Opacity(opacity) => Self { opacity, ..self },
             Property::Dim(dim) => Self { dim, ..self },
         })
     }
@@ -286,15 +300,16 @@ impl Look {
         }
     }
 
-    /// The look `entry` is drawn in: its own style, shadow, border, text background, fill,
-    /// redaction, highlight strength, text size or alignment, and the rest from `rest`.
+    /// The look `entry` is drawn in: its own style, shadow, border, text background, fill and its
+    /// opacity, redaction, highlight strength, text size or alignment, and the rest from `rest`.
     pub(crate) fn of(entry: &ShapeEntry, rest: Self) -> Self {
         let look = Self {
             style: entry
                 .style
                 .with_shadow(false)
                 .with_border(None)
-                .with_background(None),
+                .with_background(None)
+                .with_opacity(Opacity::FULL),
             shadow: entry.style.shadow(),
             border: entry.style.border().is_some(),
             border_color: entry
@@ -307,6 +322,7 @@ impl Look {
                 .map_or(rest.border_width, |border| border.width),
             background: entry.style.background().is_some(),
             background_color: entry.style.background().unwrap_or(rest.background_color),
+            opacity: entry.style.opacity(),
             ..rest
         };
         match &entry.shape {
@@ -360,6 +376,7 @@ pub enum Property {
     /// A box behind a text, in its own colour, on or off.
     Background(bool),
     BackgroundColor(Color),
+    Opacity(Opacity),
     /// One setting for the whole image, which the next image also starts with.
     Dim(SpotlightDim),
 }
@@ -375,6 +392,21 @@ pub(crate) fn takes_shadow(tool: Tool) -> bool {
         | Tool::Step
         | Tool::Bubble => true,
         Tool::Select
+        | Tool::Pen
+        | Tool::Highlighter
+        | Tool::Redact
+        | Tool::Crop
+        | Tool::Spotlight => false,
+    }
+}
+
+/// Whether the shapes `tool` draws can have a fill, so a fill opacity.
+pub(crate) fn takes_fill(tool: Tool) -> bool {
+    match tool {
+        Tool::Rectangle | Tool::Ellipse | Tool::Text | Tool::Step | Tool::Bubble => true,
+        Tool::Select
+        | Tool::Arrow
+        | Tool::Line
         | Tool::Pen
         | Tool::Highlighter
         | Tool::Redact
