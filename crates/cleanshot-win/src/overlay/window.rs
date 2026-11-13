@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cleanshot_core::box_handles;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, ID2D1Bitmap, ID2D1Factory,
@@ -42,11 +42,14 @@ struct Surface {
     dim: ID2D1SolidColorBrush,
     accent: ID2D1SolidColorBrush,
     handle: ID2D1SolidColorBrush,
-    /// Only the toolbar's monitor paints it.
-    toolbar: Option<Paint>,
+    /// Made the first time the toolbar comes to this monitor.
+    toolbar: RefCell<Option<Paint>>,
     /// The toolbar's tooltips, made on the first move over its monitor, so they cost
-    /// the first frame nothing.
+    /// the first frame nothing, and dropped when the toolbar leaves it.
     tips: RefCell<Option<Tips>>,
+    window: HWND,
+    monitor: RECT,
+    scale: f32,
     pill: size_pill::Paint,
     loupe: loupe::Paint,
     origin: POINT,
@@ -172,7 +175,8 @@ impl Surface {
     }
 
     fn moved(&self, window: HWND, now: POINT) {
-        if self.toolbar.is_some() && self.tips.borrow().is_none() {
+        self.shared.host_toolbar(window, self.monitor, self.scale);
+        if self.tips.borrow().is_none() {
             self.make_tips(window);
         }
         if let Mode::Window { .. } = self.shared.mode.get() {
@@ -204,15 +208,16 @@ impl Surface {
     /// The end of a press at `at`: a press that never left Windows' drag distance picks the
     /// window under it.
     fn released(&self, at: POINT) {
-        let clicked = self
-            .shared
-            .gesture
-            .take()
-            .is_some_and(|gesture| gesture.clicking);
-        if clicked {
+        let Some(gesture) = self.shared.gesture.take() else {
+            return self.shared.changed();
+        };
+        if gesture.clicking {
             return self.shared.pick(self.shared.picked_at(at));
         }
         self.shared.changed();
+        if gesture.grip == Grip::Draw && self.shared.selected.get().is_some() {
+            self.shared.selected_with_pointer();
+        }
     }
 
     /// The loupe shows only while the pointer drags.
@@ -223,6 +228,10 @@ impl Surface {
     }
 
     fn draw_toolbar(&self) -> windows::core::Result<()> {
+        if self.shared.toolbar_window.get() != Some(self.window) {
+            self.tips.borrow_mut().take();
+            return Ok(());
+        }
         let placed = self.shared.toolbar();
         if let Some(tips) = &*self.tips.borrow() {
             tips.place(
@@ -231,8 +240,18 @@ impl Surface {
                     .flat_map(|placed| placed.client_areas(self.origin)),
             );
         }
-        let (Some(paint), Some(placed)) = (&self.toolbar, placed) else {
+        let Some(placed) = placed else {
             return Ok(());
+        };
+        let mut toolbar = self.toolbar.borrow_mut();
+        let paint = match &mut *toolbar {
+            Some(paint) => paint,
+            None => toolbar.insert(Paint::new(
+                &self.target.cast()?,
+                Some(&self.frozen),
+                self.scale,
+                &self.shared.palette,
+            )?),
         };
         paint.draw(&placed, self.origin, self.shared.focus.get(), |control| {
             ControlFace {
@@ -400,13 +419,12 @@ fn surface(
         let dim = target.CreateSolidColorBrush(&raw const palette.dim, None)?;
         let accent = target.CreateSolidColorBrush(&raw const palette.accent, None)?;
         let handle = target.CreateSolidColorBrush(&raw const palette.handle, None)?;
-        let toolbar = match (hosts_toolbar, shared.toolbar) {
-            (true, Some((_, scale))) => {
-                Some(Paint::new(&target.cast()?, Some(&frozen), scale, &palette)?)
-            }
-            (true | false, _) => None,
-        };
         let scale = dpi_scale(capture.bounds)?;
+        let toolbar = if hosts_toolbar {
+            Some(Paint::new(&target.cast()?, Some(&frozen), scale, &palette)?)
+        } else {
+            None
+        };
         let pill = size_pill::Paint::new(&target, capture.bounds, scale, &palette)?;
         let loupe = loupe::Paint::new(
             &target,
@@ -420,7 +438,10 @@ fn surface(
             tips: RefCell::new(None),
             pill,
             loupe,
-            toolbar,
+            toolbar: RefCell::new(toolbar),
+            window,
+            monitor: capture.bounds,
+            scale,
             target,
             frozen,
             dim,
@@ -482,10 +503,9 @@ unsafe extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_GETOBJECT => {
-            let answered = surface
-                .toolbar
-                .as_ref()
-                .and_then(|_| automation::answer(window, &surface.shared.mirror, wparam, lparam));
+            let answered = (surface.shared.toolbar_window.get() == Some(window))
+                .then(|| automation::answer(window, &surface.shared.mirror, wparam, lparam))
+                .flatten();
             // SAFETY: forwarding a request this window has no provider for.
             answered.unwrap_or_else(|| unsafe { DefWindowProcW(window, message, wparam, lparam) })
         }

@@ -63,7 +63,7 @@ pub use selection::{
 };
 pub use settings::{
     AfterCapture, Hotkey, HotkeyAction, HotkeyRefusal, Hotkeys, Key, MAX_SETTINGS_BYTES, Modifiers,
-    SaveFormat, Settings, SettingsProblem,
+    SaveFormat, Settings, SettingsProblem, ToolbarPosition,
 };
 pub use settings_change::{Applied, SettingsNotice, SettingsSaveError, settings_notice};
 pub use startup::{StartupEntryError, run_command, starts};

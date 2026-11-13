@@ -27,6 +27,7 @@ pub struct Settings {
     pub save_folder: Option<String>,
     pub save_format: SaveFormat,
     pub after_capture: AfterCapture,
+    pub toolbar_position: ToolbarPosition,
     pub show_thumbnail: bool,
     pub thumbnail_stay: ThumbnailStay,
     pub show_pointer: bool,
@@ -68,10 +69,21 @@ impl SaveFormat {
 }
 
 /// What happens once a region is selected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AfterCapture {
+    #[default]
     ShowToolbar,
     Copy,
+    OpenEditor,
+}
+
+/// The edge of the screen the capture toolbar sits near once something is selected. It goes
+/// to the other edge when this one would cover the selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolbarPosition {
+    #[default]
+    Bottom,
+    Top,
 }
 
 /// A part of the settings file that was not used, so its default applies.
@@ -90,7 +102,8 @@ impl Default for Settings {
         Self {
             save_folder: None,
             save_format: SaveFormat::Png,
-            after_capture: AfterCapture::ShowToolbar,
+            after_capture: AfterCapture::default(),
+            toolbar_position: ToolbarPosition::default(),
             show_thumbnail: true,
             thumbnail_stay: ThumbnailStay::default(),
             show_pointer: false,
@@ -164,9 +177,17 @@ impl Settings {
                 .read("after_capture", |value| match value.as_str()? {
                     "toolbar" => Some(AfterCapture::ShowToolbar),
                     "copy" => Some(AfterCapture::Copy),
+                    "editor" => Some(AfterCapture::OpenEditor),
                     _ => None,
                 })
                 .unwrap_or(defaults.after_capture),
+            toolbar_position: reader
+                .read("toolbar_position", |value| match value.as_str()? {
+                    "bottom" => Some(ToolbarPosition::Bottom),
+                    "top" => Some(ToolbarPosition::Top),
+                    _ => None,
+                })
+                .unwrap_or(defaults.toolbar_position),
             show_thumbnail: reader
                 .read("show_thumbnail", Value::as_bool)
                 .unwrap_or(defaults.show_thumbnail),
@@ -203,9 +224,15 @@ impl Settings {
         let after_capture = match self.after_capture {
             AfterCapture::ShowToolbar => "toolbar",
             AfterCapture::Copy => "copy",
+            AfterCapture::OpenEditor => "editor",
+        };
+        let toolbar_position = match self.toolbar_position {
+            ToolbarPosition::Bottom => "bottom",
+            ToolbarPosition::Top => "top",
         };
         table.insert("save_format".into(), save_format.into());
         table.insert("after_capture".into(), after_capture.into());
+        table.insert("toolbar_position".into(), toolbar_position.into());
         table.insert("show_thumbnail".into(), self.show_thumbnail.into());
         table.insert(
             "thumbnail_ms".into(),
@@ -346,6 +373,7 @@ mod tests {
         assert_eq!(settings, Settings::default());
         assert_eq!(settings.save_format, SaveFormat::Png);
         assert_eq!(settings.after_capture, AfterCapture::ShowToolbar);
+        assert_eq!(settings.toolbar_position, ToolbarPosition::Bottom);
         assert!(settings.show_thumbnail);
         assert_eq!(settings.hotkeys.region, hotkey("PrtSc"));
         assert_eq!(settings.hotkeys.last_region, hotkey("Shift+PrtSc"));
@@ -454,7 +482,8 @@ mod tests {
         let settings = Settings {
             save_folder: Some(r"D:\Shots".into()),
             save_format: SaveFormat::Bmp,
-            after_capture: AfterCapture::Copy,
+            after_capture: AfterCapture::OpenEditor,
+            toolbar_position: ToolbarPosition::Top,
             show_thumbnail: false,
             thumbnail_stay: ThumbnailStay::from_ms(12_345).expect("within the range"),
             show_pointer: true,

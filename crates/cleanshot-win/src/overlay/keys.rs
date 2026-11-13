@@ -2,8 +2,8 @@ use cleanshot_core::{TabDirection, ToolbarControl};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, UnregisterHotKey,
-    VIRTUAL_KEY, VK_DOWN, VK_E, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_S, VK_SPACE, VK_TAB,
-    VK_UP, VK_W,
+    VIRTUAL_KEY, VK_C, VK_DOWN, VK_E, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_S, VK_SPACE,
+    VK_TAB, VK_UP, VK_W,
 };
 
 use crate::Error;
@@ -25,7 +25,7 @@ pub(super) enum Key {
     SwitchMode,
 }
 
-pub(super) const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 17] = [
+pub(super) const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 20] = [
     (MOD_NOREPEAT, VK_ESCAPE, Key::Choose(ToolbarControl::Cancel)),
     (MOD_NOREPEAT, VK_RETURN, Key::Press),
     (MOD_NOREPEAT, VK_SPACE, Key::Press),
@@ -36,6 +36,13 @@ pub(super) const KEYS: [(HOT_KEY_MODIFIERS, VIRTUAL_KEY, Key); 17] = [
     ),
     (
         HOT_KEY_MODIFIERS(MOD_NOREPEAT.0 | MOD_CONTROL.0 | MOD_SHIFT.0),
+        VK_S,
+        Key::SaveAs,
+    ),
+    (MOD_NOREPEAT, VK_C, Key::Choose(ToolbarControl::Copy)),
+    (MOD_NOREPEAT, VK_S, Key::Choose(ToolbarControl::Save)),
+    (
+        HOT_KEY_MODIFIERS(MOD_NOREPEAT.0 | MOD_SHIFT.0),
         VK_S,
         Key::SaveAs,
     ),

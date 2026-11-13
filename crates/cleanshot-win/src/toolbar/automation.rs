@@ -779,7 +779,7 @@ mod tests {
                 property(&mirror, control, UIA_AcceleratorKeyPropertyId),
             )
         };
-        assert_eq!(heard(ToolbarControl::Copy), ("Copy".into(), "Enter".into()));
+        assert_eq!(heard(ToolbarControl::Copy), ("Copy".into(), "C".into()));
         assert_eq!(heard(ToolbarControl::Edit), ("Edit".into(), "E".into()));
         assert_eq!(
             heard(ToolbarControl::Options),
@@ -800,6 +800,7 @@ mod tests {
             },
             None,
             1.0,
+            cleanshot_core::ToolbarPosition::Bottom,
         )
         .expect("a 1080p monitor holds the panel");
         mirror.show(Some((layout, ToolbarControl::Capture)));

@@ -100,6 +100,7 @@ impl Shared {
         if let Some(pick) = pick {
             self.mode.set(Mode::Region { hovered: None });
             self.select(Some(self.frame(pick)));
+            self.selected_with_pointer();
         }
     }
 

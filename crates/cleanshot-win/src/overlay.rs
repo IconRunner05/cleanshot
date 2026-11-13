@@ -4,7 +4,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use cleanshot_core::{
-    OptionsEntry, OptionsItem, Pickable, Rect, SavingOff, Toolbar, ToolbarControl,
+    AfterCapture, OptionsEntry, OptionsItem, Pickable, Rect, SavingOff, Toolbar, ToolbarControl,
+    ToolbarPosition,
 };
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow};
@@ -111,10 +112,14 @@ struct Shared {
     pickable: Vec<Pickable>,
     monitors: Vec<Rect>,
     windows: RefCell<Vec<HWND>>,
-    /// The window that shows the toolbar and answers UI Automation for it.
+    /// The window that shows the toolbar and answers UI Automation for it: the one the
+    /// pointer last moved over.
     toolbar_window: Cell<Option<HWND>>,
     /// The toolbar's monitor and its physical pixels per DIP.
-    toolbar: Option<(RECT, f32)>,
+    toolbar: Cell<Option<(RECT, f32)>>,
+    toolbar_position: ToolbarPosition,
+    /// What a region drawn or a window picked with the pointer leads to at once.
+    after_selecting: AfterCapture,
     focus: Cell<ToolbarControl>,
     mirror: Mirror,
     palette: Palette,
@@ -152,8 +157,31 @@ impl Shared {
 
     /// Where the toolbar sits for the current selection, if its monitor can hold it.
     fn toolbar(&self) -> Option<Layout> {
-        let (monitor, scale) = self.toolbar?;
-        toolbar::layout(Toolbar::Overlay, monitor, self.selected.get(), scale)
+        let (monitor, scale) = self.toolbar.get()?;
+        toolbar::layout(
+            Toolbar::Overlay,
+            monitor,
+            self.selected.get(),
+            scale,
+            self.toolbar_position,
+        )
+    }
+
+    /// Moves the toolbar to `window`, which shows `monitor` at `scale`, unless it is there.
+    fn host_toolbar(&self, window: HWND, monitor: RECT, scale: f32) {
+        if self.toolbar_window.replace(Some(window)) != Some(window) {
+            self.toolbar.set(Some((monitor, scale)));
+            self.changed();
+        }
+    }
+
+    /// A selection made with the pointer is copied or edited at once when After capture says so.
+    fn selected_with_pointer(&self) {
+        match self.after_selecting {
+            AfterCapture::ShowToolbar => {}
+            AfterCapture::Copy => self.choose(ToolbarControl::Copy),
+            AfterCapture::OpenEditor => self.choose(ToolbarControl::Edit),
+        }
     }
 
     fn press(&self, key: Key) {
@@ -246,7 +274,8 @@ impl Shared {
 }
 
 /// How the overlay opens on the frozen screen: the selection it starts with, the windows W
-/// can pick and whether Save is off. The default is none of them.
+/// can pick, whether Save is off, where the toolbar sits and what a selection made with the
+/// pointer does. The default is none of them, the toolbar at the bottom, and nothing.
 #[derive(Default)]
 pub struct Opening {
     /// The selection the overlay opens with.
@@ -258,6 +287,8 @@ pub struct Opening {
     /// [`cleanshot_core::saving_off_notice`] for this reason as its accessible help text;
     /// choosing it still sends [`OverlayEvent::Save`].
     pub saving_off: Option<SavingOff>,
+    pub toolbar_position: ToolbarPosition,
+    pub after_selecting: AfterCapture,
 }
 
 /// One topmost, never-activated window per monitor, each showing that monitor's frozen
@@ -310,6 +341,8 @@ impl Overlay {
             selected,
             pickable,
             saving_off,
+            toolbar_position,
+            after_selecting,
         }: Opening,
         options: impl Fn() -> Vec<OptionsEntry> + 'static,
         on_event: impl FnMut(OverlayEvent) + 'static,
@@ -338,7 +371,9 @@ impl Overlay {
                 .collect(),
             windows: RefCell::new(Vec::with_capacity(captures.len())),
             toolbar_window: Cell::new(None),
-            toolbar,
+            toolbar: Cell::new(toolbar),
+            toolbar_position,
+            after_selecting,
             focus: Cell::new(toolbar::primary(Toolbar::Overlay)),
             mirror: Mirror::new(Toolbar::Overlay, saving_off),
             palette: Palette::current().map_err(Error::Window)?,
@@ -473,8 +508,8 @@ pub(crate) mod tests {
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
-        VIRTUAL_KEY, VK_E, VK_ESCAPE, VK_RETURN, VK_S, VK_TAB,
+        HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VIRTUAL_KEY, VK_C, VK_E,
+        VK_ESCAPE, VK_RETURN, VK_S, VK_TAB,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, EnumThreadWindows, IsWindow, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
@@ -702,11 +737,8 @@ pub(crate) mod tests {
             let chosen = Key::Choose(control);
             let holds = match named {
                 "Esc" => held(none, VK_ESCAPE, chosen),
-                "Enter" => {
-                    control == toolbar::primary(Toolbar::Overlay)
-                        && held(none, VK_RETURN, Key::Press)
-                }
-                "Ctrl+S" => held(MOD_CONTROL, VK_S, chosen),
+                "C" => held(none, VK_C, chosen),
+                "S" => held(none, VK_S, chosen),
                 "E" => held(none, VK_E, chosen),
                 other => panic!("{control:?} names {other}, which this test cannot read"),
             };
@@ -775,6 +807,73 @@ pub(crate) mod tests {
             bottom: -28,
         };
         assert_eq!(copied.get(), Some(expected));
+    }
+
+    #[test]
+    fn with_after_capture_set_to_copy_a_drawn_region_is_copied_on_release() {
+        let _screen = screen();
+        let copied = Rc::new(Cell::new(None));
+        let sink = Rc::clone(&copied);
+        let overlay = Overlay::show(
+            &[monitor()],
+            Opening {
+                after_selecting: AfterCapture::Copy,
+                ..Opening::default()
+            },
+            Vec::new,
+            move |event| {
+                if let OverlayEvent::Copy(selected) = event {
+                    sink.set(Some(selected));
+                }
+            },
+        )
+        .expect("the overlay opens");
+        let window = overlay.windows[0];
+        let client = |x: isize, y: isize| Some(LPARAM(y * 0x1_0000 + x));
+        // SAFETY: each message is handled on this thread by a window created above, and none
+        // carries a pointer.
+        unsafe {
+            SendMessageW(window, WM_LBUTTONDOWN, None, client(10, 8));
+            SendMessageW(window, WM_MOUSEMOVE, None, client(30, 20));
+            SendMessageW(window, WM_LBUTTONUP, None, client(30, 20));
+        }
+        drop(overlay);
+        let expected = RECT {
+            left: 10,
+            top: 8,
+            right: 30,
+            bottom: 20,
+        };
+        assert_eq!(copied.get(), Some(expected));
+    }
+
+    #[test]
+    fn the_toolbar_moves_to_the_monitor_the_pointer_moves_onto() {
+        let _screen = screen();
+        let beside = MonitorImage {
+            bounds: RECT {
+                left: 64,
+                top: 0,
+                right: 128,
+                bottom: 48,
+            },
+            frame: monitor().frame,
+        };
+        let beside_bounds = beside.bounds;
+        let overlay = Overlay::show(&[monitor(), beside], Opening::default(), Vec::new, |_| {})
+            .expect("the overlay opens");
+        let moved_onto = |window: HWND| {
+            // SAFETY: the message is handled on this thread by a window created above.
+            unsafe { SendMessageW(window, WM_MOUSEMOVE, None, Some(LPARAM(0))) };
+            overlay.shared.toolbar_window.get()
+        };
+        let (first, second) = (overlay.windows[0], overlay.windows[1]);
+        assert_eq!(moved_onto(second), Some(second));
+        assert_eq!(
+            overlay.shared.toolbar.get().map(|(monitor, _)| monitor),
+            Some(beside_bounds)
+        );
+        assert_eq!(moved_onto(first), Some(first));
     }
 
     #[test]
@@ -889,7 +988,7 @@ pub(crate) mod tests {
             texts,
             [
                 "Options",
-                "Copy (Enter)",
+                "Copy (C)",
                 "Your organisation allows copying only. Use Copy.",
                 "Edit (E)",
                 "Cancel (Esc)",
@@ -1166,9 +1265,15 @@ pub(crate) mod tests {
         };
 
         let scale = dpi_scale(primary).expect("the primary monitor has a DPI");
-        let pill = toolbar::layout(Toolbar::Overlay, primary, None, scale)
-            .expect("a 1080p monitor holds the toolbar at 175%")
-            .pill;
+        let pill = toolbar::layout(
+            Toolbar::Overlay,
+            primary,
+            None,
+            scale,
+            ToolbarPosition::Bottom,
+        )
+        .expect("a 1080p monitor holds the toolbar at 175%")
+        .pill;
 
         let expected = i32::try_from((44 * dpi + 48) / 96).expect("a pill is a few pixels tall");
         assert_eq!(pill.bottom - pill.top, expected, "at {dpi} dpi");

@@ -77,10 +77,16 @@ Drag to select a region, or click to pick the window under the pointer. Then:
 | --- | --- |
 | Drag a handle, or inside | Resize or move the selection |
 | Arrows | Nudge the selection 1 px (with Shift: 10 px) |
-| Enter | Copy |
-| Ctrl+S / Ctrl+Shift+S | Save / Save As |
+| C or Enter | Copy |
+| S or Ctrl+S | Save |
+| Shift+S or Ctrl+Shift+S | Save As |
 | E | Open in the editor |
 | Esc | Cancel |
+
+The toolbar follows the pointer to whichever monitor it is on. It sits at the bottom of the
+screen, or at the top if you choose that in Settings, and moves to the other edge rather than
+cover the selection. With **After capture** set to Copy or Open in editor, a region is copied
+or opened as soon as you let go of the mouse.
 
 ### Editing
 
@@ -125,7 +131,8 @@ The file can also be edited by hand while Cleanshot is closed:
 ```toml
 save_folder = 'D:\Screenshots'   # default: Pictures\Screenshots
 save_format = "png"              # png, jpg or bmp
-after_capture = "toolbar"        # toolbar, or copy to copy at once
+after_capture = "toolbar"        # toolbar, copy, or editor
+toolbar_position = "bottom"      # bottom or top
 show_thumbnail = true
 thumbnail_ms = 5000              # 1000 to 60000
 show_pointer = false

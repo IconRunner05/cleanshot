@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use cleanshot_core::{Timer, Toolbar};
+use cleanshot_core::{Timer, Toolbar, ToolbarPosition};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
@@ -200,9 +200,15 @@ fn register_class() -> Result<(), Error> {
 
 fn open_window(monitor: RECT, timer: Timer, listener: Listener) -> Result<HWND, Error> {
     let scale = dpi_scale(monitor).map_err(Error::Monitor)?;
-    let pill = toolbar::layout(Toolbar::Panel, monitor, None, scale)
-        .ok_or(Error::MonitorTooSmall)?
-        .pill;
+    let pill = toolbar::layout(
+        Toolbar::Panel,
+        monitor,
+        None,
+        scale,
+        ToolbarPosition::Bottom,
+    )
+    .ok_or(Error::MonitorTooSmall)?
+    .pill;
     let (width, height) = (pill.right - pill.left, pill.bottom - pill.top);
     // SAFETY: the class is registered and every string is 'static. The process is
     // per-monitor DPI aware, so the rectangle is physical pixels.

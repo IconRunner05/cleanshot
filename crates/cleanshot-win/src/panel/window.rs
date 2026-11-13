@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use cleanshot_core::{
     CapturePanel, OptionsEntry, PanelOutcome, TabDirection, Toolbar, ToolbarControl,
+    ToolbarPosition,
 };
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U;
@@ -213,8 +214,14 @@ pub(super) fn open_window(
     listener: Listener,
 ) -> Result<HWND, Error> {
     let scale = dpi_scale(monitor).map_err(Error::Monitor)?;
-    let layout =
-        toolbar::layout(Toolbar::Panel, monitor, None, scale).ok_or(Error::MonitorTooSmall)?;
+    let layout = toolbar::layout(
+        Toolbar::Panel,
+        monitor,
+        None,
+        scale,
+        ToolbarPosition::Bottom,
+    )
+    .ok_or(Error::MonitorTooSmall)?;
     let pill = layout.pill;
     let (width, height) = (pill.right - pill.left, pill.bottom - pill.top);
     // SAFETY: reads which window has the focus.

@@ -49,9 +49,10 @@ pub(super) enum Shot {
     LastRegion,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Plan {
     Copy(RECT),
+    Edit(RECT),
     Overlay(Option<RECT>),
     /// The overlay, picking a window.
     PickWindow,
@@ -59,8 +60,8 @@ enum Plan {
 
 /// What a capture of `shot` does once the screen is copied, or None when the pointer's
 /// monitor is unknown. A region capture preselects `remembered`; a screen capture follows
-/// `after_capture`; a last-region capture copies the last selection with no overlay, or opens one when
-/// there is none yet.
+/// `after_capture`; a last-region capture copies the last selection with no overlay, or edits it
+/// when `after_capture` says so, or opens the overlay when there is none yet.
 fn plan(
     shot: Shot,
     after_capture: AfterCapture,
@@ -71,12 +72,45 @@ fn plan(
     Some(match (shot, after_capture) {
         (Shot::Mode(CaptureMode::Region), _) => Plan::Overlay(remembered),
         (Shot::Mode(CaptureMode::FullScreen), AfterCapture::Copy) => Plan::Copy(pointer_monitor()?),
+        (Shot::Mode(CaptureMode::FullScreen), AfterCapture::OpenEditor) => {
+            Plan::Edit(pointer_monitor()?)
+        }
         (Shot::Mode(CaptureMode::FullScreen), AfterCapture::ShowToolbar) => {
             Plan::Overlay(Some(pointer_monitor()?))
         }
-        (Shot::LastRegion, _) => last_selection.map_or(Plan::Overlay(None), Plan::Copy),
+        (Shot::LastRegion, AfterCapture::OpenEditor) => {
+            last_selection.map_or(Plan::Overlay(None), Plan::Edit)
+        }
+        (Shot::LastRegion, AfterCapture::ShowToolbar | AfterCapture::Copy) => {
+            last_selection.map_or(Plan::Overlay(None), Plan::Copy)
+        }
         (Shot::Mode(CaptureMode::Window), _) => Plan::PickWindow,
     })
+}
+
+/// The selection the overlay opens with and whether it picks a window, for a plan that opens
+/// it; a plan that copies or edits with no overlay is carried out here, and gives None.
+fn overlay_or_at_once(
+    session: &Rc<Session>,
+    captures: &[MonitorImage],
+    planned: Plan,
+    defer: &Rc<Defer>,
+    pass_on: &Rc<PassOn>,
+) -> Option<(Option<RECT>, bool)> {
+    match planned {
+        Plan::Overlay(selected) => return Some((selected, false)),
+        Plan::PickWindow => return Some((None, true)),
+        Plan::Copy(selected) => {
+            if let Some(image) = finish(session, captures, selected, Output::Copy) {
+                thumbnail::show(session, image, selected, defer, pass_on);
+            }
+        }
+        Plan::Edit(selected) => match region(captures, selected) {
+            Ok(image) => pass_on(image, Handoff::Editor { from: selected }),
+            Err(error) => session.warn(Warning::Failed("The capture could not be edited", &error)),
+        },
+    }
+    None
 }
 
 /// Remember last selection: the last selection, when the setting is on and every pixel
@@ -155,26 +189,18 @@ pub(super) fn capture(
         last,
         captures.iter().map(|capture| capture.bounds),
     );
-    let (selected, picking) = match plan(
+    let planned = plan(
         shot,
         session.settings.borrow().after_capture,
         last,
         remembered,
         under_pointer,
-    ) {
-        None => {
-            session.log_capture(&copied, &adapters, &outputs, &captures);
-            return session.after_use(&*defer);
-        }
-        Some(Plan::Overlay(selected)) => (selected, false),
-        Some(Plan::PickWindow) => (None, true),
-        Some(Plan::Copy(selected)) => {
-            if let Some(image) = finish(session, &captures, selected, Output::Copy) {
-                thumbnail::show(session, image, selected, &defer, &pass_on);
-            }
-            session.log_capture(&copied, &adapters, &outputs, &captures);
-            return session.after_use(&*defer);
-        }
+    );
+    let Some((selected, picking)) = planned
+        .and_then(|planned| overlay_or_at_once(session, &captures, planned, &defer, &pass_on))
+    else {
+        session.log_capture(&copied, &adapters, &outputs, &captures);
+        return session.after_use(&*defer);
     };
     // Listed before the overlay opens, so the list never holds it.
     let pickable = listed_windows(session, &captures);
@@ -186,12 +212,18 @@ pub(super) fn capture(
         Saving::Allowed { .. } => None,
     };
     let options = settings_window::options_for(session);
+    let (toolbar_position, after_selecting) = {
+        let settings = session.settings.borrow();
+        (settings.toolbar_position, settings.after_capture)
+    };
     let shown = Overlay::show(
         &captures,
         Opening {
             selected,
             pickable,
             saving_off,
+            toolbar_position,
+            after_selecting,
         },
         options,
         overlay_listener(session, frozen, defer, pass_on),
@@ -425,8 +457,18 @@ mod tests {
     };
 
     #[test]
-    fn full_screen_copies_or_preselects_the_pointer_monitor_by_after_capture() {
+    fn full_screen_copies_edits_or_preselects_the_pointer_monitor_by_after_capture() {
         let monitor = || Some(MONITOR);
+        assert_eq!(
+            plan(
+                Shot::Mode(CaptureMode::FullScreen),
+                AfterCapture::OpenEditor,
+                None,
+                None,
+                monitor
+            ),
+            Some(Plan::Edit(MONITOR))
+        );
         assert_eq!(
             plan(
                 Shot::Mode(CaptureMode::FullScreen),
@@ -461,7 +503,11 @@ mod tests {
 
     #[test]
     fn the_window_hotkey_opens_the_overlay_picking_a_window_whatever_was_last() {
-        for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
+        for after in [
+            AfterCapture::Copy,
+            AfterCapture::ShowToolbar,
+            AfterCapture::OpenEditor,
+        ] {
             assert_eq!(
                 plan(
                     Shot::Mode(CaptureMode::Window),
@@ -476,12 +522,20 @@ mod tests {
     }
 
     #[test]
-    fn last_region_copies_the_last_selection_or_opens_the_overlay_without_one() {
+    fn last_region_copies_or_edits_the_last_selection_or_opens_the_overlay_without_one() {
         let monitor = || Some(MONITOR);
-        for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
+        for after in [
+            AfterCapture::Copy,
+            AfterCapture::ShowToolbar,
+            AfterCapture::OpenEditor,
+        ] {
+            let expected = match after {
+                AfterCapture::OpenEditor => Plan::Edit(LAST),
+                AfterCapture::Copy | AfterCapture::ShowToolbar => Plan::Copy(LAST),
+            };
             assert_eq!(
                 plan(Shot::LastRegion, after, Some(LAST), None, monitor),
-                Some(Plan::Copy(LAST))
+                Some(expected)
             );
             assert_eq!(
                 plan(Shot::LastRegion, after, None, None, monitor),
@@ -502,7 +556,11 @@ mod tests {
 
     #[test]
     fn a_region_capture_opens_with_the_remembered_selection_preselected() {
-        for after in [AfterCapture::Copy, AfterCapture::ShowToolbar] {
+        for after in [
+            AfterCapture::Copy,
+            AfterCapture::ShowToolbar,
+            AfterCapture::OpenEditor,
+        ] {
             assert_eq!(
                 plan(
                     Shot::Mode(CaptureMode::Region),

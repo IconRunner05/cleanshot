@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use cleanshot_core::{CaptureMode, Toolbar, ToolbarControl, chrome, tooltip_text};
+use cleanshot_core::{CaptureMode, Toolbar, ToolbarControl, ToolbarPosition, chrome, tooltip_text};
 use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
@@ -42,10 +42,9 @@ pub(crate) fn name(control: ToolbarControl) -> &'static str {
 pub(crate) fn shortcut(toolbar: Toolbar, control: ToolbarControl) -> Option<&'static str> {
     match (toolbar, control) {
         (Toolbar::Panel | Toolbar::Overlay, ToolbarControl::Cancel) => Some("Esc"),
-        (Toolbar::Panel, ToolbarControl::Capture) | (Toolbar::Overlay, ToolbarControl::Copy) => {
-            Some("Enter")
-        }
-        (Toolbar::Overlay, ToolbarControl::Save) => Some("Ctrl+S"),
+        (Toolbar::Panel, ToolbarControl::Capture) => Some("Enter"),
+        (Toolbar::Overlay, ToolbarControl::Copy) => Some("C"),
+        (Toolbar::Overlay, ToolbarControl::Save) => Some("S"),
         (Toolbar::Overlay, ToolbarControl::Edit) => Some("E"),
         (
             Toolbar::Panel,
@@ -142,9 +141,9 @@ pub(crate) struct Layout {
     pub(crate) controls: Vec<(ToolbarControl, RECT)>,
 }
 
-/// `toolbar`'s controls centred near the bottom of `monitor`, or near its top when that would
-/// cover `selected`, at `scale` physical pixels per DIP. None when the monitor is too
-/// small to hold it.
+/// `toolbar`'s controls centred near the `position` edge of `monitor`, or near the other edge
+/// when that would cover `selected`, at `scale` physical pixels per DIP. None when the
+/// monitor is too small to hold it.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -155,6 +154,7 @@ pub(crate) fn layout(
     monitor: RECT,
     selected: Option<RECT>,
     scale: f32,
+    position: ToolbarPosition,
 ) -> Option<Layout> {
     let px = |dips: f32| (dips * scale).round() as i32;
     let width = px(PADDING * 2.0
@@ -182,10 +182,14 @@ pub(crate) fn layout(
     let covers = |pill: RECT| {
         selected.is_some_and(|selected| screen_rect(pill).overlap(screen_rect(selected)).is_some())
     };
-    let pill = if covers(bottom) && !covers(top) {
-        top
+    let (near, far) = match position {
+        ToolbarPosition::Bottom => (bottom, top),
+        ToolbarPosition::Top => (top, bottom),
+    };
+    let pill = if covers(near) && !covers(far) {
+        far
     } else {
-        bottom
+        near
     };
     let mut x = pill.left + px(PADDING);
     let button_top = pill.top + (height - px(BUTTON_HEIGHT)) / 2;
@@ -424,7 +428,14 @@ mod tests {
     };
 
     fn layout_at(selected: Option<RECT>) -> Layout {
-        layout(Toolbar::Overlay, MONITOR, selected, 1.0).expect("a 1080p monitor holds the toolbar")
+        layout(
+            Toolbar::Overlay,
+            MONITOR,
+            selected,
+            1.0,
+            ToolbarPosition::Bottom,
+        )
+        .expect("a 1080p monitor holds the toolbar")
     }
 
     #[test]
@@ -453,6 +464,31 @@ mod tests {
     }
 
     #[test]
+    fn set_to_the_top_the_toolbar_sits_near_the_top_and_moves_down_rather_than_cover_the_selection()
+    {
+        let placed = |selected| {
+            layout(
+                Toolbar::Overlay,
+                MONITOR,
+                selected,
+                1.0,
+                ToolbarPosition::Top,
+            )
+            .expect("a 1080p monitor holds it")
+            .pill
+        };
+        assert_eq!(placed(None).top - MONITOR.top, 24);
+        let high = RECT {
+            left: -1000,
+            top: 10,
+            right: -900,
+            bottom: 100,
+        };
+        assert_eq!(MONITOR.bottom - placed(Some(high)).bottom, 24);
+        assert_eq!(placed(Some(MONITOR)), placed(None));
+    }
+
+    #[test]
     fn on_a_monitor_above_the_primary_the_toolbar_keeps_its_edges() {
         let above = RECT {
             left: 0,
@@ -461,7 +497,14 @@ mod tests {
             bottom: 0,
         };
         let placed = |selected| {
-            layout(Toolbar::Overlay, above, selected, 1.0).expect("a 1080p monitor holds it")
+            layout(
+                Toolbar::Overlay,
+                above,
+                selected,
+                1.0,
+                ToolbarPosition::Bottom,
+            )
+            .expect("a 1080p monitor holds it")
         };
         assert_eq!(placed(None).pill.bottom, -24);
         let low = RECT {
@@ -493,7 +536,8 @@ mod tests {
     #[test]
     fn each_toolbar_places_its_own_controls_left_to_right() {
         for toolbar in [Toolbar::Panel, Toolbar::Overlay] {
-            let placed = layout(toolbar, MONITOR, None, 1.0).expect("a 1080p monitor holds it");
+            let placed = layout(toolbar, MONITOR, None, 1.0, ToolbarPosition::Bottom)
+                .expect("a 1080p monitor holds it");
             let controls: Vec<_> = placed
                 .controls
                 .iter()
@@ -518,10 +562,19 @@ mod tests {
             right: 64,
             bottom: 48,
         };
-        assert_eq!(layout(Toolbar::Overlay, small, None, 1.0), None);
+        assert_eq!(
+            layout(Toolbar::Overlay, small, None, 1.0, ToolbarPosition::Bottom),
+            None
+        );
         assert!(
-            layout(Toolbar::Overlay, MONITOR, None, 2.0)
-                .is_some_and(|placed| placed.pill.bottom - placed.pill.top == 88)
+            layout(
+                Toolbar::Overlay,
+                MONITOR,
+                None,
+                2.0,
+                ToolbarPosition::Bottom
+            )
+            .is_some_and(|placed| placed.pill.bottom - placed.pill.top == 88)
         );
     }
 }

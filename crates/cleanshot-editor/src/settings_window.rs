@@ -6,14 +6,15 @@ use cleanshot_core::thumbnail_layout::ThumbnailStay;
 use cleanshot_core::{
     AfterCapture, Applied, Hotkey, HotkeyAction, Modifiers, OptionsItem, Policy,
     SET_BY_ORGANISATION, SaveFormat, Saving, Settings, SettingsNotice, SettingsProblem,
-    StartupEntryError, closes_window, saving_off_reason, settings_notice, tooltip_text,
+    StartupEntryError, ToolbarPosition, closes_window, saving_off_reason, settings_notice,
+    tooltip_text,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Bounds, Context, Div, ElementId, FocusHandle, Global, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, PathPromptOptions, Render, Role, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, Subscription, Task, TitlebarOptions, Toggled,
-    Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
+    IntoElement, KeyDownEvent, ParentElement, PathPromptOptions, Pixels, Render, Role,
+    ScrollHandle, SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, Task,
+    TitlebarOptions, Toggled, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 
 use crate::caption::caption_row;
@@ -21,6 +22,8 @@ use crate::text::register_inter;
 use crate::theme::{CORNER, ControlFill, Theme, WindowSurface, filled, window_surface};
 use crate::tooltip::{hover_time, with_tooltip};
 use crate::{Error, Log, open_window, win32_handle};
+
+const WORK_AREA_MARGIN: Pixels = px(12.0);
 
 type Apply = Rc<dyn Fn(Settings) -> Applied>;
 /// Reads the settings file's own values as the app holds them now.
@@ -130,6 +133,10 @@ struct SettingsView {
     notice: Option<SharedString>,
     focus: FocusHandle,
     choosing_folder: Option<Task<()>>,
+    content: ScrollHandle,
+    /// Whether the window has grown to show all of its content, which it does once, after its
+    /// first frame is laid out.
+    fitted: bool,
     _activation: Subscription,
 }
 
@@ -160,6 +167,8 @@ impl SettingsView {
             notice: None,
             focus,
             choosing_folder: None,
+            content: ScrollHandle::new(),
+            fitted: false,
             _activation: activation,
         }
     }
@@ -284,12 +293,24 @@ impl Render for SettingsView {
                 "After capture",
                 [
                     (AfterCapture::ShowToolbar, "Show the toolbar"),
-                    (AfterCapture::Copy, "Copy to the clipboard"),
+                    (AfterCapture::Copy, "Copy"),
+                    (AfterCapture::OpenEditor, "Open in editor"),
                 ],
                 settings.after_capture,
                 theme,
                 cx,
                 |settings, choice| settings.after_capture = choice,
+            ))
+            .child(radio_group(
+                "Toolbar position",
+                [
+                    (ToolbarPosition::Bottom, "Bottom"),
+                    (ToolbarPosition::Top, "Top"),
+                ],
+                settings.toolbar_position,
+                theme,
+                cx,
+                |settings, choice| settings.toolbar_position = choice,
             ))
             .child(show_thumbnail_row(settings.show_thumbnail, theme, cx))
             .child(thumbnail_stay_row(settings.thumbnail_stay, theme, cx))
@@ -302,8 +323,18 @@ impl Render for SettingsView {
             .text_size(px(13.0))
             .text_color(theme.text)
             .child("Settings");
+        if !self.fitted {
+            self.fitted = true;
+            let content = self.content.clone();
+            window.on_next_frame(move |window, cx| show_all_of(&content, window, cx));
+        }
+        let version = div()
+            .text_color(theme.text)
+            .text_size(px(11.0))
+            .child(concat!("Cleanshot ", env!("CARGO_PKG_VERSION")));
         let content = div()
             .id("settings-content")
+            .track_scroll(&self.content)
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -323,7 +354,8 @@ impl Render for SettingsView {
                     .text_color(theme.text)
                     .text_size(px(13.0))
                     .child(notice)
-            }));
+            }))
+            .child(version);
         div()
             .id("settings")
             .role(Role::Application)
@@ -540,6 +572,20 @@ fn thumbnail_stay_row(
         .child(step("Longer thumbnail stay", "+", 1))
 }
 
+/// Grows the window by as much of `content` as is scrolled out of view, as far as the bottom
+/// of its display's work area; past that the content scrolls.
+fn show_all_of(content: &ScrollHandle, window: &mut Window, cx: &App) {
+    let hidden = content.max_offset().y;
+    let bounds = window.bounds();
+    let room = window.display(cx).map_or(px(0.0), |display| {
+        display.visible_bounds().bottom() - bounds.bottom()
+    });
+    let grow = hidden.min(room - WORK_AREA_MARGIN);
+    if grow > px(0.0) {
+        window.resize(size(bounds.size.width, bounds.size.height + grow));
+    }
+}
+
 /// A titled panel.
 fn section(title: &'static str, theme: Theme) -> Stateful<Div> {
     div()
@@ -662,7 +708,9 @@ fn radio_group<T: Copy + PartialEq + 'static, const N: usize>(
             .id(name)
             .role(Role::RadioGroup)
             .aria_label(name)
+            .flex_1()
             .flex()
+            .flex_wrap()
             .gap(px(4.0))
             .children(buttons),
     )
