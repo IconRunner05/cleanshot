@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use cleanshot_core::{
     Color, ColorValue, Command, CommandError, Cropping, Delivered, DeliveryError, Document, Drag,
-    History, KeyAction, Looks, Monitor, Output, Property, PropertyError, Restack, RgbaImage,
+    History, KeyAction, Looks, Monitor, Output, Property, PropertyError, RectF, Restack, RgbaImage,
     ShapeId, TextBlockError, TextEditError, TextMasks, TextOrigin, Tool, delivery_notice,
     save_as_notice,
 };
@@ -26,7 +26,7 @@ use self::card::image_card;
 use crate::canvas::{OnPointer, Overlay, Previews, document_canvas, render_image};
 use crate::caption::{CaptionRow, min_width};
 use crate::menu::MenuRow;
-use crate::placement::{MIN_HEIGHT, Placement, opening_size};
+use crate::placement::{MIN_HEIGHT, Placement, opening_size, refit_size};
 use crate::settings_window::settings_opener;
 use crate::shape_menu::ShapeMenu;
 use crate::strip::{StripGroup, crop_strip, property_strip};
@@ -149,6 +149,8 @@ struct EditorView {
     shift: bool,
     /// `None` while the image is fitted to the canvas, the default and Ctrl+0.
     placement: Option<Placement>,
+    /// The part of the image the window was last sized round.
+    sized_for: RectF,
     /// The capture's average colour, which glows round the image card.
     glow: Color,
     /// While a press on the minimap or a scrollbar is held, its drags pan the view.
@@ -192,6 +194,7 @@ impl EditorView {
         });
         let looks = remembered_looks(cx);
         let document = document.with_dim(looks.look(Tool::Spotlight).dim());
+        let sized_for = document.kept_area();
         Self {
             glow: document.base().average_color(),
             base: render_image(document.base()),
@@ -209,6 +212,7 @@ impl EditorView {
             previews: Rc::new(Previews::new(masks, Rc::clone(&log))),
             log,
             shift: false,
+            sized_for,
             placement: None,
             held: None,
             sampling: None,
@@ -369,6 +373,29 @@ impl EditorView {
         }
         window.focus(&self.focus, cx);
         cx.notify();
+    }
+
+    /// Resizes the window round the part of the image the history's crop keeps, once that
+    /// changes, by the rule it opened with, keeping its top-left corner on its display. GPUI
+    /// cannot move a window, so it does not keep its centre. A maximised or full-screen window
+    /// keeps its size.
+    fn refit_window(&mut self, window: &mut Window, cx: &App) {
+        let kept = self.history.document().kept_area();
+        if kept == self.sized_for {
+            return;
+        }
+        self.sized_for = kept;
+        if window.is_maximized() || window.is_fullscreen() {
+            return;
+        }
+        let Some(display) = window.display(cx) else {
+            return;
+        };
+        let smallest = size(min_width(cx), MIN_HEIGHT);
+        let origin = window.bounds().origin;
+        let scale = window.scale_factor();
+        let work_area = display.visible_bounds();
+        window.resize(refit_size(kept, scale, origin, work_area, smallest));
     }
 
     fn refresh(&mut self) {
@@ -599,6 +626,7 @@ impl EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refit_window(window, cx);
         let theme = Theme::for_appearance(window.appearance(), self.surface, hover_time(cx));
         let view = cx.entity().downgrade();
         let restacker = view.clone();
@@ -745,7 +773,7 @@ pub(crate) fn open_with(
 ) -> Result<EditorWindow, Error> {
     register_inter(cx)?;
     let surface = window_surface(cx);
-    let options = window_options(cx, document.base(), monitor, surface);
+    let options = window_options(cx, document.kept_area(), monitor, surface);
     let (window, win32) = open_window(cx, options, |window, cx| {
         on_open(window, cx);
         cx.new(|cx| EditorView::new(document, outputs, masks, log, surface, window, cx))
@@ -876,12 +904,12 @@ impl EditorWindow {
     }
 }
 
-/// The editor opens sized round `image` and centred on `monitor`'s display, on
+/// The editor opens sized round the `shown` part of its image and centred on `monitor`'s display, on
 /// `surface`. With no monitor, or none GPUI knows, it opens on the primary display,
 /// sized as at 100% scaling.
 fn window_options(
     cx: &App,
-    image: &RgbaImage,
+    shown: RectF,
     monitor: Option<Monitor>,
     surface: WindowSurface,
 ) -> WindowOptions {
@@ -898,7 +926,7 @@ fn window_options(
     });
     let scale = monitor.map_or(1.0, |monitor| monitor.scale);
     let smallest = size(min_width(cx), MIN_HEIGHT);
-    let window_size = opening_size(image, scale, work_area, smallest);
+    let window_size = opening_size(shown, scale, work_area, smallest);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             display_id,

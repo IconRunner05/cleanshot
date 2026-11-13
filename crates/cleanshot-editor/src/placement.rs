@@ -20,21 +20,18 @@ pub(crate) fn canvas_size(client: Size<Pixels>) -> Size<Pixels> {
     )
 }
 
-/// The client size the editor opens at for `image` on a monitor of `scale` physical
-/// pixels per DIP with a `work_area` in DIPs: the image at 100%, one image pixel per device
-/// pixel, filling its card, shrunk to fit the work area, and never smaller than `smallest`.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "image sides are far below 2^24, where f32 stops being exact"
-)]
+/// The client size the editor opens at for the `shown` part of its image on a monitor of
+/// `scale` physical pixels per DIP with a `work_area` in DIPs: that part at 100%, one image
+/// pixel per device pixel, filling its card, shrunk to fit the work area, and never smaller
+/// than `smallest`.
 pub(crate) fn opening_size(
-    image: &RgbaImage,
+    shown: RectF,
     scale: f32,
     work_area: Size<Pixels>,
     smallest: Size<Pixels>,
 ) -> Size<Pixels> {
     let chrome = size(CARD_INSET * 2.0, CAPTION_ROW + CARD_INSET);
-    let (width, height) = (image.width() as f32 / scale, image.height() as f32 / scale);
+    let (width, height) = (shown.width / scale, shown.height / scale);
     let shrink = (f32::from(work_area.width - chrome.width) / width)
         .min(f32::from(work_area.height - chrome.height) / height)
         .min(1.0);
@@ -44,6 +41,20 @@ pub(crate) fn opening_size(
     )
     .max(&smallest)
     .min(&work_area)
+}
+
+/// The client size an editor whose top-left corner is at `origin` refits to when the part of
+/// its image it shows becomes `shown`: [`opening_size`]'s, with the room right of and below
+/// `origin` in the `work_area` as its work area, and never smaller than `smallest`.
+pub(crate) fn refit_size(
+    shown: RectF,
+    scale: f32,
+    origin: Point<Pixels>,
+    work_area: Bounds<Pixels>,
+    smallest: Size<Pixels>,
+) -> Size<Pixels> {
+    let room = size(work_area.right() - origin.x, work_area.bottom() - origin.y);
+    opening_size(shown, scale, room.max(&smallest), smallest)
 }
 
 /// Where the image sits on the canvas: its top-left corner, relative to the canvas, and its
@@ -355,7 +366,7 @@ mod tests {
         let smallest = size(px(584.0), MIN_HEIGHT);
         for (width, height, scale) in [(600, 300, 1.0), (900, 600, 1.5), (300, 200, 2.0)] {
             let image = image(width, height);
-            let canvas = canvas_size(opening_size(&image, scale, work_area, smallest));
+            let canvas = canvas_size(opening_size(all_of(&image), scale, work_area, smallest));
             let fit = Fit::new(
                 Bounds::new(point(px(0.0), px(0.0)), canvas),
                 &image,
@@ -373,21 +384,65 @@ mod tests {
             );
         }
         assert_eq!(
-            opening_size(&image(600, 300), 1.0, work_area, smallest),
+            opening_size(all_of(&image(600, 300)), 1.0, work_area, smallest),
             size(px(624.0), px(360.0)),
             "the image fills its card, 12 px inside the window and below the 48 px row"
         );
         assert_eq!(
-            opening_size(&image(100, 50), 1.0, work_area, smallest),
+            opening_size(all_of(&image(100, 50)), 1.0, work_area, smallest),
             smallest,
             "never smaller than the toolbar needs"
         );
         let large = image(3000, 2000);
-        let window = opening_size(&large, 1.0, work_area, smallest);
+        let window = opening_size(all_of(&large), 1.0, work_area, smallest);
         assert_eq!(window.height, work_area.height);
         assert!(window.width <= work_area.width);
         let fitted = Placement::fitted(canvas_size(window), all_of(&large), 1.0);
         assert!((fitted.scale - 0.31).abs() < 1e-6, "(680 - 60) / 2000");
+    }
+
+    #[test]
+    fn a_refit_window_shows_the_crop_at_100_percent_in_the_room_right_and_below_its_corner() {
+        let work_area = Bounds::new(point(px(0.0), px(0.0)), size(px(1280.0), px(680.0)));
+        let smallest = size(px(584.0), MIN_HEIGHT);
+        let crop = RectF {
+            x: 50.0,
+            y: 40.0,
+            width: 600.0,
+            height: 300.0,
+        };
+        let corner = point(px(100.0), px(100.0));
+        assert_eq!(
+            refit_size(crop, 1.0, corner, work_area, smallest),
+            size(px(624.0), px(360.0)),
+            "the crop at 100%, as the editor would open on it"
+        );
+        let wide = RectF {
+            width: 900.0,
+            ..crop
+        };
+        assert_eq!(
+            refit_size(wide, 1.0, point(px(500.0), px(100.0)), work_area, smallest).width,
+            px(780.0),
+            "no wider than the room to the right of the corner"
+        );
+        let whole = RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 3000.0,
+            height: 2000.0,
+        };
+        let refit = refit_size(whole, 1.0, corner, work_area, smallest);
+        assert_eq!(
+            refit.height,
+            px(580.0),
+            "fitted into the 580 px below the corner"
+        );
+        assert!(refit.width <= px(1180.0));
+        assert_eq!(
+            refit_size(crop, 1.0, point(px(1270.0), px(670.0)), work_area, smallest),
+            smallest
+        );
     }
 
     #[test]
